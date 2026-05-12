@@ -1,0 +1,49 @@
+# ---- 機密 / 帳密 ----
+nvidia api.txt
+nvidia_api.txt
+nvidia*.txt
+.env
+.env.*
+!.env.example
+!.env.sync.example
+*.pfx
+*.pem
+*.key
+**/Sinopac*
+**/certs/
+**/credentials*
+**/secret*
+
+# ---- Hermes runtime ----
+.hermes/
+~/.hermes/
+
+# ---- Scripts local config + 測試 helper ----
+scripts/.env.sync
+scripts/_*.sh
+scripts/_*.ps1
+scripts/logs/
+
+# ---- 大型資料 ----
+ultra-trader-src/data/historical/
+ultra-trader-src/data/logs/
+ultra-trader-src/data/llm_audit/
+*.parquet
+
+# ---- 執行期產物 ----
+ultra-trader-src/data/state/*.json
+ultra-trader-src/data/risk_state*.json
+ultra-trader-src/data/performance/daily/*.json
+ultra-trader-src/data/reports/
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# ---- Editor ----
+.vscode/
+.idea/
+*.swp
+.DS_Store

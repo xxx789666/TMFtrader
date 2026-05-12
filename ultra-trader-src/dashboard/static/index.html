@@ -1,0 +1,2694 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>UltraTrader Dashboard</title>
+<script src="/static/vue.global.prod.js"></script>
+<script src="/static/lightweight-charts.standalone.production.js"></script>
+<style>
+/* ========================================
+   UltraTrader Dashboard — 深色主題 (簡化版)
+   ======================================== */
+:root {
+  --bg-primary: #0a0a1a;
+  --bg-card: rgba(16, 16, 36, 0.95);
+  --bg-hover: rgba(30, 30, 60, 0.8);
+  --border: rgba(138, 92, 255, 0.15);
+  --border-active: rgba(138, 92, 255, 0.5);
+  --purple: #8A5CFF;
+  --purple-glow: rgba(138, 92, 255, 0.3);
+  --blue: #4DA3FF;
+  --green: #10B981;
+  --red: #EF4444;
+  --amber: #F59E0B;
+  --text-primary: #e8e8f0;
+  --text-secondary: #8888aa;
+  --text-muted: #555570;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  --font-sans: 'Inter', -apple-system, sans-serif;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  overflow-x: hidden;
+  min-height: 100vh;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(138,92,255,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(138,92,255,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.app { position: relative; z-index: 1; padding: 10px; max-width: 1600px; margin: 0 auto; }
+
+/* ---- Header ---- */
+.header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 16px; margin-bottom: 8px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+}
+.header-left { display: flex; align-items: center; gap: 10px; }
+.logo { font-size: 18px; font-weight: 800; letter-spacing: -0.5px; }
+.logo span { color: var(--purple); }
+.status-badge {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 10px; border-radius: 16px; font-size: 11px; font-weight: 600;
+  font-family: var(--font-mono);
+}
+.status-running { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
+.status-stopped { background: rgba(239,68,68,0.15); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+.status-paused { background: rgba(245,158,11,0.15); color: var(--amber); border: 1px solid rgba(245,158,11,0.3); }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; }
+.status-running .status-dot { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }
+.status-stopped .status-dot { background: var(--red); }
+.status-paused .status-dot { background: var(--amber); animation: pulse 2s infinite; }
+
+.engine-btn {
+  padding: 4px 14px; border-radius: 6px; border: none; cursor: pointer;
+  font-size: 12px; font-weight: 700; font-family: var(--font-mono);
+  transition: all 0.15s;
+}
+.engine-btn:hover { transform: translateY(-1px); }
+.engine-btn-start { background: var(--green); color: #fff; }
+.engine-btn-start:hover { box-shadow: 0 2px 10px rgba(16,185,129,0.4); }
+.engine-btn-stop { background: var(--red); color: #fff; }
+.engine-btn-stop:hover { box-shadow: 0 2px 10px rgba(239,68,68,0.4); }
+.engine-btn-pause { background: rgba(245,158,11,0.2); color: var(--amber); border: 1px solid rgba(245,158,11,0.3); }
+
+.instrument-tabs { display: flex; gap: 4px; }
+.instrument-tab {
+  padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  font-family: var(--font-mono); font-weight: 600; border: 1px solid var(--border);
+  background: transparent; color: var(--text-secondary); transition: all 0.2s;
+}
+.instrument-tab:hover { border-color: var(--purple); color: var(--text-primary); }
+.instrument-tab.active {
+  background: rgba(138,92,255,0.15); color: var(--purple); border-color: var(--purple);
+}
+.instrument-tab .tab-price { font-size: 10px; color: var(--text-muted); margin-left: 4px; }
+.instrument-tab .tab-pos {
+  display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-left: 3px; vertical-align: middle;
+}
+.tab-pos-long { background: var(--green); box-shadow: 0 0 6px var(--green); }
+.tab-pos-short { background: var(--red); box-shadow: 0 0 6px var(--red); }
+
+.header-right { display: flex; gap: 6px; align-items: center; }
+.mode-btn {
+  padding: 4px 12px; border-radius: 6px; font-size: 12px; cursor: pointer;
+  font-family: var(--font-mono); font-weight: 600; background: transparent;
+  color: var(--text-secondary); border: 1px solid var(--border); transition: all 0.2s;
+}
+.mode-btn:hover { border-color: var(--purple); color: var(--text-primary); }
+.mode-active { font-weight: 800; }
+.mode-btn-live.mode-active { animation: live-pulse 2s infinite; }
+@keyframes live-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); } 50% { box-shadow: 0 0 10px 3px rgba(239,68,68,0.2); } }
+
+.tick-badge {
+  padding: 3px 8px; border-radius: 12px; font-size: 10px;
+  font-family: var(--font-mono); font-weight: 600;
+  background: rgba(16,185,129,0.1); color: var(--green); border: 1px solid rgba(16,185,129,0.2);
+}
+
+/* ---- 帳戶快覽列 ---- */
+.account-strip {
+  display: flex; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;
+}
+.account-chip {
+  flex: 1; min-width: 140px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 12px; display: flex; align-items: center; justify-content: space-between;
+}
+.account-chip.highlight { border-color: rgba(138,92,255,0.3); }
+.chip-label { font-size: 10px; color: var(--text-muted); }
+.chip-value { font-size: 16px; font-weight: 700; font-family: var(--font-mono); }
+.chip-sub { font-size: 10px; color: var(--text-muted); }
+
+/* ---- 真實持倉條 ---- */
+.real-pos-strip { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.real-pos-chip {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px; border-radius: 8px;
+  font-family: var(--font-mono); font-size: 12px;
+  flex: 1; min-width: 300px; max-width: 480px;
+}
+
+/* ---- 主內容 ---- */
+.main-grid { display: grid; grid-template-columns: 1fr 300px; gap: 8px; margin-bottom: 8px; }
+
+/* K 線圖 */
+.chart-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 10px;
+}
+.chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.chart-title { font-size: 13px; font-weight: 600; }
+.tf-btn {
+  padding: 3px 8px; border: 1px solid var(--border); border-radius: 5px;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  font-size: 11px; font-family: var(--font-mono); transition: all 0.2s;
+}
+.tf-btn:hover { border-color: var(--purple); color: var(--text-primary); }
+.tf-btn.active { background: rgba(138,92,255,0.2); border-color: var(--purple); color: var(--purple); }
+#chart-container { width: 100%; height: 400px; }
+
+/* 交易建議條 */
+.advice-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 8px 14px; margin-bottom: 6px; border-radius: 8px;
+  font-family: var(--font-mono);
+}
+.advice-icon { font-size: 24px; line-height: 1; }
+.advice-action { font-size: 16px; font-weight: 800; }
+.advice-detail { font-size: 11px; color: var(--text-secondary); }
+.advice-mode { text-align: right; }
+.advice-mode-label { font-size: 9px; color: var(--text-muted); }
+.advice-mode-value { font-size: 13px; font-weight: 700; }
+
+/* 持倉信息條 */
+.pos-info-bar {
+  display: flex; gap: 12px; padding: 6px 10px; border-radius: 6px;
+  background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04);
+  font-family: var(--font-mono); font-size: 11px; margin-top: 6px;
+  flex-wrap: wrap; align-items: center;
+}
+.pos-info-item { display: flex; align-items: center; gap: 4px; }
+.pos-info-label { color: var(--text-muted); font-size: 9px; text-transform: uppercase; }
+.pos-info-value { font-weight: 700; font-size: 14px; }
+
+/* 操作按鈕 */
+.action-row { display: flex; gap: 6px; margin-top: 8px; }
+.action-btn {
+  flex: 1; padding: 14px; border-radius: 8px; cursor: pointer;
+  font-size: 18px; font-weight: 800; font-family: var(--font-mono);
+  transition: all 0.15s; border: 2px solid;
+}
+.action-btn:hover { transform: translateY(-1px); }
+.action-btn:active { transform: translateY(0); }
+.action-btn-buy { background: rgba(16,185,129,0.12); color: #10B981; border-color: rgba(16,185,129,0.4); }
+.action-btn-buy:hover { background: rgba(16,185,129,0.25); box-shadow: 0 4px 16px rgba(16,185,129,0.3); }
+.action-btn-sell { background: rgba(239,68,68,0.12); color: #EF4444; border-color: rgba(239,68,68,0.4); }
+.action-btn-sell:hover { background: rgba(239,68,68,0.25); box-shadow: 0 4px 16px rgba(239,68,68,0.3); }
+.action-btn-close { background: rgba(245,158,11,0.12); color: #F59E0B; border-color: rgba(245,158,11,0.4); }
+.action-btn-close:hover { background: rgba(245,158,11,0.25); box-shadow: 0 4px 16px rgba(245,158,11,0.3); }
+
+/* 預估損益 */
+.estimate-row {
+  display: flex; gap: 12px; margin-top: 4px; padding: 6px 10px; border-radius: 6px;
+  background: rgba(255,255,255,0.02); border: 1px solid rgba(255,255,255,0.04);
+  font-family: var(--font-mono); font-size: 12px; align-items: center;
+}
+
+/* ---- 右側面板 ---- */
+.side-panel { display: flex; flex-direction: column; gap: 8px; }
+.panel-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px;
+}
+.panel-title {
+  font-size: 11px; color: var(--text-secondary); text-transform: uppercase;
+  letter-spacing: 1px; margin-bottom: 8px; display: flex; align-items: center; gap: 5px;
+}
+
+/* 紅綠燈 */
+.signal-light {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-radius: 8px; font-family: var(--font-mono); font-size: 13px; font-weight: 700;
+}
+.signal-light-buy { background: rgba(16,185,129,0.12); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
+.signal-light-sell { background: rgba(239,68,68,0.12); color: var(--red); border: 1px solid rgba(239,68,68,0.3); }
+.signal-light-hold { background: rgba(245,158,11,0.08); color: var(--amber); border: 1px solid rgba(245,158,11,0.2); }
+.signal-light-none { background: rgba(100,100,130,0.08); color: var(--text-muted); border: 1px solid rgba(100,100,130,0.2); }
+.signal-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+.signal-dot-buy { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.signal-dot-sell { background: var(--red); box-shadow: 0 0 8px var(--red); }
+.signal-dot-hold { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+.signal-dot-none { background: var(--text-muted); }
+.signal-reason { font-size: 10px; font-weight: 400; color: var(--text-secondary); margin-left: auto; }
+
+/* 風格選擇 */
+.risk-row { display: flex; gap: 3px; }
+.risk-btn {
+  flex: 1; padding: 6px 4px; border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  font-size: 11px; text-align: center; transition: all 0.2s;
+}
+.risk-btn:hover { border-color: var(--purple); color: var(--text-primary); background: var(--bg-hover); }
+.risk-btn.active { border-color: var(--purple); color: var(--purple); background: rgba(138,92,255,0.1); }
+
+/* 訊號強度條 */
+.signal-bar-container { display: flex; align-items: center; gap: 6px; }
+.signal-bar-bg { flex: 1; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; }
+.signal-bar-fill { height: 100%; border-radius: 3px; transition: width 0.5s ease; }
+
+/* 交易紀錄 */
+.trade-list { max-height: 180px; overflow-y: auto; transition: max-height 0.3s ease; }
+.trade-list.expanded { max-height: 600px; }
+.trade-item {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 0; border-bottom: 1px solid rgba(255,255,255,0.03);
+  font-size: 11px; font-family: var(--font-mono);
+}
+.trade-item:last-child { border-bottom: none; }
+.trade-expand-btn {
+  display: block; width: 100%; text-align: center; padding: 6px 0; margin-top: 4px;
+  font-size: 10px; color: var(--cyan); cursor: pointer; border: none; background: none;
+  font-family: var(--font-mono);
+}
+.trade-expand-btn:hover { color: #fff; }
+
+/* 累計盈虧 */
+.cum-pnl-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+.cum-pnl-item { flex: 1; min-width: 70px; text-align: center; padding: 6px 4px; background: rgba(255,255,255,0.02); border-radius: 6px; }
+.cum-pnl-label { font-size: 9px; color: var(--text-muted); margin-bottom: 2px; }
+.cum-pnl-value { font-size: 13px; font-weight: 700; font-family: var(--font-mono); }
+.cum-sparkline { display: flex; align-items: flex-end; gap: 1px; height: 40px; margin-top: 6px; padding: 0 2px; }
+.cum-sparkline-bar { flex: 1; min-width: 2px; max-width: 6px; border-radius: 1px 1px 0 0; }
+
+/* ---- 可摺疊區塊 ---- */
+.collapse-section {
+  margin-bottom: 8px;
+}
+.collapse-toggle {
+  width: 100%; display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 14px; border-radius: 8px; cursor: pointer;
+  background: var(--bg-card); border: 1px solid var(--border);
+  color: var(--text-secondary); font-size: 12px; font-family: var(--font-mono);
+  transition: all 0.2s; user-select: none;
+}
+.collapse-toggle:hover { border-color: var(--purple); color: var(--text-primary); }
+.collapse-toggle .arrow { transition: transform 0.2s; }
+.collapse-toggle.open .arrow { transform: rotate(180deg); }
+.collapse-body {
+  max-height: 0; overflow: hidden; transition: max-height 0.3s ease;
+}
+.collapse-body.open { max-height: 600px; }
+
+/* Intelligence */
+.intel-grid { display: grid; grid-template-columns: 220px 1fr 280px; gap: 8px; padding-top: 8px; }
+.intel-score-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; display: flex; flex-direction: column; align-items: center;
+}
+.score-value { font-size: 32px; font-weight: 800; font-family: var(--font-mono); text-align: center; }
+.score-signal {
+  padding: 3px 12px; border-radius: 12px; font-size: 12px; font-weight: 700;
+  font-family: var(--font-mono); text-align: center; margin-top: 4px;
+}
+.signal-strong-buy { background: rgba(16,185,129,0.2); color: #34D399; border: 1px solid rgba(16,185,129,0.4); }
+.signal-buy { background: rgba(16,185,129,0.1); color: var(--green); border: 1px solid rgba(16,185,129,0.2); }
+.signal-neutral { background: rgba(100,100,120,0.15); color: var(--text-secondary); border: 1px solid rgba(100,100,120,0.3); }
+.signal-sell { background: rgba(239,68,68,0.1); color: var(--red); border: 1px solid rgba(239,68,68,0.2); }
+.signal-strong-sell { background: rgba(239,68,68,0.2); color: #F87171; border: 1px solid rgba(239,68,68,0.4); }
+
+.intel-factors-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px;
+}
+.factor-row {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 4px;
+  font-size: 10px; font-family: var(--font-mono);
+}
+.factor-name { width: 60px; color: var(--text-secondary); text-align: right; flex-shrink: 0; }
+.factor-bar-wrap {
+  flex: 1; height: 12px; background: rgba(255,255,255,0.03);
+  border-radius: 6px; position: relative; overflow: hidden;
+}
+.factor-bar-center { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(255,255,255,0.1); }
+.factor-bar-fill {
+  position: absolute; top: 2px; bottom: 2px; border-radius: 4px;
+  transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.factor-bar-fill.positive { left: 50%; background: linear-gradient(90deg, rgba(16,185,129,0.5), #10B981); }
+.factor-bar-fill.negative { right: 50%; background: linear-gradient(270deg, rgba(239,68,68,0.5), #EF4444); }
+.factor-score-text { width: 40px; text-align: right; flex-shrink: 0; font-weight: 600; }
+.factor-detail { font-size: 9px; color: var(--text-muted); width: 100px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.intel-data-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px;
+}
+.intel-data-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.intel-data-item {
+  padding: 6px; border-radius: 5px; background: rgba(255,255,255,0.02);
+  border: 1px solid rgba(255,255,255,0.03);
+}
+.intel-data-label { font-size: 9px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.intel-data-value { font-size: 13px; font-weight: 600; font-family: var(--font-mono); margin-top: 1px; }
+.intel-refresh-btn {
+  margin-top: 8px; padding: 5px 12px; border: 1px solid var(--border);
+  border-radius: 5px; background: transparent; color: var(--text-secondary);
+  cursor: pointer; font-size: 10px; width: 100%; transition: all 0.2s;
+}
+.intel-refresh-btn:hover { border-color: var(--purple); color: var(--text-primary); }
+
+/* Activity */
+.activity-card {
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: 8px;
+  padding: 10px; margin-top: 8px;
+}
+.activity-list {
+  max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px;
+}
+.activity-item {
+  display: flex; align-items: flex-start; gap: 6px;
+  padding: 3px 6px; border-radius: 4px; font-size: 10px; font-family: var(--font-mono);
+}
+.activity-item:hover { background: rgba(255,255,255,0.02); }
+.activity-item.new { animation: activityFlash 1.5s ease-out; }
+.activity-time { color: var(--text-muted); flex-shrink: 0; width: 48px; }
+.activity-icon { flex-shrink: 0; width: 14px; text-align: center; }
+.activity-msg { flex: 1; color: var(--text-secondary); line-height: 1.4; word-break: break-all; }
+.activity-msg.signal { color: var(--green); font-weight: 600; }
+.activity-msg.trade { color: var(--amber); font-weight: 600; }
+.activity-msg.error { color: var(--red); }
+.activity-msg.scan { color: var(--text-muted); }
+
+/* 其他商品 mini 卡 */
+.other-inst-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; border-radius: 6px; cursor: pointer;
+  transition: background 0.2s; font-family: var(--font-mono); font-size: 12px;
+}
+.other-inst-row:hover { background: var(--bg-hover); }
+
+/* 底部狀態 */
+.footer-strip {
+  display: flex; gap: 16px; padding: 6px 14px; margin-top: 4px;
+  font-size: 10px; font-family: var(--font-mono); color: var(--text-muted);
+  justify-content: center;
+}
+
+.text-green { color: var(--green); }
+.text-red { color: var(--red); }
+.text-amber { color: var(--amber); }
+.text-purple { color: var(--purple); }
+
+.paper-badge {
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px; border-radius: 10px; font-size: 9px;
+  font-family: var(--font-mono); font-weight: 600;
+  background: rgba(245,158,11,0.12); color: var(--amber);
+  border: 1px solid rgba(245,158,11,0.25);
+}
+
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+@keyframes activityFlash { 0% { background: rgba(138,92,255,0.15); } 100% { background: transparent; } }
+
+/* 響應式 */
+@media (max-width: 1024px) {
+  .main-grid { grid-template-columns: 1fr; }
+  .intel-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 768px) {
+  .account-strip { flex-direction: column; }
+  .header { flex-wrap: wrap; gap: 8px; }
+}
+</style>
+</head>
+<body>
+<div id="app" class="app">
+
+  <!-- ====== HEADER ====== -->
+  <div class="header">
+    <div class="header-left">
+      <div class="logo">&#9889; Ultra<span>Trader</span></div>
+      <div :class="['status-badge', statusClass]">
+        <div class="status-dot"></div>
+        {{ statusText }}
+      </div>
+      <!-- 引擎控制 (最重要的按鈕放在最顯眼的位置) -->
+      <button v-if="state.engine_state !== 'running' && state.engine_state !== 'paused'"
+              class="engine-btn engine-btn-start" @click="engineAction('start')">
+        &#9654; 啟動引擎
+      </button>
+      <button v-if="state.engine_state === 'running'"
+              class="engine-btn engine-btn-pause" @click="engineAction('pause')">
+        &#9208; 暫停
+      </button>
+      <button v-if="state.engine_state === 'paused'"
+              class="engine-btn engine-btn-start" @click="engineAction('resume')">
+        &#9654; 恢復
+      </button>
+      <button v-if="state.engine_state === 'running' || state.engine_state === 'paused'"
+              class="engine-btn engine-btn-stop" @click="engineAction('stop')">
+        &#9632; 停止
+      </button>
+    </div>
+
+    <div class="instrument-tabs">
+      <button v-for="inst in instrumentList" :key="inst"
+              :class="['instrument-tab', activeInstrument === inst ? 'active' : '']"
+              @click="switchInstrument(inst)">
+        {{ inst }}
+        <span class="tab-price">{{ formatPrice(getInstData(inst).price) }}</span>
+        <span v-if="getInstData(inst).position?.side === 'long'" class="tab-pos tab-pos-long"></span>
+        <span v-if="getInstData(inst).position?.side === 'short'" class="tab-pos tab-pos-short"></span>
+      </button>
+    </div>
+
+    <div class="header-right">
+      <button v-for="m in modes" :key="m.key"
+              :class="['mode-btn', state.trading_mode === m.key ? 'mode-active' : '', m.key === 'live' ? 'mode-btn-live' : '']"
+              :style="state.trading_mode === m.key ? m.activeStyle : ''"
+              @click="switchMode(m.key)">
+        {{ m.icon }} {{ m.label }}
+      </button>
+      <div class="tick-badge" v-if="tickCount > 0">
+        &#9889; {{ tickCount.toLocaleString() }}
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 帳戶快覽 ====== -->
+  <div class="account-strip">
+    <div class="account-chip highlight">
+      <div>
+        <div class="chip-label">權益數</div>
+        <div class="chip-value" style="color: var(--purple);">{{ formatNumber(realAccount.equity) }}</div>
+      </div>
+      <div style="text-align: right;">
+        <div class="chip-sub">餘額 {{ formatNumber(realAccount.balance) }}</div>
+      </div>
+    </div>
+    <div class="account-chip">
+      <div>
+        <div class="chip-label">可用保證金</div>
+        <div class="chip-value">{{ formatNumber(realAccount.margin_available) }}</div>
+      </div>
+      <div style="text-align: right;">
+        <div class="chip-sub">已用 {{ formatNumber(realAccount.margin_used) }}</div>
+      </div>
+    </div>
+    <div class="account-chip">
+      <div>
+        <div class="chip-label">浮動損益</div>
+        <div class="chip-value" :class="liveTotalPnl >= 0 ? 'text-green' : 'text-red'">
+          {{ liveTotalPnl >= 0 ? '+' : '' }}{{ formatNumber(liveTotalPnl) }}
+        </div>
+      </div>
+    </div>
+    <div class="account-chip">
+      <div>
+        <div class="chip-label">今日損益</div>
+        <div class="chip-value" :class="(dailyPerf.daily_pnl ?? state.daily_pnl ?? 0) >= 0 ? 'text-green' : 'text-red'">
+          {{ (dailyPerf.daily_pnl ?? state.daily_pnl ?? 0) >= 0 ? '+' : '' }}{{ formatNumber(dailyPerf.daily_pnl ?? state.daily_pnl ?? 0) }}
+        </div>
+      </div>
+      <div style="text-align: right;">
+        <div class="chip-sub">{{ dailyPerf.total_trades ?? state.daily_trades ?? 0 }} 筆 {{ dailyPerf.win_rate ? '/ ' + dailyPerf.win_rate.toFixed(0) + '%' : '' }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 真實持倉（永豐） ====== -->
+  <div v-if="realPositions.length > 0" class="real-pos-strip">
+    <div v-for="(p, i) in realPositions" :key="i"
+         class="real-pos-chip"
+         :style="{
+           background: p.direction.includes('Sell') ? 'rgba(239,68,68,0.06)' : 'rgba(16,185,129,0.06)',
+           border: '1px solid ' + (p.direction.includes('Sell') ? 'rgba(239,68,68,0.2)' : 'rgba(16,185,129,0.2)'),
+         }">
+      <span :style="{ fontWeight: 800, color: p.direction.includes('Sell') ? 'var(--red)' : 'var(--green)' }">
+        {{ p.direction.includes('Sell') ? 'SHORT' : 'LONG' }}
+      </span>
+      <span style="font-weight: 700;">{{ p.code }}</span>
+      <span style="color: var(--text-muted);">x{{ p.quantity }}</span>
+      <span style="color: var(--text-secondary);">
+        {{ formatPrice(p.price) }} &#8594; {{ formatPrice(realPosLivePrice(p)) }}
+      </span>
+      <span :style="{ fontSize: '16px', fontWeight: 800, color: realPosLivePnl(p) >= 0 ? 'var(--green)' : 'var(--red)', marginLeft: 'auto' }">
+        {{ realPosLivePnl(p) >= 0 ? '+' : '' }}{{ formatNumber(realPosLivePnl(p)) }}
+      </span>
+      <button @click="closeRealPosition(p)"
+              style="padding: 4px 10px; border-radius: 5px; border: 1px solid rgba(239,68,68,0.3); background: rgba(239,68,68,0.1); color: var(--red); font-size: 11px; font-weight: 700; cursor: pointer;">
+        平倉
+      </button>
+    </div>
+  </div>
+
+  <!-- ====== Paper 模擬持倉 ====== -->
+  <div v-for="inst in instrumentList" :key="'paper-'+inst">
+    <div v-if="getInstData(inst).position?.side === 'long' || getInstData(inst).position?.side === 'short'"
+         style="margin: 4px 10px; padding: 14px 18px; border-radius: 12px; display: flex; align-items: center; gap: 16px; font-family: var(--font-mono); animation: pulse 3s infinite;"
+         :style="{
+           background: getInstData(inst).position.side === 'short' ? 'rgba(239,68,68,0.08)' : 'rgba(16,185,129,0.08)',
+           border: '2px solid ' + (getInstData(inst).position.side === 'short' ? 'rgba(239,68,68,0.35)' : 'rgba(16,185,129,0.35)'),
+         }">
+      <!-- 方向標籤 -->
+      <div style="font-size: 28px; font-weight: 900; letter-spacing: 2px; min-width: 90px;"
+           :style="{ color: getInstData(inst).position.side === 'short' ? 'var(--red)' : 'var(--green)' }">
+        {{ getInstData(inst).position.side === 'short' ? '&#9660; 做空' : '&#9650; 做多' }}
+      </div>
+      <!-- 商品 -->
+      <div>
+        <div style="font-size: 18px; font-weight: 800;">{{ inst }}</div>
+        <div style="font-size: 10px; color: var(--text-muted);">
+          PAPER 模擬
+        </div>
+      </div>
+      <!-- 進場資訊 -->
+      <div style="text-align: center;">
+        <div style="font-size: 10px; color: var(--text-muted);">進場價</div>
+        <div style="font-size: 16px; font-weight: 800;">{{ formatPrice(getInstData(inst).position.entry_price) }}</div>
+        <div style="font-size: 9px; color: var(--text-muted);">
+          {{ getInstData(inst).position.entry_time ? new Date(getInstData(inst).position.entry_time).toLocaleTimeString('zh-TW') : '-' }}
+        </div>
+      </div>
+      <!-- 現價 -->
+      <div style="text-align: center;">
+        <div style="font-size: 10px; color: var(--text-muted);">現價</div>
+        <div style="font-size: 16px; font-weight: 800;">{{ formatPrice(getInstData(inst).price) }}</div>
+      </div>
+      <!-- 箭頭 -->
+      <div style="font-size: 20px; color: var(--text-muted);">&#8594;</div>
+      <!-- 停損 -->
+      <div style="text-align: center;">
+        <div style="font-size: 10px; color: var(--red);">停損</div>
+        <div style="font-size: 14px; font-weight: 700; color: var(--red);">{{ formatPrice(getInstData(inst).position.stop_loss) }}</div>
+        <div style="font-size: 9px; color: var(--text-muted);">{{ getDistancePoints(getInstData(inst).position.stop_loss) }} 點</div>
+      </div>
+      <!-- 停利 -->
+      <div style="text-align: center;">
+        <div style="font-size: 10px; color: var(--green);">停利</div>
+        <div style="font-size: 14px; font-weight: 700; color: var(--green);">{{ formatPrice(getInstData(inst).position.take_profit) }}</div>
+        <div style="font-size: 9px; color: var(--text-muted);">{{ getDistancePoints(getInstData(inst).position.take_profit) }} 點</div>
+      </div>
+      <!-- 浮動損益（最大最醒目） -->
+      <div style="margin-left: auto; text-align: right;">
+        <div style="font-size: 10px; color: var(--text-muted);">浮動損益</div>
+        <div style="font-size: 32px; font-weight: 900; line-height: 1;"
+             :class="(getInstData(inst).position.unrealized_pnl || 0) >= 0 ? 'text-green' : 'text-red'">
+          {{ (getInstData(inst).position.unrealized_pnl || 0) >= 0 ? '+' : '' }}{{ formatNumber(getInstData(inst).position.unrealized_pnl || 0) }} 元
+        </div>
+        <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">
+          已持有 {{ getInstData(inst).position.bars_since_entry || 0 }} 根 K 棒
+        </div>
+      </div>
+      <!-- 平倉按鈕 -->
+      <button @click="manualClose(inst)"
+              style="padding: 10px 20px; border-radius: 8px; border: 2px solid rgba(245,158,11,0.5); background: rgba(245,158,11,0.15); color: var(--amber); font-size: 14px; font-weight: 900; cursor: pointer; font-family: var(--font-mono);">
+        &#10005; 平倉
+      </button>
+    </div>
+  </div>
+
+  <!-- ====== 主內容：圖表 + 側面板 ====== -->
+  <div class="main-grid">
+
+    <!-- 左：K 線圖（最重要） -->
+    <div class="chart-card">
+      <div class="chart-header">
+        <div class="chart-title">
+          {{ activeInstrument }}
+          <span style="font-size: 18px; font-weight: 800; margin-left: 8px; font-family: var(--font-mono);"
+                :class="getInstPriceClass(activeInstrument)">
+            {{ formatPrice(getInstData(activeInstrument).price) }}
+          </span>
+          <span style="font-size: 11px; margin-left: 4px;" :class="getInstPriceClass(activeInstrument)">
+            {{ getInstPriceChange(activeInstrument) }}
+          </span>
+        </div>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <!-- 均線圖例 -->
+          <div style="display: flex; gap: 8px; font-size: 10px; font-family: var(--font-mono); color: var(--text-muted);">
+            <span><span style="display: inline-block; width: 12px; height: 2px; background: #4DA3FF; vertical-align: middle; margin-right: 3px;"></span>EMA20</span>
+            <span><span style="display: inline-block; width: 12px; height: 2px; background: #F59E0B; vertical-align: middle; margin-right: 3px;"></span>EMA60</span>
+            <span><span style="display: inline-block; width: 12px; height: 2px; background: #E879F9; vertical-align: middle; margin-right: 3px;"></span>EMA200</span>
+          </div>
+          <div style="display: flex; gap: 4px;">
+            <button v-for="tf in [1, 5, 15]" :key="tf"
+                    :class="['tf-btn', timeframe === tf ? 'active' : '']"
+                    @click="switchTimeframe(tf)">
+              {{ tf }}m
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ====== 你現在該做什麼（一句話） ====== -->
+      <div v-if="activeInstrument" style="display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-radius: 10px; margin-bottom: 6px; font-family: var(--font-mono);"
+           :style="{ background: getInstruction(activeInstrument).bg, border: '2px solid ' + getInstruction(activeInstrument).borderColor }">
+        <span style="font-size: 40px; line-height: 1;">{{ getInstruction(activeInstrument).icon }}</span>
+        <div style="flex: 1;">
+          <div style="font-size: 24px; font-weight: 900; letter-spacing: 1px;" :style="{ color: getInstruction(activeInstrument).color }">
+            {{ getInstruction(activeInstrument).text }}
+          </div>
+          <div style="font-size: 12px; color: var(--text-secondary); margin-top: 2px;">
+            {{ getInstruction(activeInstrument).reason }}
+          </div>
+        </div>
+        <!-- 有持倉：損益 + 停損停利距離 -->
+        <div v-if="activeInstData.position?.side !== 'flat'" style="text-align: right; font-family: var(--font-mono);">
+          <div style="font-size: 30px; font-weight: 900; line-height: 1;"
+               :class="(activeInstData.position?.unrealized_pnl || 0) >= 0 ? 'text-green' : 'text-red'">
+            {{ (activeInstData.position?.unrealized_pnl || 0) >= 0 ? '+' : '' }}{{ formatNumber(activeInstData.position?.unrealized_pnl || 0) }}
+          </div>
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 2px;">
+            停損 <span style="color: var(--red);">{{ getDistancePoints(activeInstData.position.stop_loss) }}點</span>
+            停利 <span style="color: var(--green);">{{ getDistancePoints(activeInstData.position.take_profit) }}點</span>
+          </div>
+        </div>
+        <!-- 無持倉：預估停損金額 -->
+        <div v-if="activeInstData.position?.side === 'flat' && activeInstData.snapshot?.atr > 0" style="text-align: right; font-family: var(--font-mono);">
+          <div style="font-size: 12px;">
+            <span style="color: var(--text-muted);">預估停損</span>
+            <span style="color: var(--red); margin-left: 6px;">-{{ formatNumber(getEstLoss(activeInstrument)) }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 畫線工具列 -->
+      <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 4px; font-family: var(--font-mono);">
+        <button :class="['tf-btn', drawingMode === 'trendline' ? 'active' : '']"
+                @click="toggleDrawing('trendline')" title="趨勢線 (T)"
+                style="font-size: 11px; padding: 3px 8px;">
+          &#x2571; 趨勢線
+        </button>
+        <button :class="['tf-btn', drawingMode === 'hline' ? 'active' : '']"
+                @click="toggleDrawing('hline')" title="水平線 (H)"
+                style="font-size: 11px; padding: 3px 8px;">
+          &#x2500; 水平線
+        </button>
+        <button class="tf-btn" @click="promptHlinePrice()" title="輸入點位 (P)"
+                style="font-size: 11px; padding: 3px 8px;">
+          &#x23CD; 輸入點位
+        </button>
+        <input type="color" v-model="drawingColor"
+               style="width: 24px; height: 24px; border: none; background: transparent; cursor: pointer; padding: 0;"
+               title="畫線顏色">
+        <select v-model="drawingWidth" style="background: var(--bg-card); color: var(--text-primary); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; padding: 2px 4px;">
+          <option :value="1">細</option>
+          <option :value="2">中</option>
+          <option :value="3">粗</option>
+        </select>
+        <button v-if="drawnLines.length > 0" class="tf-btn" @click="undoLastLine()" style="font-size: 11px; padding: 3px 8px;" title="復原">
+          &#x21A9; 復原
+        </button>
+        <button v-if="drawnLines.length > 0" class="tf-btn" @click="clearAllLines()" style="font-size: 11px; padding: 3px 8px; color: #EF4444;" title="清除全部">
+          &#x2715; 清除
+        </button>
+        <span v-if="drawingMode" style="font-size: 10px; color: var(--text-muted);">
+          {{ drawingMode === 'trendline' ? '點擊起點，再點終點' : '點擊設定水平線位置' }} | ESC 取消
+        </span>
+        <span v-if="selectedDrawing !== null" style="font-size: 10px; color: var(--amber);">
+          已選取線條 — Delete 刪除 | 拖曳移動 | ESC 取消選取
+        </span>
+      </div>
+
+      <!-- K 線圖 -->
+      <div id="chart-container" style="cursor: crosshair;"></div>
+
+      <!-- ====== 操作按鈕 ====== -->
+      <div style="margin-top: 8px;" v-if="activeInstrument">
+        <!-- 無持倉 -->
+        <div v-if="activeInstData.position?.side === 'flat'" style="display: flex; gap: 6px;">
+          <button class="action-btn action-btn-buy" @click="manualOpen(activeInstrument, 'BUY')"
+                  :style="getRecommended(activeInstrument) === 'BUY' ? 'box-shadow: 0 0 24px rgba(16,185,129,0.6); border-color: #10B981; border-width: 3px;' : 'opacity: 0.5;'">
+            <span v-if="getRecommended(activeInstrument) === 'BUY'" style="font-size: 12px; background: #10B981; color: #000; padding: 2px 8px; border-radius: 4px; margin-right: 8px; font-weight: 900;">&#9733; 推薦</span>
+            &#9650; 做多 {{ activeInstrument }}
+          </button>
+          <button class="action-btn action-btn-sell" @click="manualOpen(activeInstrument, 'SELL')"
+                  :style="getRecommended(activeInstrument) === 'SELL' ? 'box-shadow: 0 0 24px rgba(239,68,68,0.6); border-color: #EF4444; border-width: 3px;' : 'opacity: 0.5;'">
+            <span v-if="getRecommended(activeInstrument) === 'SELL'" style="font-size: 12px; background: #EF4444; color: #fff; padding: 2px 8px; border-radius: 4px; margin-right: 8px; font-weight: 900;">&#9733; 推薦</span>
+            &#9660; 做空 {{ activeInstrument }}
+          </button>
+        </div>
+        <!-- 有持倉 -->
+        <div v-else style="display: flex; gap: 6px;">
+          <button class="action-btn action-btn-close" @click="manualClose(activeInstrument)"
+                  :style="getRecommended(activeInstrument) === 'CLOSE' ? 'box-shadow: 0 0 24px rgba(245,158,11,0.6); border-width: 3px; flex: 2;' : 'opacity: 0.5; flex: 1;'">
+            <span v-if="getRecommended(activeInstrument) === 'CLOSE'" style="font-size: 12px; background: #F59E0B; color: #000; padding: 2px 8px; border-radius: 4px; margin-right: 8px; font-weight: 900;">&#9733; 建議平倉</span>
+            &#10005; 平倉 {{ activeInstrument }}
+            ({{ activeInstData.position?.side === 'long' ? '多' : '空' }}
+             {{ (activeInstData.position?.unrealized_pnl || 0) >= 0 ? '+' : '' }}{{ formatNumber(activeInstData.position?.unrealized_pnl || 0) }} 元)
+          </button>
+          <div v-if="getRecommended(activeInstrument) === 'HOLD'"
+               style="flex: 1; display: flex; align-items: center; justify-content: center; padding: 8px 16px; border-radius: 8px; background: rgba(138,92,255,0.15); border: 2px solid rgba(138,92,255,0.4); color: #A78BFA; font-size: 16px; font-weight: 900; font-family: var(--font-mono); box-shadow: 0 0 16px rgba(138,92,255,0.3);">
+            &#9733; 不要動
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右：側面板 -->
+    <div class="side-panel">
+
+      <!-- 紅綠燈 -->
+      <div class="panel-card" v-if="activeInstrument">
+        <div :class="['signal-light', 'signal-light-' + getSignalLight(activeInstrument).type]">
+          <span :class="['signal-dot', 'signal-dot-' + getSignalLight(activeInstrument).type]"></span>
+          <span>{{ getSignalLight(activeInstrument).label }}</span>
+          <span class="signal-reason">{{ getSignalLight(activeInstrument).reason }}</span>
+        </div>
+        <div style="margin-top: 6px; font-size: 10px; font-family: var(--font-mono); color: var(--text-muted);">
+          RSI {{ activeInstData.snapshot?.rsi?.toFixed(0) || '-' }} |
+          ADX {{ activeInstData.snapshot?.adx?.toFixed(0) || '-' }} |
+          ATR {{ activeInstData.snapshot?.atr?.toFixed(1) || '-' }}
+        </div>
+      </div>
+
+      <!-- 策略參數 -->
+      <div class="panel-card">
+        <div class="panel-title">&#9881; 策略</div>
+        <div style="margin-bottom: 6px;">
+          <div style="font-size: 9px; color: var(--text-muted); margin-bottom: 3px;">風險等級</div>
+          <div class="risk-row">
+            <button v-for="r in riskProfiles" :key="r.key"
+                    :class="['risk-btn', state.risk_profile === r.key ? 'active' : '']"
+                    @click="setRiskProfile(r.key)">
+              {{ r.icon }} {{ r.label }}
+            </button>
+          </div>
+        </div>
+        <div style="font-size: 10px; font-family: var(--font-mono);">
+          <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <span style="color: var(--text-muted);">策略</span>
+            <span style="color: var(--purple);">{{ activeInstData.strategy?.strategy || '-' }}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <span style="color: var(--text-muted);">市場</span>
+            <span>{{ activeInstData.strategy?.regime || '-' }}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <span style="color: var(--text-muted);">停損</span>
+            <span style="color: var(--red);">{{ activeInstData.strategy?.adaptive_params?.stop_loss_multiplier || '-' }}x ATR</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <span style="color: var(--text-muted);">移停觸發</span>
+            <span style="color: var(--amber);">{{ activeInstData.strategy?.adaptive_params?.trailing_trigger || '-' }}x ATR</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04);">
+            <span style="color: var(--text-muted);">訊號門檻</span>
+            <span>{{ activeInstData.strategy?.adaptive_params?.min_signal_strength || '-' }}</span>
+          </div>
+          <div style="display: flex; justify-content: space-between; padding: 3px 0;">
+            <span style="color: var(--text-muted);">冷卻</span>
+            <span>{{ activeInstData.strategy?.cooldown_remaining || 0 }} bars</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 訊號強度 -->
+      <div class="panel-card">
+        <div class="panel-title">&#128202; 訊號</div>
+        <div class="signal-bar-container">
+          <div class="signal-bar-bg">
+            <div class="signal-bar-fill" :style="signalBarStyle"></div>
+          </div>
+          <span style="font-family: var(--font-mono); font-size: 12px; font-weight: 700;">{{ signalStrength }}</span>
+        </div>
+      </div>
+
+      <!-- 其他商品 — 建議 + 直接建倉 -->
+      <div class="panel-card" v-for="inst in instrumentList.filter(i => i !== activeInstrument)" :key="'other-'+inst">
+        <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; cursor: pointer;" @click="switchInstrument(inst)">
+          <span style="font-weight: 800; font-size: 14px; font-family: var(--font-mono);">{{ inst }}</span>
+          <span :class="getInstPriceClass(inst)" style="font-weight: 700; font-size: 14px; font-family: var(--font-mono);">{{ formatPrice(getInstData(inst).price) }}</span>
+          <span v-if="getInstData(inst).position?.side !== 'flat'" style="margin-left: auto; font-weight: 700;"
+                :class="(getInstData(inst).position?.unrealized_pnl || 0) >= 0 ? 'text-green' : 'text-red'">
+            {{ (getInstData(inst).position?.unrealized_pnl || 0) >= 0 ? '+' : '' }}{{ formatNumber(getInstData(inst).position?.unrealized_pnl || 0) }}
+          </span>
+        </div>
+        <!-- 策略建議條 -->
+        <div style="display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 6px; margin-bottom: 6px; font-family: var(--font-mono); font-size: 11px;"
+             :style="{ background: getTradeAdvice(inst).bg, border: '1px solid ' + getTradeAdvice(inst).border }">
+          <span style="font-size: 16px;">{{ getTradeAdvice(inst).icon }}</span>
+          <span style="font-weight: 700;" :style="{ color: getTradeAdvice(inst).color }">{{ getTradeAdvice(inst).action }}</span>
+          <span style="color: var(--text-muted); font-size: 9px; margin-left: auto;">建議</span>
+          <span style="font-weight: 700; font-size: 11px;" :style="{ color: getTradeAdvice(inst).modeColor }">{{ getTradeAdvice(inst).mode }}</span>
+        </div>
+        <!-- 操作按鈕（推薦發光） -->
+        <div v-if="getInstData(inst).position?.side === 'flat'" style="display: flex; gap: 4px;">
+          <button @click.stop="manualOpen(inst, 'BUY')"
+                  :style="'flex:1; padding: 6px; border-radius: 6px; border: 1px solid rgba(16,185,129,0.4); background: rgba(16,185,129,0.1); color: #10B981; font-size: 12px; font-weight: 700; cursor: pointer; font-family: var(--font-mono);' + (getRecommended(inst) === 'BUY' ? 'box-shadow: 0 0 12px rgba(16,185,129,0.5);' : '')">
+            <span v-if="getRecommended(inst) === 'BUY'" style="font-size: 9px; background: #10B981; color: #000; padding: 0 4px; border-radius: 2px; margin-right: 3px;">&#9733;</span>
+            &#9650; 做多
+          </button>
+          <button @click.stop="manualOpen(inst, 'SELL')"
+                  :style="'flex:1; padding: 6px; border-radius: 6px; border: 1px solid rgba(239,68,68,0.4); background: rgba(239,68,68,0.1); color: #EF4444; font-size: 12px; font-weight: 700; cursor: pointer; font-family: var(--font-mono);' + (getRecommended(inst) === 'SELL' ? 'box-shadow: 0 0 12px rgba(239,68,68,0.5);' : '')">
+            <span v-if="getRecommended(inst) === 'SELL'" style="font-size: 9px; background: #EF4444; color: #fff; padding: 0 4px; border-radius: 2px; margin-right: 3px;">&#9733;</span>
+            &#9660; 做空
+          </button>
+        </div>
+        <div v-else style="display: flex; gap: 4px;">
+          <button @click.stop="manualClose(inst)"
+                  :style="'flex:1; padding: 6px; border-radius: 6px; border: 1px solid rgba(245,158,11,0.4); background: rgba(245,158,11,0.1); color: #F59E0B; font-size: 12px; font-weight: 700; cursor: pointer; font-family: var(--font-mono);' + (getRecommended(inst) === 'CLOSE' ? 'box-shadow: 0 0 12px rgba(245,158,11,0.5);' : '')">
+            &#10005; 平倉 {{ inst }}
+            ({{ getInstData(inst).position?.side === 'long' ? '多' : '空' }}
+             {{ (getInstData(inst).position?.unrealized_pnl || 0) >= 0 ? '+' : '' }}{{ formatNumber(getInstData(inst).position?.unrealized_pnl || 0) }})
+          </button>
+        </div>
+        <!-- 預估（無持倉時） -->
+        <div v-if="getInstData(inst).position?.side === 'flat' && getInstData(inst).snapshot?.atr > 0"
+             style="margin-top: 4px; font-size: 10px; font-family: var(--font-mono); color: var(--text-muted);">
+          預估停損 <span style="color: var(--red);">-{{ formatNumber(getEstLoss(inst)) }}</span>
+        </div>
+      </div>
+
+      <!-- 交易紀錄 -->
+      <div class="panel-card" style="flex: 1;">
+        <!-- 標題列 + 日期導航 -->
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px;">
+          <div class="panel-title" style="margin-bottom: 0;">&#128176; 交易紀錄</div>
+          <div style="display: flex; align-items: center; gap: 4px; font-family: var(--font-mono); font-size: 10px;">
+            <button @click="shiftPerfDate(-1)" style="background: none; border: 1px solid var(--border); color: var(--text-secondary); border-radius: 4px; padding: 1px 6px; cursor: pointer; font-size: 11px;">&#9664;</button>
+            <span style="color: var(--text-secondary); min-width: 72px; text-align: center;">{{ perfDate }}</span>
+            <button @click="shiftPerfDate(1)" :disabled="perfDate >= todayStr" style="background: none; border: 1px solid var(--border); color: var(--text-secondary); border-radius: 4px; padding: 1px 6px; cursor: pointer; font-size: 11px; opacity: perfDate >= todayStr ? 0.3 : 1;">&#9654;</button>
+          </div>
+        </div>
+        <!-- 統計列 -->
+        <div v-if="dailyPerf.total_trades > 0" style="display: flex; gap: 6px; margin-bottom: 6px; font-family: var(--font-mono); font-size: 10px; flex-wrap: wrap;">
+          <span :class="(dailyPerf.daily_pnl||0) >= 0 ? 'text-green' : 'text-red'" style="font-weight: 700;">
+            {{ (dailyPerf.daily_pnl||0) >= 0 ? '+' : '' }}{{ formatNumber(dailyPerf.daily_pnl||0) }}元
+          </span>
+          <span style="color: var(--text-muted);">｜</span>
+          <span style="color: var(--text-secondary);">{{ dailyPerf.winning_trades||0 }}勝{{ dailyPerf.losing_trades||0 }}負</span>
+          <span style="color: var(--text-muted);">｜</span>
+          <span style="color: var(--amber);">勝率{{ (dailyPerf.win_rate||0).toFixed(0) }}%</span>
+          <span style="color: var(--text-muted);">｜</span>
+          <span style="color: var(--blue);">PF {{ (dailyPerf.profit_factor||0) > 0 ? (dailyPerf.profit_factor).toFixed(2) : '-' }}</span>
+        </div>
+        <div v-else style="color: var(--text-muted); font-size: 10px; font-family: var(--font-mono); margin-bottom: 6px;">{{ perfDate }} 無交易紀錄</div>
+        <div :class="['trade-list', tradesExpanded ? 'expanded' : '']">
+          <div v-if="trades.length === 0" style="color: var(--text-muted); font-size: 11px; text-align: center; padding: 12px;">
+            尚無紀錄
+          </div>
+          <div v-for="(t, i) in displayTrades" :key="i" class="trade-item">
+            <div>
+              <span style="font-weight: 600;" :class="t.action === 'close' ? (t.pnl >= 0 ? 'text-green' : 'text-red') : t.action === 'buy' ? 'text-green' : 'text-red'">
+                {{ t.action === 'buy' ? '買' : t.action === 'sell' ? '空' : '平' }}
+              </span>
+              <span style="color: var(--text-muted); margin-left: 3px;">@ {{ t.price }}</span>
+              <span v-if="t.side" style="color: var(--text-muted); font-size: 9px; margin-left: 3px;">({{ t.side }})</span>
+            </div>
+            <div style="text-align: right;">
+              <span v-if="t.pnl !== undefined" style="font-weight: 600;" :class="t.pnl >= 0 ? 'text-green' : 'text-red'">
+                {{ t.pnl >= 0 ? '+' : '' }}{{ t.pnl }}
+              </span>
+              <span v-if="t.cumPnl !== undefined" style="font-size: 9px; margin-left: 4px;" :style="{ color: t.cumPnl >= 0 ? 'var(--green)' : 'var(--red)', opacity: 0.7 }">
+                ({{ t.cumPnl >= 0 ? '+' : '' }}{{ t.cumPnl }})
+              </span>
+              <span style="color: var(--text-muted); font-size: 9px; margin-left: 3px;">{{ formatTime(t.time) }}</span>
+            </div>
+          </div>
+        </div>
+        <button v-if="trades.length > 10" class="trade-expand-btn" @click="tradesExpanded = !tradesExpanded">
+          {{ tradesExpanded ? '▲ 收合' : '▼ 展開全部 (' + trades.length + ' 筆)' }}
+        </button>
+      </div>
+
+      <!-- 累計盈虧 -->
+      <div class="panel-card" style="flex: 1;" v-if="cumPerf.total_trades > 0">
+        <div class="panel-title">&#128200; 累計盈虧</div>
+        <div class="cum-pnl-row">
+          <div class="cum-pnl-item">
+            <div class="cum-pnl-label">總損益</div>
+            <div class="cum-pnl-value" :class="cumPerf.total_pnl >= 0 ? 'text-green' : 'text-red'">
+              {{ cumPerf.total_pnl >= 0 ? '+' : '' }}{{ formatNumber(cumPerf.total_pnl) }}
+            </div>
+          </div>
+          <div class="cum-pnl-item">
+            <div class="cum-pnl-label">勝率</div>
+            <div class="cum-pnl-value" style="color: var(--cyan);">{{ cumPerf.overall_win_rate?.toFixed(1) || '-' }}%</div>
+          </div>
+          <div class="cum-pnl-item">
+            <div class="cum-pnl-label">盈虧比</div>
+            <div class="cum-pnl-value" style="color: var(--amber);">{{ cumPerf.overall_profit_factor?.toFixed(2) || '-' }}</div>
+          </div>
+          <div class="cum-pnl-item">
+            <div class="cum-pnl-label">最大回撤</div>
+            <div class="cum-pnl-value text-red">{{ formatNumber(cumPerf.max_drawdown) }}</div>
+          </div>
+        </div>
+        <div class="cum-pnl-row">
+          <div class="cum-pnl-item">
+            <div class="cum-pnl-label">交易筆數</div>
+            <div class="cum-pnl-value" style="color: var(--text-primary);">{{ cumPerf.total_trades }}</div>
+          </div>
+          <div class="cum-pnl-item">
+            <div class="cum-pnl-label">報酬率</div>
+            <div class="cum-pnl-value" :class="cumPerf.total_return_pct >= 0 ? 'text-green' : 'text-red'">
+              {{ cumPerf.total_return_pct >= 0 ? '+' : '' }}{{ cumPerf.total_return_pct?.toFixed(2) || '-' }}%
+            </div>
+          </div>
+          <div class="cum-pnl-item">
+            <div class="cum-pnl-label">最佳日</div>
+            <div class="cum-pnl-value text-green">{{ cumPerf.best_day?.pnl >= 0 ? '+' : '' }}{{ formatNumber(cumPerf.best_day?.pnl) }}</div>
+          </div>
+          <div class="cum-pnl-item">
+            <div class="cum-pnl-label">最差日</div>
+            <div class="cum-pnl-value text-red">{{ formatNumber(cumPerf.worst_day?.pnl) }}</div>
+          </div>
+        </div>
+        <!-- 累計 PnL 迷你走勢圖 -->
+        <div v-if="cumPnlCurve.length > 0" class="cum-sparkline">
+          <div v-for="(v, i) in cumPnlCurve" :key="i" class="cum-sparkline-bar"
+               :style="{ height: v.h + '%', background: v.c >= 0 ? 'var(--green)' : 'var(--red)' }">
+          </div>
+        </div>
+        <div v-if="cumPnlCurve.length > 0" style="display: flex; justify-content: space-between; font-size: 9px; color: var(--text-muted); margin-top: 2px;">
+          <span>第 1 筆</span>
+          <span>累計權益曲線</span>
+          <span>第 {{ cumPerf.all_pnls?.length || 0 }} 筆</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 可摺疊：Intelligence ====== -->
+  <div class="collapse-section" v-if="intel.left_side">
+    <div :class="['collapse-toggle', showIntel ? 'open' : '']" @click="showIntel = !showIntel">
+      <span>&#129504; 市場情報 — LEFT-SIDE {{ (intel.left_side.score * 100).toFixed(0) }} | {{ leftSignalText }}</span>
+      <span class="arrow">&#9660;</span>
+    </div>
+    <div :class="['collapse-body', showIntel ? 'open' : '']">
+      <div class="intel-grid">
+        <div class="intel-score-card">
+          <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 8px;">LEFT-SIDE SCORE</div>
+          <div class="score-value" :style="{color: leftScoreColor}">
+            {{ intel.left_side.score >= 0 ? '+' : '' }}{{ (intel.left_side.score * 100).toFixed(0) }}
+          </div>
+          <div :class="['score-signal', 'signal-' + (intel.left_side.signal || 'neutral').replace('_', '-')]">
+            {{ leftSignalText }}
+          </div>
+          <div style="font-size: 10px; color: var(--text-muted); margin-top: 4px; font-family: var(--font-mono);">
+            信心度 {{ (intel.left_side.confidence * 100).toFixed(0) }}%
+          </div>
+        </div>
+
+        <div class="intel-factors-card">
+          <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px;">9 因子評分</div>
+          <div v-for="f in (intel.left_side.factors || [])" :key="f.name" class="factor-row">
+            <span class="factor-name">{{ f.name_zh }}</span>
+            <div class="factor-bar-wrap">
+              <div class="factor-bar-center"></div>
+              <div v-if="f.score > 0" class="factor-bar-fill positive" :style="{width: (Math.abs(f.score) * 50) + '%'}"></div>
+              <div v-else-if="f.score < 0" class="factor-bar-fill negative" :style="{width: (Math.abs(f.score) * 50) + '%'}"></div>
+            </div>
+            <span class="factor-score-text" :style="{color: f.score > 0 ? 'var(--green)' : f.score < 0 ? 'var(--red)' : 'var(--text-muted)'}">
+              {{ f.score > 0 ? '+' : '' }}{{ (f.score * 100).toFixed(0) }}
+            </span>
+            <span class="factor-detail" :title="f.detail">{{ f.detail }}</span>
+          </div>
+        </div>
+
+        <div class="intel-data-card">
+          <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 6px;">市場數據</div>
+          <div class="intel-data-grid">
+            <div class="intel-data-item">
+              <div class="intel-data-label">VIX</div>
+              <div class="intel-data-value" :style="{color: (intel.international?.vix||0) > 25 ? 'var(--red)' : (intel.international?.vix||0) < 15 ? 'var(--green)' : 'var(--text-primary)'}">
+                {{ (intel.international?.vix || 0).toFixed(1) }}
+              </div>
+            </div>
+            <div class="intel-data-item">
+              <div class="intel-data-label">P/C Ratio</div>
+              <div class="intel-data-value" :style="{color: (intel.options?.pc_ratio_oi||0) > 1.2 ? 'var(--red)' : (intel.options?.pc_ratio_oi||0) < 0.8 ? 'var(--green)' : 'var(--text-primary)'}">
+                {{ (intel.options?.pc_ratio_oi || 0).toFixed(2) }}
+              </div>
+            </div>
+            <div class="intel-data-item">
+              <div class="intel-data-label">外資期貨OI</div>
+              <div class="intel-data-value" :style="{color: (intel.institutional?.foreign_oi_net||0) > 0 ? 'var(--green)' : (intel.institutional?.foreign_oi_net||0) < 0 ? 'var(--red)' : 'var(--text-muted)'}">
+                {{ formatNumber(intel.institutional?.foreign_oi_net || 0) }}
+              </div>
+            </div>
+            <div class="intel-data-item">
+              <div class="intel-data-label">外資現貨</div>
+              <div class="intel-data-value" :style="{color: (intel.institutional?.foreign_spot_buy_sell||0) > 0 ? 'var(--green)' : (intel.institutional?.foreign_spot_buy_sell||0) < 0 ? 'var(--red)' : 'var(--text-muted)'}">
+                {{ (intel.institutional?.foreign_spot_buy_sell || 0).toFixed(1) }}億
+              </div>
+            </div>
+            <div class="intel-data-item">
+              <div class="intel-data-label">SP500</div>
+              <div class="intel-data-value" :style="{color: (intel.international?.sp500_change_pct||0) > 0 ? 'var(--green)' : (intel.international?.sp500_change_pct||0) < 0 ? 'var(--red)' : 'var(--text-muted)'}">
+                {{ (intel.international?.sp500_change_pct||0) > 0 ? '+' : '' }}{{ (intel.international?.sp500_change_pct || 0).toFixed(1) }}%
+              </div>
+            </div>
+            <div class="intel-data-item">
+              <div class="intel-data-label">SOX</div>
+              <div class="intel-data-value" :style="{color: (intel.international?.sox_change_pct||0) > 0 ? 'var(--green)' : (intel.international?.sox_change_pct||0) < 0 ? 'var(--red)' : 'var(--text-muted)'}">
+                {{ (intel.international?.sox_change_pct||0) > 0 ? '+' : '' }}{{ (intel.international?.sox_change_pct || 0).toFixed(1) }}%
+              </div>
+            </div>
+          </div>
+          <button class="intel-refresh-btn" @click="refreshIntel">&#128260; 更新情報</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 可摺疊：活動日誌 ====== -->
+  <div class="collapse-section">
+    <div :class="['collapse-toggle', showActivity ? 'open' : '']" @click="showActivity = !showActivity">
+      <span>
+        &#128220; 引擎日誌
+        <span class="paper-badge" v-if="state.trading_mode === 'paper' && state.paper_signals > 0" style="margin-left: 6px;">
+          PAPER &#9889; {{ state.paper_signals }}
+        </span>
+      </span>
+      <span style="display: flex; align-items: center; gap: 6px;">
+        <span style="font-size: 10px;" :style="{ color: state.engine_state === 'running' ? 'var(--green)' : 'var(--text-muted)' }">
+          {{ state.engine_state === 'running' ? 'LIVE' : 'OFF' }}
+        </span>
+        <span class="arrow">&#9660;</span>
+      </span>
+    </div>
+    <div :class="['collapse-body', showActivity ? 'open' : '']">
+      <div class="activity-card">
+        <div class="activity-list">
+          <div v-if="activityLog.length === 0" style="color: var(--text-muted); font-size: 11px; text-align: center; padding: 16px;">
+            {{ state.engine_state === 'running' ? '等待數據...' : '引擎未啟動' }}
+          </div>
+          <div v-for="(a, i) in activityLogReversed" :key="i"
+               :class="['activity-item', i === 0 ? 'new' : '']">
+            <span class="activity-time">{{ formatActivityTime(a.time) }}</span>
+            <span class="activity-icon">{{ activityIcon(a.type) }}</span>
+            <span :class="['activity-msg', activityMsgClass(a.type)]">{{ a.message }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== 底部狀態列 ====== -->
+  <div class="footer-strip">
+    <span>
+      <span :style="{ color: circuitDotClass === 'circuit-active' ? 'var(--green)' : circuitDotClass === 'circuit-halted' ? 'var(--red)' : 'var(--amber)' }">&#9679;</span>
+      熔斷: {{ circuitText }} ({{ state.risk?.circuit_breaker?.daily_loss || 0 }}/{{ state.risk?.circuit_breaker?.max_daily_loss || 500 }})
+    </span>
+    <span>勝率: {{ stats.win_rate ? stats.win_rate.toFixed(1) + '%' : '-' }}</span>
+    <span>盈虧比: {{ stats.profit_factor ? stats.profit_factor.toFixed(2) : '-' }}</span>
+    <span>{{ state.trading_mode?.toUpperCase() }} | {{ activeInstrument }} | Tick {{ tickCount }}</span>
+  </div>
+
+</div>
+
+<script>
+const { createApp, ref, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
+
+createApp({
+  setup() {
+    // ---- 狀態 ----
+    const state = ref({
+      engine_state: 'stopped',
+      trading_mode: 'simulation',
+      risk_profile: 'balanced',
+      contract: '',
+      price: 0,
+      position: {},
+      daily_pnl: 0,
+      daily_trades: 0,
+      strategy: {},
+      risk: {},
+      snapshot: {},
+    });
+    const currentPrice = ref(0);
+    const prevPrice = ref(0);
+    const trades = ref([]);
+    const stats = ref({});
+    const timeframe = ref(5);
+    const tickCount = ref(0);
+    const intel = ref({});
+    const activityLog = ref([]);
+
+    // 可摺疊區塊
+    const showIntel = ref(false);
+    const showActivity = ref(false);
+
+    // 交易紀錄展開 + 累計盈虧
+    const tradesExpanded = ref(false);
+    const cumPerf = ref({});
+    const dailyPerf = ref({});  // 選定日期績效（從 performance API 取得，重啟後不歸零）
+    const _nowRef = ref(new Date());
+    setInterval(() => { _nowRef.value = new Date(); }, 60000);  // 每分鐘更新，確保午夜後日期正確
+    const todayStr = computed(() => _nowRef.value.toISOString().slice(0, 10));
+    const perfDate = ref(todayStr.value);  // 當前查看的日期
+    watch(todayStr, (newDay) => { perfDate.value = newDay; });  // 午夜自動切換到新的一天
+
+    // 畫線工具
+    const drawingMode = ref(null);  // null | 'trendline' | 'hline'
+    const drawingColor = ref('#FACC15');
+    const drawingWidth = ref(2);
+    const drawnLines = ref([]);
+    let drawingState = { startPoint: null, tempLine: null };
+
+    // 多商品支援
+    const activeInstrument = ref('');
+    const instrumentList = computed(() => state.value.instruments || []);
+
+    // 真實帳戶數據
+    const realAccount = ref({ equity: 0, balance: 0, margin_used: 0, margin_available: 0, unrealized_pnl: 0 });
+    const realPositions = ref([]);
+
+    async function fetchRealAccount() {
+      try {
+        const r = await fetch('/api/real-account');
+        const data = await r.json();
+        if (data.account) realAccount.value = data.account;
+        if (data.positions) realPositions.value = data.positions;
+      } catch (e) {}
+    }
+
+    function getInstData(inst) {
+      return state.value.instruments_data?.[inst] || { price: 0, position: { side: 'flat' }, snapshot: {}, strategy: {} };
+    }
+
+    function switchInstrument(inst) {
+      activeInstrument.value = inst;
+      fetchKbars();
+    }
+
+    const modes = [
+      { key: 'paper', icon: '\u{1F52C}', label: '模擬', activeStyle: 'background: rgba(59,130,246,0.2); color: #60A5FA; border-color: #3B82F6;' },
+      { key: 'live', icon: '\u{1F4B0}', label: '實單', activeStyle: 'background: rgba(239,68,68,0.25); color: #F87171; border-color: #EF4444;' },
+    ];
+
+    async function switchMode(mode) {
+      if (mode === state.value.trading_mode) return;
+      if (mode === 'live' && !confirm('確定切換到實單交易？這會用真錢下單！')) return;
+      try {
+        const r = await fetch('/api/mode/' + mode, { method: 'POST' });
+        const data = await r.json();
+        if (data.status === 'ok') {
+          state.value.trading_mode = mode;
+          setTimeout(fetchState, 1000);
+        } else {
+          alert(data.error || '切換失敗');
+        }
+      } catch (e) { alert('切換失敗: ' + e.message); }
+    }
+
+    const riskProfiles = [
+      { key: 'conservative', icon: '\u{1F6E1}', label: '保守' },
+      { key: 'balanced', icon: '\u2696', label: '平衡' },
+      { key: 'aggressive', icon: '\u{1F525}', label: '積極' },
+      { key: 'crisis', icon: '\u2694', label: '危機' },
+    ];
+
+    // ---- K 線圖 ----
+    let chart = null;
+    let candleSeries = null;
+    let volumeSeries = null;
+    let ema20Line = null;
+    let ema60Line = null;
+    let ema200Line = null;
+    let entryPriceLine = null;
+    let slPriceLine = null;
+    let tpPriceLine = null;
+    let tradeMarkers = [];
+    const seenTradeKeys = new Set();
+    let currentCandle = null;
+    let lastBarTime = null;
+
+    function initChart() {
+      const container = document.getElementById('chart-container');
+      if (!container || chart) return;
+
+      chart = LightweightCharts.createChart(container, {
+        width: container.clientWidth,
+        height: 400,
+        layout: {
+          background: { type: 'solid', color: 'transparent' },
+          textColor: '#8888aa',
+          fontFamily: "Consolas, 'JetBrains Mono', monospace",
+        },
+        grid: {
+          vertLines: { color: 'rgba(138,92,255,0.05)' },
+          horzLines: { color: 'rgba(138,92,255,0.05)' },
+        },
+        crosshair: {
+          mode: LightweightCharts.CrosshairMode.Normal,
+          vertLine: { color: 'rgba(138,92,255,0.3)', labelBackgroundColor: '#8A5CFF' },
+          horzLine: { color: 'rgba(138,92,255,0.3)', labelBackgroundColor: '#8A5CFF' },
+        },
+        timeScale: {
+          borderColor: 'rgba(138,92,255,0.1)',
+          timeVisible: true,
+          secondsVisible: false,
+          barSpacing: 6,
+          rightOffset: 10,
+        },
+        rightPriceScale: {
+          borderColor: 'rgba(138,92,255,0.1)',
+          scaleMargins: { top: 0.05, bottom: 0.05 },
+        },
+      });
+
+      candleSeries = chart.addCandlestickSeries({
+        upColor: '#10B981', downColor: '#EF4444',
+        borderUpColor: '#10B981', borderDownColor: '#EF4444',
+        wickUpColor: '#10B981', wickDownColor: '#EF4444',
+        priceFormat: { type: 'price', precision: 0, minMove: 1 },
+      });
+
+      volumeSeries = chart.addHistogramSeries({
+        priceFormat: { type: 'volume' },
+        priceScaleId: 'volume',
+      });
+      chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 } });
+
+      const emaOpts = { priceFormat: { type: 'price', precision: 0, minMove: 1 }, autoscaleInfoProvider: () => null };
+      ema20Line = chart.addLineSeries({ color: '#4DA3FF', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, ...emaOpts });
+      ema60Line = chart.addLineSeries({ color: '#F59E0B', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, ...emaOpts });
+      ema200Line = chart.addLineSeries({ color: '#E879F9', lineWidth: 1.5, lineStyle: 2, priceLineVisible: false, lastValueVisible: false, ...emaOpts });
+
+      const resizeObserver = new ResizeObserver(entries => {
+        const { width } = entries[0].contentRect;
+        chart.applyOptions({ width });
+      });
+      resizeObserver.observe(container);
+    }
+
+    function toChartTime(isoString) {
+      const d = new Date(isoString);
+      // LightweightCharts 用 UTC 秒數顯示，加 8h 讓 X 軸顯示台灣時間
+      return Math.floor(d.getTime() / 1000) + 8 * 3600;
+    }
+
+    // ---- WebSocket ----
+    let ws = null;
+    let reconnectDelay = 1000;
+
+    function connectWS() {
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      ws = new WebSocket(`${protocol}//${location.host}/ws`);
+      ws.onopen = () => { reconnectDelay = 1000; setTimeout(fetchKbars, 500); };
+      ws.onmessage = (event) => { handleMessage(JSON.parse(event.data)); };
+      ws.onclose = () => {
+        setTimeout(connectWS, Math.min(reconnectDelay, 30000));
+        reconnectDelay *= 1.5;
+      };
+    }
+
+    function handleMessage(msg) {
+      const { type, data } = msg;
+
+      if (type === 'state') {
+        state.value = data;
+        if (!activeInstrument.value && data.instruments?.length > 0) {
+          activeInstrument.value = data.instruments[0];
+        }
+        const instData = data.instruments_data?.[activeInstrument.value];
+        currentPrice.value = instData?.price || data.price || currentPrice.value;
+        if (data.intelligence) intel.value = data.intelligence;
+        updatePositionLines();
+        if (data.activity && data.activity.length > 0) {
+          const existing = new Set(activityLog.value.map(a => a.time + a.message));
+          for (const a of data.activity) {
+            const key = a.time + a.message;
+            if (!existing.has(key)) {
+              activityLog.value.push(a);
+              existing.add(key);
+            }
+          }
+          if (activityLog.value.length > 100) {
+            activityLog.value = activityLog.value.slice(-100);
+          }
+        }
+      }
+
+      if (type === 'intelligence') { intel.value = data; }
+
+      if (type === 'tick') {
+        prevPrice.value = currentPrice.value;
+        currentPrice.value = data.price;
+        tickCount.value++;
+        if (data.instrument) {
+          const oldPrice = getInstData(data.instrument).price || 0;
+          if (oldPrice > 0) instPrevPrices.value[data.instrument] = oldPrice;
+        }
+        if (candleSeries && data.instrument === activeInstrument.value) {
+          const tickTime = new Date(data.time);
+          const tf = timeframe.value;
+          const aligned = new Date(tickTime);
+          aligned.setSeconds(0, 0);
+          aligned.setMinutes(Math.floor(aligned.getMinutes() / tf) * tf);
+          const t = Math.floor(aligned.getTime() / 1000) + 8 * 3600;
+
+          if (!currentCandle || currentCandle.time !== t) {
+            currentCandle = { time: t, open: data.price, high: data.price, low: data.price, close: data.price, vol: 0 };
+          } else {
+            currentCandle.close = data.price;
+            if (data.price > currentCandle.high) currentCandle.high = data.price;
+            if (data.price < currentCandle.low) currentCandle.low = data.price;
+          }
+          currentCandle.vol += (data.volume || 1);
+          try {
+            candleSeries.update(currentCandle);
+            volumeSeries.update({ time: t, value: currentCandle.vol, color: currentCandle.close >= currentCandle.open ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)' });
+            if (t > (lastBarTime || 0)) lastBarTime = t;
+            // 用 snapshot 的 EMA 即時更新當前 bar 的均線位置
+            const snap = getInstData(activeInstrument.value)?.snapshot;
+            if (snap) {
+              if (ema20Line && snap.ema20 > 0) { try { ema20Line.update({ time: t, value: snap.ema20 }); } catch(e) {} }
+              if (ema60Line && snap.ema60 > 0) { try { ema60Line.update({ time: t, value: snap.ema60 }); } catch(e) {} }
+              if (ema200Line && snap.ema200 > 0) { try { ema200Line.update({ time: t, value: snap.ema200 }); } catch(e) {} }
+            }
+          } catch(e) {}
+        }
+      }
+
+      if (type === 'kbar') {
+        if (candleSeries && data.interval === timeframe.value) {
+          const t = Math.floor(new Date(data.time).getTime() / 1000) + 8 * 3600;
+          try {
+            candleSeries.update({ time: t, open: data.open, high: data.high, low: data.low, close: data.close });
+            volumeSeries.update({ time: t, value: data.volume, color: data.close >= data.open ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)' });
+            // 即時更新 EMA 線
+            if (ema20Line && data.ema20 != null) { try { ema20Line.update({ time: t, value: data.ema20 }); } catch(e) {} }
+            if (ema60Line && data.ema60 != null) { try { ema60Line.update({ time: t, value: data.ema60 }); } catch(e) {} }
+            if (ema200Line && data.ema200 != null) { try { ema200Line.update({ time: t, value: data.ema200 }); } catch(e) {} }
+            if (t > (lastBarTime || 0)) lastBarTime = t;
+          } catch(e) {
+            console.warn('[candle kbar update FAIL]', e.message, 'kbar time:', t, 'lastBarTime:', lastBarTime);
+          }
+          currentCandle = null;
+        }
+      }
+
+      if (type === 'signal') {
+        // 更新到對應商品的 instruments_data
+        const inst = data.instrument;
+        if (inst && state.value.instruments_data?.[inst]) {
+          const id = state.value.instruments_data[inst];
+          if (id.strategy) id.strategy.signal_strength = data.signal_strength;
+          id.snapshot = { ...id.snapshot, rsi: data.rsi, adx: data.adx, regime: data.regime };
+        }
+        // 相容：也更新頂層
+        state.value.snapshot = { ...state.value.snapshot, ...data };
+      }
+
+      if (type === 'trade') {
+        // 去重：用 time+action+price 當 key
+        const tradeKey = `${data.time}|${data.action}|${data.price}|${data.instrument || ''}`;
+        if (seenTradeKeys.has(tradeKey)) return; // 已處理過，跳過
+        seenTradeKeys.add(tradeKey);
+
+        trades.value.push(data);
+        fetchStats();
+        if (candleSeries && data.time) {
+          const t = toChartTime(data.time);
+          const isBuy = data.action === 'buy' || data.action === 'BUY';
+          const isClose = data.action === 'close';
+          tradeMarkers.push({
+            time: t,
+            position: isBuy ? 'belowBar' : 'aboveBar',
+            color: isClose ? '#F59E0B' : (isBuy ? '#10B981' : '#EF4444'),
+            shape: isClose ? 'square' : (isBuy ? 'arrowUp' : 'arrowDown'),
+            text: isClose ? 'EXIT' : (isBuy ? 'BUY' : 'SELL'),
+          });
+          candleSeries.setMarkers(tradeMarkers.slice().sort((a, b) => a.time - b.time));
+        }
+      }
+
+      if (type === 'engine_state') {
+        state.value.engine_state = data.state;
+      }
+    }
+
+    // ---- API ----
+    async function fetchState() {
+      try {
+        const r = await fetch('/api/state');
+        state.value = await r.json();
+        if (!activeInstrument.value && state.value.instruments?.length > 0) {
+          activeInstrument.value = state.value.instruments[0];
+        }
+        const instData = state.value.instruments_data?.[activeInstrument.value];
+        currentPrice.value = instData?.price || state.value.price || 0;
+        if (state.value.intelligence) intel.value = state.value.intelligence;
+      } catch (e) {}
+    }
+
+    async function fetchIntel() {
+      try {
+        const r = await fetch('/api/intelligence');
+        const data = await r.json();
+        if (data && data.left_side) intel.value = data;
+      } catch (e) {}
+    }
+
+    async function refreshIntel() {
+      try {
+        await fetch('/api/intelligence/refresh', { method: 'POST' });
+        setTimeout(fetchIntel, 3000);
+      } catch (e) {}
+    }
+
+    async function fetchTrades() {
+      try {
+        // 1. 從 performance API 取選定日期完整紀錄（重啟後仍有資料）
+        const rPerf = await fetch(`/api/performance/daily/${perfDate.value}`);
+        const perfData = rPerf.ok ? await rPerf.json() : {};
+        const rawTrades = perfData.trades || [];
+        const perfTrades = rawTrades.map(t => ({
+          time: t.exit_time, action: 'close',
+          price: t.exit_price, pnl: t.pnl, side: t.side, reason: t.reason,
+        }));
+
+        // 2. 若查看今天，同時合併 engine 當前 session（最新筆可能尚未存入 _live）
+        let merged = [...perfTrades];
+        let mergedRaw = [...rawTrades];
+        if (perfDate.value === todayStr.value) {
+          const rSess = await fetch('/api/trades');
+          const sessData = rSess.ok ? await rSess.json() : [];
+          const sessTrades = sessData.map(t => ({
+            time: t.exit_time, action: 'close',
+            price: t.exit_price, pnl: t.pnl, side: t.side, reason: t.reason,
+          }));
+          const keyOf = t => `${t.time}|${t.price}`;
+          const seen = new Set(perfTrades.map(keyOf));
+          for (let i = 0; i < sessTrades.length; i++) {
+            const t = sessTrades[i];
+            if (!seen.has(keyOf(t))) {
+              merged.push(t);
+              mergedRaw.push(sessData[i]);
+              seen.add(keyOf(t));
+            }
+          }
+        }
+
+        merged.sort((a, b) => (a.time || '') < (b.time || '') ? -1 : 1);
+        trades.value = merged;
+
+        // 3. 把已載入的交易加到 seenTradeKeys，防止 WS 重複推送（僅今日）
+        if (perfDate.value === todayStr.value) {
+          for (const t of trades.value) {
+            const key = `${t.time}|${t.action}|${t.price}|${t.instrument || ''}`;
+            seenTradeKeys.add(key);
+          }
+        }
+
+        // 4. 重建 chart 上的進出場 markers（重啟或重整後也能看到）
+        if (candleSeries) {
+          tradeMarkers = [];
+          for (const t of mergedRaw) {
+            if (!t || !t.entry_time) continue;
+            const isLong = (t.side === 'long');
+            // 進場 marker
+            tradeMarkers.push({
+              time: toChartTime(t.entry_time),
+              position: isLong ? 'belowBar' : 'aboveBar',
+              color: isLong ? '#10B981' : '#EF4444',
+              shape: isLong ? 'arrowUp' : 'arrowDown',
+              text: isLong ? 'BUY' : 'SELL',
+            });
+            // 出場 marker（已平倉才有 exit_time）
+            if (t.exit_time) {
+              tradeMarkers.push({
+                time: toChartTime(t.exit_time),
+                position: 'aboveBar',
+                color: '#F59E0B',
+                shape: 'square',
+                text: 'EXIT',
+              });
+            }
+          }
+          // 額外：把目前還開著的持倉進場點也標上（從 state.position）
+          try {
+            if (perfDate.value === todayStr.value) {
+              const insts = state.value?.instruments_data || {};
+              for (const inst of Object.keys(insts)) {
+                const p = insts[inst]?.position;
+                if (p && (p.quantity || 0) > 0 && p.entry_time) {
+                  const isLong = (p.side === 'long');
+                  // 防重複：已在 mergedRaw 出現過就略
+                  const dup = tradeMarkers.some(m => m.time === toChartTime(p.entry_time));
+                  if (!dup) {
+                    tradeMarkers.push({
+                      time: toChartTime(p.entry_time),
+                      position: isLong ? 'belowBar' : 'aboveBar',
+                      color: isLong ? '#10B981' : '#EF4444',
+                      shape: isLong ? 'arrowUp' : 'arrowDown',
+                      text: isLong ? 'BUY' : 'SELL',
+                    });
+                  }
+                }
+              }
+            }
+          } catch (e) {}
+          try {
+            candleSeries.setMarkers(tradeMarkers.slice().sort((a, b) => a.time - b.time));
+          } catch (e) {}
+        }
+      } catch (e) {}
+    }
+
+    async function fetchDailyPerf() {
+      try {
+        // 若目前顯示的不是今日，先檢查今日是否已有交易，有則自動切回今日
+        const realToday = new Date().toISOString().slice(0, 10);
+        if (perfDate.value !== realToday) {
+          const rToday = await fetch(`/api/performance/daily/${realToday}`);
+          if (rToday.ok) {
+            const todayData = await rToday.json();
+            if ((todayData.total_trades || 0) > 0) {
+              perfDate.value = realToday;
+            }
+          }
+        }
+        const r = await fetch(`/api/performance/daily/${perfDate.value}`);
+        if (r.ok) dailyPerf.value = await r.json();
+      } catch (e) {}
+    }
+
+    async function shiftPerfDate(delta) {
+      const d = new Date(perfDate.value);
+      d.setDate(d.getDate() + delta);
+      const newDate = d.toISOString().slice(0, 10);
+      if (newDate > todayStr.value) return;
+      perfDate.value = newDate;
+      tradesExpanded.value = false;
+      await fetchDailyPerf();
+      await fetchTrades();
+    }
+
+    async function fetchStats() {
+      try { const r = await fetch('/api/stats'); stats.value = await r.json(); } catch (e) {}
+    }
+
+    let _fetchingKbars = false;
+    async function fetchKbars() {
+      if (_fetchingKbars) return; // 防止重疊請求
+      _fetchingKbars = true;
+      try {
+        if (!candleSeries) { _fetchingKbars = false; return; }
+        const inst = activeInstrument.value || 'TMF';
+        const url = `/api/kbars?timeframe=${timeframe.value}&count=500&instrument=${inst}`;
+        const r = await fetch(url);
+        if (!r.ok) { _fetchingKbars = false; return; }
+        const data = await r.json();
+        if (!Array.isArray(data) || data.length === 0) { _fetchingKbars = false; return; }
+
+        const seen = new Map();
+        for (const k of data) {
+          const t = toChartTime(k.time);
+          seen.set(t, k);
+        }
+        const sorted = [...seen.entries()].sort((a, b) => a[0] - b[0]);
+        const candles = sorted.map(([t, k]) => ({ time: t, open: k.open, high: k.high, low: k.low, close: k.close }));
+        const volumes = sorted.map(([t, k]) => ({ time: t, value: k.volume, color: k.close >= k.open ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)' }));
+
+        candleSeries.setData(candles);
+        volumeSeries.setData(volumes);
+        lastBarTime = candles.length > 0 ? candles[candles.length - 1].time : null;
+        currentCandle = null;  // Reset after setData to avoid stale candle
+        console.log('[fetchKbars] loaded', candles.length, 'bars, lastBarTime:', lastBarTime, new Date((lastBarTime || 0) * 1000).toLocaleString());
+        chart.timeScale().scrollToRealTime();
+
+        try {
+          if (ema20Line) {
+            const ema20Data = sorted.filter(([t, k]) => k.ema20 != null).map(([t, k]) => ({ time: t, value: k.ema20 }));
+            if (ema20Data.length > 0) ema20Line.setData(ema20Data);
+          }
+          if (ema60Line) {
+            const ema60Data = sorted.filter(([t, k]) => k.ema60 != null).map(([t, k]) => ({ time: t, value: k.ema60 }));
+            if (ema60Data.length > 0) ema60Line.setData(ema60Data);
+          }
+          if (ema200Line) {
+            const ema200Data = sorted.filter(([t, k]) => k.ema200 != null).map(([t, k]) => ({ time: t, value: k.ema200 }));
+            if (ema200Data.length > 0) ema200Line.setData(ema200Data);
+          }
+        } catch (emaErr) { console.warn('[EMA]', emaErr); }
+
+        updatePositionLines();
+        // Redraw trend lines after setData() clears LineSeries data
+        redrawAllDrawings();
+      } catch (e) { console.error('[fetchKbars]', e); }
+      _fetchingKbars = false;
+    }
+
+    function updatePositionLines() {
+      if (!candleSeries) return;
+      if (entryPriceLine) { candleSeries.removePriceLine(entryPriceLine); entryPriceLine = null; }
+      if (slPriceLine) { candleSeries.removePriceLine(slPriceLine); slPriceLine = null; }
+      if (tpPriceLine) { candleSeries.removePriceLine(tpPriceLine); tpPriceLine = null; }
+
+      const inst = activeInstrument.value;
+      const pos = getInstData(inst).position || {};
+
+      if (pos.side === 'long' || pos.side === 'short') {
+        const entry = pos.entry_price || 0;
+        const sl = pos.stop_loss || 0;
+        const tp = pos.take_profit || 0;
+
+        if (entry > 0) {
+          entryPriceLine = candleSeries.createPriceLine({
+            price: entry, color: '#A78BFA', lineWidth: 2, lineStyle: 2,
+            axisLabelVisible: true, title: '\u25B6 進場 ' + entry,
+          });
+        }
+        if (sl > 0) {
+          slPriceLine = candleSeries.createPriceLine({
+            price: sl, color: '#EF4444', lineWidth: 2, lineStyle: 1,
+            axisLabelVisible: true, title: '\u2715 停損 ' + sl,
+          });
+        }
+        if (tp > 0) {
+          tpPriceLine = candleSeries.createPriceLine({
+            price: tp, color: '#10B981', lineWidth: 2, lineStyle: 1,
+            axisLabelVisible: true, title: '\u25CE 停利 ' + tp,
+          });
+        }
+      }
+    }
+
+    async function engineAction(action) {
+      try {
+        await fetch(`/api/engine/${action}`, { method: 'POST' });
+        setTimeout(fetchState, 500);
+      } catch (e) {}
+    }
+
+    async function setRiskProfile(profile) {
+      try {
+        await fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ risk_profile: profile }),
+        });
+        state.value.risk_profile = profile;
+      } catch (e) {}
+    }
+
+    // ---- 手動建倉/平倉 ----
+    const instPrevPrices = ref({});
+
+    async function manualOpen(instrument, side) {
+      const label = side === 'BUY' ? '做多' : '做空';
+      if (!confirm(`確定 ${label} ${instrument}？（市價單）`)) return;
+      try {
+        const r = await fetch('/api/manual-open', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instrument, side, quantity: 1 }),
+        });
+        const data = await r.json();
+        if (data.error) {
+          alert('建倉失敗: ' + data.error);
+        } else {
+          setTimeout(fetchState, 500);
+          setTimeout(fetchRealAccount, 1000);
+        }
+      } catch (e) { alert('建倉失敗: ' + e.message); }
+    }
+
+    async function manualClose(instrument) {
+      if (!confirm(`確定平倉 ${instrument}？`)) return;
+      try {
+        await fetch(`/api/engine/close?instrument=${instrument}`, { method: 'POST' });
+        setTimeout(fetchState, 500);
+        setTimeout(fetchRealAccount, 1000);
+      } catch (e) { alert('平倉失敗: ' + e.message); }
+    }
+
+    function realPosLivePrice(p) {
+      for (const inst of instrumentList.value) {
+        if (p.code.startsWith(inst)) {
+          const livePrice = getInstData(inst).price;
+          return livePrice > 0 ? livePrice : p.last_price;
+        }
+      }
+      return p.last_price;
+    }
+
+    function realPosLivePnl(p) {
+      const livePrice = realPosLivePrice(p);
+      let pv = 1;
+      for (const inst of instrumentList.value) {
+        if (p.code.startsWith(inst)) {
+          pv = POINT_VALUES[inst] || getInstData(inst).point_value || 1;
+          break;
+        }
+      }
+      const isSell = p.direction.includes('Sell');
+      return isSell ? (p.price - livePrice) * p.quantity * pv : (livePrice - p.price) * p.quantity * pv;
+    }
+
+    function realPosPriceChange(p) {
+      const livePrice = realPosLivePrice(p);
+      const diff = livePrice - p.price;
+      if (diff === 0) return '';
+      return (diff > 0 ? '+' : '') + diff.toFixed(0);
+    }
+
+    async function closeRealPosition(p) {
+      const side = p.direction.includes('Sell') ? 'SHORT' : 'LONG';
+      if (!confirm(`確定平倉 ${p.code} ${side} x${p.quantity}？`)) return;
+      try {
+        const r = await fetch('/api/close-position', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: p.code, direction: p.direction, quantity: p.quantity }),
+        });
+        const data = await r.json();
+        if (data.error) { alert('平倉失敗: ' + data.error); }
+        else { setTimeout(fetchState, 500); setTimeout(fetchRealAccount, 1000); }
+      } catch (e) { alert('平倉失敗: ' + e.message); }
+    }
+
+    function getInstPriceClass(inst) {
+      const prev = instPrevPrices.value[inst] || 0;
+      const curr = getInstData(inst).price || 0;
+      if (curr > prev && prev > 0) return 'text-green';
+      if (curr < prev && prev > 0) return 'text-red';
+      return '';
+    }
+
+    function getInstPriceChange(inst) {
+      const prev = instPrevPrices.value[inst] || 0;
+      const curr = getInstData(inst).price || 0;
+      if (!prev || prev === curr) return '';
+      const diff = curr - prev;
+      return (diff > 0 ? '+' : '') + diff.toFixed(0);
+    }
+
+    // ---- 建倉前預估 ----
+    const POINT_VALUES = { TMF: 10, TGF: 10 };
+
+    function getEstSLMult(inst) {
+      return getInstData(inst).strategy?.adaptive_params?.stop_loss_multiplier || 2.0;
+    }
+    function getEstTPMult(inst) { return getEstSLMult(inst) * 2; }
+    function getEstLoss(inst) {
+      const atr = getInstData(inst).snapshot?.atr || 0;
+      const pv = POINT_VALUES[inst] || getInstData(inst).point_value || 1;
+      return Math.round(atr * getEstSLMult(inst) * pv);
+    }
+    function getEstProfit(inst) {
+      const atr = getInstData(inst).snapshot?.atr || 0;
+      const pv = POINT_VALUES[inst] || getInstData(inst).point_value || 1;
+      return Math.round(atr * getEstTPMult(inst) * pv);
+    }
+    function getEstRR(inst) {
+      const sl = getEstSLMult(inst);
+      const tp = getEstTPMult(inst);
+      return sl > 0 ? (tp / sl).toFixed(1) : '-';
+    }
+
+    // ======================================================
+    // Breakout v5 策略指標解析
+    // Mode A：ATR 壓縮突破 (atrR < squeeze → ≥ expand, ADX≥20)
+    // Mode B：強趨勢回調 (ADX≥25, +DI/-DI 明確, 回踩 EMA5)
+    // ======================================================
+
+    function getBreakoutState(inst) {
+      const d = getInstData(inst);
+      const snap = d.snapshot || {};
+      const strat = d.strategy || {};
+      const pos = d.position || {};
+      const intl = intel.value || {};
+
+      const adx      = snap.adx      || 0;
+      const plusDI   = snap.plus_di  || 0;
+      const minusDI  = snap.minus_di || 0;
+      const atrR     = snap.atr_ratio || 1.0;
+      const atr      = snap.atr || 0;
+      const ema5     = snap.ema5 || 0;
+      const ema20    = snap.ema20 || 0;
+      const ema60    = snap.ema60 || 0;
+      const price    = d.price || 0;
+      const volR     = snap.volume_ratio || 1.0;
+
+      const squeezeR = strat.squeeze_ratio || 0.9;
+      const expandR  = strat.expand_ratio  || 1.18;
+      const minADX   = strat.min_adx       || 20;
+
+      const pcRatio  = intl.options?.pc_ratio_oi || 0;
+      const vix      = intl.international?.vix || 0;
+
+      // 方向判斷
+      const diLong  = plusDI > minusDI;
+      const diShort = minusDI > plusDI;
+      const diDiff  = Math.abs(plusDI - minusDI);
+
+      // Mode A 條件
+      const modeA_adx    = adx >= minADX;
+      const modeA_expand = atrR >= expandR;
+      const modeA_squeeze = atrR < squeezeR;   // 曾在壓縮（用於顯示蓄勢狀態）
+
+      // Mode B 條件
+      const modeB_adx  = adx >= 25;
+      const modeB_long  = modeB_adx && plusDI > minusDI + 5 && price <= ema5 * 1.002;
+      const modeB_short = modeB_adx && minusDI > plusDI + 5 && price >= ema5 * 0.998;
+
+      return {
+        adx, plusDI, minusDI, atrR, atr, ema5, ema20, ema60,
+        price, volR, squeezeR, expandR, minADX,
+        diLong, diShort, diDiff,
+        modeA_adx, modeA_expand, modeA_squeeze,
+        modeB_adx, modeB_long, modeB_short,
+        pcRatio, vix, pos,
+        pv: POINT_VALUES[inst] || 10,
+      };
+    }
+
+    // ---- 推薦動作（決定哪個按鈕發光） ----
+    function getRecommended(inst) {
+      const s = getBreakoutState(inst);
+      const pos = s.pos;
+      const pnl = pos.unrealized_pnl || 0;
+
+      if (pos.side === 'long' || pos.side === 'short') {
+        // 接近停損 80% → 建議平倉
+        if (pos.stop_loss && pos.entry_price) {
+          const slDist = Math.abs(pos.entry_price - pos.stop_loss) * s.pv;
+          if (pnl < 0 && Math.abs(pnl) > slDist * 0.8) return 'CLOSE';
+        }
+        // 超過 3 ATR 獲利
+        if (pnl > s.atr * 3 * s.pv) return 'CLOSE';
+        return 'HOLD';
+      }
+
+      // Mode A 進場信號
+      if (s.modeA_adx && s.modeA_expand) {
+        if (s.diLong && s.diDiff >= 5)  return 'BUY';
+        if (s.diShort && s.diDiff >= 5) return 'SELL';
+      }
+      // Mode B 進場信號
+      if (s.modeB_long)  return 'BUY';
+      if (s.modeB_short) return 'SELL';
+      return 'NONE';
+    }
+
+    // ---- 交易建議（detail 文字） ----
+    function getTradeAdvice(inst) {
+      const s = getBreakoutState(inst);
+      const pos = s.pos;
+      const pnl = pos.unrealized_pnl || 0;
+
+      const noData = {
+        icon: '\u23F3', action: '等待數據', detail: '指標計算中...',
+        color: 'var(--text-muted)', bg: 'rgba(100,100,130,0.06)',
+        border: 'rgba(100,100,130,0.15)',
+      };
+      if (!s.price || !s.adx) return noData;
+
+      // 有持倉
+      if (pos.side === 'long' || pos.side === 'short') {
+        const dir = pos.side === 'long' ? '多單' : '空單';
+        const pnlStr = (pnl >= 0 ? '+' : '') + Math.round(pnl) + ' 元';
+        if (pnl > s.atr * 3 * s.pv)
+          return { icon: '\u{1F4B0}', action: `${dir}・考慮獲利`, detail: `浮盈 ${pnlStr} 超過 3ATR`, color: '#10B981', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.25)' };
+        if (pnl > 0)
+          return { icon: '\u{1F4C8}', action: `持有${dir}`, detail: `浮盈 ${pnlStr}`, color: '#10B981', bg: 'rgba(16,185,129,0.06)', border: 'rgba(16,185,129,0.2)' };
+        if (pnl > -s.atr * 1.5 * s.pv)
+          return { icon: '\u23F8\uFE0F', action: `${dir}・觀察`, detail: `浮虧 ${pnlStr}，停損範圍內`, color: '#F59E0B', bg: 'rgba(245,158,11,0.06)', border: 'rgba(245,158,11,0.2)' };
+        return { icon: '\u26A0\uFE0F', action: `${dir}浮虧擴大`, detail: `浮虧 ${pnlStr}，注意停損`, color: '#EF4444', bg: 'rgba(239,68,68,0.08)', border: 'rgba(239,68,68,0.25)' };
+      }
+
+      // 無持倉 — 判斷 Mode
+      const adxStr  = `ADX${s.adx.toFixed(0)}`;
+      const diStr   = `+DI${s.plusDI.toFixed(0)}/-DI${s.minusDI.toFixed(0)}`;
+      const atrStr  = `atrR${s.atrR.toFixed(2)}`;
+      const volStr  = `volR${s.volR.toFixed(2)}`;
+
+      // Mode A：已擴張 + ADX 足夠
+      if (s.modeA_expand && s.modeA_adx) {
+        if (s.diLong && s.diDiff >= 5)
+          return { icon: '\u{1F7E2}', action: 'Mode A 做多', detail: `${adxStr} ${diStr} ${atrStr}`, color: '#10B981', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.3)' };
+        if (s.diShort && s.diDiff >= 5)
+          return { icon: '\u{1F534}', action: 'Mode A 做空', detail: `${adxStr} ${diStr} ${atrStr}`, color: '#EF4444', bg: 'rgba(239,68,68,0.10)', border: 'rgba(239,68,68,0.3)' };
+        return { icon: '\u{1F7E1}', action: 'Mode A 擴張中・方向待定', detail: `${adxStr} ${diStr} ${atrStr} — DI 差距不足`, color: '#F59E0B', bg: 'rgba(245,158,11,0.08)', border: 'rgba(245,158,11,0.25)' };
+      }
+
+      // Mode A：壓縮蓄勢中
+      if (s.modeA_squeeze)
+        return { icon: '\u{1F300}', action: 'Mode A 蓄勢中', detail: `${atrStr} < ${s.squeezeR}（壓縮）| ${adxStr} ${diStr} — 等待突破`, color: '#A78BFA', bg: 'rgba(167,139,250,0.08)', border: 'rgba(167,139,250,0.25)' };
+
+      // Mode B：強趨勢回調
+      if (s.modeB_long)
+        return { icon: '\u{1F7E2}', action: 'Mode B 做多', detail: `${adxStr}强趨勢 ${diStr} 回踩EMA5`, color: '#10B981', bg: 'rgba(16,185,129,0.10)', border: 'rgba(16,185,129,0.3)' };
+      if (s.modeB_short)
+        return { icon: '\u{1F534}', action: 'Mode B 做空', detail: `${adxStr}強趨勢 ${diStr} 反彈EMA5`, color: '#EF4444', bg: 'rgba(239,68,68,0.10)', border: 'rgba(239,68,68,0.3)' };
+
+      // 等待條件
+      const waiting = [];
+      if (s.adx < s.minADX) waiting.push(`ADX${s.adx.toFixed(0)}<${s.minADX}趨勢不足`);
+      else waiting.push(`${adxStr}`);
+      waiting.push(`${diStr}`);
+      waiting.push(`${atrStr}`);
+      if (s.pcRatio > 0) waiting.push(`P/C${s.pcRatio.toFixed(2)}`);
+
+      return { icon: '\u23F8\uFE0F', action: '觀望・等條件', detail: waiting.join(' | '), color: 'var(--text-secondary)', bg: 'rgba(100,100,130,0.06)', border: 'rgba(100,100,130,0.15)' };
+    }
+
+    // ---- 一句話指令（最重要的函數） ----
+    function getInstruction(inst) {
+      const d = getInstData(inst);
+      const pos = d.position || {};
+      const pnl = pos.unrealized_pnl || 0;
+      const rec = getRecommended(inst);
+      const advice = getTradeAdvice(inst);
+
+      if (!d.price || !d.snapshot?.adx) {
+        return { icon: '\u23F3', text: '等待數據中', reason: '指標計算中，稍後再看',
+          color: 'var(--text-muted)', bg: 'rgba(100,100,130,0.06)', borderColor: 'rgba(100,100,130,0.15)' };
+      }
+
+      // ===== 有持倉 =====
+      if (pos.side === 'long' || pos.side === 'short') {
+        const dir = pos.side === 'long' ? '多單' : '空單';
+        if (rec === 'CLOSE' && pnl > 0)
+          return { icon: '\u{1F4B0}', text: '可以平倉獲利了', reason: `${dir}浮盈 +${Math.round(pnl)} 元，已達目標，按下方「平倉」`, color: '#10B981', bg: 'rgba(16,185,129,0.12)', borderColor: 'rgba(16,185,129,0.4)' };
+        if (rec === 'CLOSE' && pnl < 0)
+          return { icon: '\u26A0\uFE0F', text: '注意！接近停損', reason: `${dir}浮虧 ${Math.round(pnl)} 元，快碰停損了`, color: '#EF4444', bg: 'rgba(239,68,68,0.12)', borderColor: 'rgba(239,68,68,0.4)' };
+        if (pnl > 0)
+          return { icon: '\u2705', text: '不要動・讓利潤跑', reason: `${dir}浮盈 +${Math.round(pnl)} 元，移動停利保護獲利`, color: '#10B981', bg: 'rgba(16,185,129,0.06)', borderColor: 'rgba(16,185,129,0.2)' };
+        return { icon: '\u{1F6D1}', text: '不要動・等反轉', reason: `${dir}浮虧 ${Math.round(pnl)} 元，在停損範圍內`, color: '#F59E0B', bg: 'rgba(245,158,11,0.06)', borderColor: 'rgba(245,158,11,0.2)' };
+      }
+
+      // ===== 無持倉 =====
+      if (rec === 'BUY')
+        return { icon: '\u{1F7E2}', text: advice.action, reason: advice.detail + ' — 推薦按鈕已亮起', color: '#10B981', bg: 'rgba(16,185,129,0.10)', borderColor: 'rgba(16,185,129,0.35)' };
+      if (rec === 'SELL')
+        return { icon: '\u{1F534}', text: advice.action, reason: advice.detail + ' — 推薦按鈕已亮起', color: '#EF4444', bg: 'rgba(239,68,68,0.10)', borderColor: 'rgba(239,68,68,0.35)' };
+
+      return { icon: advice.icon, text: advice.action, reason: advice.detail,
+        color: advice.color, bg: advice.bg, borderColor: advice.border };
+    }
+
+    // ---- 紅綠燈（兼容舊用法） ----
+    function getSignalLight(inst) {
+      const rec = getRecommended(inst);
+      const pos = getInstData(inst).position || {};
+      if (pos.side !== 'flat') return { type: 'hold', label: '持有', reason: '' };
+      if (rec === 'BUY')  return { type: 'buy',  label: '偏多', reason: '' };
+      if (rec === 'SELL') return { type: 'sell', label: '偏空', reason: '' };
+      return { type: 'hold', label: '觀望', reason: '' };
+    }
+
+    // ---- 距離現價幾點 ----
+    function getDistancePoints(targetPrice) {
+      if (!targetPrice) return '-';
+      const price = getInstData(activeInstrument.value).price || 0;
+      if (!price) return '-';
+      const diff = targetPrice - price;
+      return (diff > 0 ? '+' : '') + Math.round(diff);
+    }
+
+    function switchTimeframe(tf) {
+      timeframe.value = tf;
+      fetchKbars();
+    }
+
+    // ---- 計算屬性 ----
+    const statusClass = computed(() => {
+      const s = state.value.engine_state;
+      if (s === 'running') return 'status-running';
+      if (s === 'paused') return 'status-paused';
+      return 'status-stopped';
+    });
+
+    const statusText = computed(() => {
+      const map = { running: '運行中', paused: '已暫停', stopped: '已停止', initializing: '初始化', error: '錯誤' };
+      return map[state.value.engine_state] || state.value.engine_state;
+    });
+
+    const activeInstData = computed(() => getInstData(activeInstrument.value));
+
+    const liveTotalPnl = computed(() => {
+      let total = 0;
+      for (const p of realPositions.value) total += realPosLivePnl(p);
+      return total;
+    });
+
+    const signalStrength = computed(() => {
+      const d = getInstData(activeInstrument.value);
+      const s = d.strategy?.signal_strength || d.snapshot?.signal_strength || 0;
+      return s.toFixed(2);
+    });
+
+    const signalBarStyle = computed(() => {
+      const s = parseFloat(signalStrength.value);
+      const pct = Math.min(s * 100, 100);
+      let color = '#6B7280';
+      if (s >= 0.7) color = '#10B981';
+      else if (s >= 0.5) color = '#F59E0B';
+      else if (s > 0) color = '#EF4444';
+      return { width: pct + '%', background: color };
+    });
+
+    const circuitDotClass = computed(() => {
+      const cb = state.value.risk?.circuit_breaker;
+      if (!cb) return 'circuit-active';
+      const map = { active: 'circuit-active', cooldown: 'circuit-cooldown', halted: 'circuit-halted', emergency: 'circuit-emergency' };
+      return map[cb.state] || 'circuit-active';
+    });
+
+    const circuitText = computed(() => {
+      const cb = state.value.risk?.circuit_breaker;
+      if (!cb) return '正常';
+      const map = { active: '正常', cooldown: '冷卻中', halted: '已停機', emergency: '緊急停機' };
+      return map[cb.state] || cb.state;
+    });
+
+    const leftScoreColor = computed(() => {
+      const s = intel.value.left_side?.score || 0;
+      if (s >= 0.5) return '#34D399';
+      if (s >= 0.25) return 'var(--green)';
+      if (s <= -0.5) return '#F87171';
+      if (s <= -0.25) return 'var(--red)';
+      return 'var(--text-secondary)';
+    });
+
+    const leftSignalText = computed(() => {
+      const map = { strong_buy: 'STRONG BUY', buy: 'BUY', neutral: 'NEUTRAL', sell: 'SELL', strong_sell: 'STRONG SELL' };
+      return map[intel.value.left_side?.signal] || 'NEUTRAL';
+    });
+
+    const activityLogReversed = computed(() => activityLog.value.slice().reverse().slice(0, 50));
+
+    // 交易紀錄（含累計盈虧）
+    const displayTrades = computed(() => {
+      const list = trades.value.slice().reverse();
+      const shown = tradesExpanded.value ? list : list.slice(0, 10);
+      // 計算累計 PnL（從舊到新累加，再反轉）
+      const forward = trades.value.slice(); // oldest first
+      let cum = 0;
+      const cumMap = new Map();
+      forward.forEach((t, i) => {
+        cum += (t.pnl || 0);
+        cumMap.set(i, cum);
+      });
+      return shown.map(t => {
+        const origIdx = trades.value.indexOf(t);
+        return { ...t, cumPnl: cumMap.get(origIdx) ?? 0 };
+      });
+    });
+
+    // 累計 PnL 走勢（迷你 sparkline）
+    const cumPnlCurve = computed(() => {
+      const pnls = cumPerf.value.all_pnls || [];
+      if (pnls.length === 0) return [];
+      // 計算累計
+      let cum = 0;
+      const curve = pnls.map(p => { cum += p; return cum; });
+      const maxAbs = Math.max(...curve.map(Math.abs), 1);
+      return curve.map(c => ({ c, h: Math.max(5, Math.abs(c) / maxAbs * 100) }));
+    });
+
+    async function fetchCumPerf() {
+      try {
+        const r = await fetch('/api/performance/cumulative');
+        if (r.ok) cumPerf.value = await r.json();
+      } catch (e) {}
+    }
+
+    function activityIcon(type) {
+      const map = { 'engine_start': '\u{1F680}', 'trade_closed': '\u{1F4B0}', 'paper_signal': '\u26A1', 'scan_no_signal': '\u{1F50D}', 'holding': '\u{1F4CA}', 'session_end': '\u{1F3C1}' };
+      return map[type] || '\u2022';
+    }
+
+    function activityMsgClass(type) {
+      const map = { 'paper_signal': 'signal', 'trade_closed': 'trade', 'scan_no_signal': 'scan' };
+      return map[type] || '';
+    }
+
+    function formatActivityTime(iso) {
+      if (!iso) return '';
+      return new Date(iso).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    }
+
+    function formatPrice(p) {
+      if (!p) return '-';
+      return Number(p).toLocaleString('zh-TW', { maximumFractionDigits: 0 });
+    }
+    function formatNumber(n) {
+      return Number(n).toLocaleString('zh-TW', { maximumFractionDigits: 0 });
+    }
+    function formatTime(iso) {
+      if (!iso) return '';
+      return new Date(iso).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' });
+    }
+
+    async function fetchActivity() {
+      try {
+        const r = await fetch('/api/activity?count=50');
+        const data = await r.json();
+        if (Array.isArray(data)) activityLog.value = data;
+      } catch (e) {}
+    }
+
+    let realAccountTimer = null;
+
+    onMounted(async () => {
+      await nextTick();
+      initChart();
+      setupChartDrawing();
+      await fetchState();
+      await fetchRealAccount();
+      await fetchDailyPerf();
+      // 今天沒有交易時，自動顯示最近一個有交易的日
+      if (!dailyPerf.value.total_trades) {
+        const yesterday = new Date(todayStr.value);
+        yesterday.setDate(yesterday.getDate() - 1);
+        perfDate.value = yesterday.toISOString().slice(0, 10);
+        await fetchDailyPerf();
+      }
+      await fetchTrades();
+      await fetchStats();
+      await fetchCumPerf();
+      await fetchKbars();
+      await fetchIntel();
+      await fetchActivity();
+      connectWS();
+      realAccountTimer = setInterval(fetchRealAccount, 3000);
+      setInterval(fetchDailyPerf, 30000);  // 每 30 秒更新今日績效
+    });
+
+    onUnmounted(() => {
+      if (realAccountTimer) clearInterval(realAccountTimer);
+    });
+
+    // ---- 畫線工具 (TradingView 風格) ----
+    // 支援：拖曳移動、端點拉伸、點擊選取/刪除、水平線輸入點位、localStorage 持久化
+
+    const selectedDrawing = ref(null); // index into drawnLines
+    let dragState = { active: false, type: null, index: -1, endpoint: -1, startX: 0, startY: 0, origPoints: null, origPrice: 0 };
+    const DRAG_HIT_RADIUS = 12; // px — 點擊命中範圍
+    const ENDPOINT_RADIUS = 8; // px — 端點拉伸命中範圍
+
+    function toggleDrawing(mode) {
+      selectedDrawing.value = null;
+      if (drawingMode.value === mode) {
+        drawingMode.value = null;
+        drawingState.startPoint = null;
+        if (drawingState.tempLine) { chart.removeSeries(drawingState.tempLine); drawingState.tempLine = null; }
+      } else {
+        drawingMode.value = mode;
+        drawingState.startPoint = null;
+      }
+    }
+
+    // -- 水平線輸入點位 --
+    function promptHlinePrice() {
+      selectedDrawing.value = null;
+      drawingMode.value = null;
+      const input = prompt('輸入水平線點位：');
+      if (input == null) return;
+      const price = Math.round(Number(input));
+      if (isNaN(price) || price <= 0) return;
+      _addHline(price, drawingColor.value, Number(drawingWidth.value));
+    }
+
+    function _addHline(price, color, width) {
+      const priceLine = candleSeries.createPriceLine({
+        price: price,
+        color: color,
+        lineWidth: width,
+        lineStyle: 0,
+        axisLabelVisible: true,
+        title: price.toString(),
+      });
+      drawnLines.value.push({
+        type: 'hline',
+        priceLine: priceLine,
+        price: price,
+        color: color,
+        width: width,
+      });
+      _saveDrawingsToStorage();
+    }
+
+    function _removeDrawing(drawing) {
+      try {
+        if (drawing.type === 'hline' && drawing.priceLine) {
+          candleSeries.removePriceLine(drawing.priceLine);
+        } else if (drawing.series) {
+          chart.removeSeries(drawing.series);
+        }
+      } catch(e) { console.warn('[Drawing] remove error:', e); }
+    }
+
+    function removeDrawingAt(index) {
+      if (index < 0 || index >= drawnLines.value.length) return;
+      _removeDrawing(drawnLines.value[index]);
+      drawnLines.value.splice(index, 1);
+      if (selectedDrawing.value === index) selectedDrawing.value = null;
+      else if (selectedDrawing.value > index) selectedDrawing.value--;
+      _saveDrawingsToStorage();
+    }
+
+    function undoLastLine() {
+      const last = drawnLines.value.pop();
+      if (last) _removeDrawing(last);
+      selectedDrawing.value = null;
+      _saveDrawingsToStorage();
+    }
+
+    function clearAllLines() {
+      for (const l of drawnLines.value) { _removeDrawing(l); }
+      // 強制清除所有殘留的用戶 priceLine（保留系統的進場/停損/停利線）
+      if (candleSeries) {
+        const sysPriceLines = [entryPriceLine, slPriceLine, tpPriceLine].filter(Boolean);
+        try {
+          const allLines = candleSeries.priceLines ? candleSeries.priceLines() : [];
+          for (const pl of allLines) {
+            if (!sysPriceLines.includes(pl)) {
+              try { candleSeries.removePriceLine(pl); } catch(e) {}
+            }
+          }
+        } catch(e) {}
+      }
+      drawnLines.value = [];
+      selectedDrawing.value = null;
+      _saveDrawingsToStorage();
+    }
+
+    function _createTrendLineSeries(color, width, points) {
+      const series = chart.addLineSeries({
+        color: color,
+        lineWidth: width,
+        lineStyle: 0,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        priceFormat: { type: 'price', precision: 0, minMove: 1 },
+        autoscaleInfoProvider: () => null, // 不影響 Y 軸自動縮放
+      });
+      const sorted = points[0].time < points[1].time ? points : [points[1], points[0]];
+      series.setData(sorted);
+      return series;
+    }
+
+    function redrawAllDrawings() {
+      for (const drawing of drawnLines.value) {
+        if (drawing.type === 'trendline' && drawing.points) {
+          if (drawing.series) { try { chart.removeSeries(drawing.series); } catch(e) {} }
+          drawing.series = _createTrendLineSeries(drawing.color, drawing.width || 2, drawing.points);
+        }
+        if (drawing.type === 'hline') {
+          if (drawing.priceLine) { try { candleSeries.removePriceLine(drawing.priceLine); } catch(e) {} drawing.priceLine = null; }
+          drawing.priceLine = candleSeries.createPriceLine({
+            price: drawing.price,
+            color: drawing.color,
+            lineWidth: drawing.width || 2,
+            lineStyle: 0,
+            axisLabelVisible: true,
+            title: Math.round(drawing.price).toString(),
+          });
+        }
+      }
+    }
+
+    // -- localStorage 持久化 --
+    const STORAGE_KEY = 'ultratrader_drawings';
+
+    function _saveDrawingsToStorage() {
+      try {
+        const data = drawnLines.value.map(d => ({
+          type: d.type,
+          color: d.color,
+          width: d.width,
+          price: d.price || null,
+          points: d.points || null,
+        }));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      } catch(e) { console.warn('[Drawing] save error:', e); }
+    }
+
+    function _loadDrawingsFromStorage() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) return;
+        const data = JSON.parse(raw);
+        for (const d of data) {
+          if (d.type === 'hline' && d.price) {
+            const priceLine = candleSeries.createPriceLine({
+              price: d.price,
+              color: d.color,
+              lineWidth: d.width || 2,
+              lineStyle: 0,
+              axisLabelVisible: true,
+              title: Math.round(d.price).toString(),
+            });
+            drawnLines.value.push({ type: 'hline', priceLine, price: d.price, color: d.color, width: d.width });
+          } else if (d.type === 'trendline' && d.points && d.points.length === 2) {
+            const series = _createTrendLineSeries(d.color, d.width || 2, d.points);
+            drawnLines.value.push({ type: 'trendline', series, points: d.points, color: d.color, width: d.width });
+          }
+        }
+      } catch(e) { console.warn('[Drawing] load error:', e); }
+    }
+
+    // -- 命中檢測 --
+    function _hitTestDrawings(px, py) {
+      // Returns { index, endpoint } or null
+      // endpoint: -1=body, 0=start, 1=end (for trendline)
+      for (let i = drawnLines.value.length - 1; i >= 0; i--) {
+        const d = drawnLines.value[i];
+        if (d.type === 'hline') {
+          const priceY = candleSeries.priceToCoordinate(d.price);
+          if (priceY != null && Math.abs(py - priceY) < DRAG_HIT_RADIUS) {
+            return { index: i, endpoint: -1 };
+          }
+        } else if (d.type === 'trendline' && d.points) {
+          // Check endpoints first
+          for (let ep = 0; ep < 2; ep++) {
+            const epx = chart.timeScale().timeToCoordinate(d.points[ep].time);
+            const epy = candleSeries.priceToCoordinate(d.points[ep].value);
+            if (epx != null && epy != null) {
+              const dist = Math.sqrt((px - epx) ** 2 + (py - epy) ** 2);
+              if (dist < ENDPOINT_RADIUS) return { index: i, endpoint: ep };
+            }
+          }
+          // Check line body
+          const x0 = chart.timeScale().timeToCoordinate(d.points[0].time);
+          const y0 = candleSeries.priceToCoordinate(d.points[0].value);
+          const x1 = chart.timeScale().timeToCoordinate(d.points[1].time);
+          const y1 = candleSeries.priceToCoordinate(d.points[1].value);
+          if (x0 != null && y0 != null && x1 != null && y1 != null) {
+            const dist = _pointToSegmentDist(px, py, x0, y0, x1, y1);
+            if (dist < DRAG_HIT_RADIUS) return { index: i, endpoint: -1 };
+          }
+        }
+      }
+      return null;
+    }
+
+    // 擴展 coordinateToTime：支援 K 線右側空白區域（外推未來時間）
+    function _coordToTime(px) {
+      const t = chart.timeScale().coordinateToTime(px);
+      if (t != null) return t;
+      // 右側空白：用最後一根 bar 的時間 + 間距外推
+      if (!lastBarTime) return null;
+      const lastBarX = chart.timeScale().timeToCoordinate(lastBarTime);
+      if (lastBarX == null) return null;
+      const logicalRange = chart.timeScale().getVisibleLogicalRange();
+      if (!logicalRange) return null;
+      const visibleWidth = chart.timeScale().width();
+      const barsVisible = logicalRange.to - logicalRange.from;
+      const pxPerBar = visibleWidth / barsVisible;
+      const barsDiff = (px - lastBarX) / pxPerBar;
+      const tfSeconds = (timeframe.value || 1) * 60;
+      return lastBarTime + Math.round(barsDiff) * tfSeconds;
+    }
+
+    function _pointToSegmentDist(px, py, x0, y0, x1, y1) {
+      const dx = x1 - x0, dy = y1 - y0;
+      const lenSq = dx * dx + dy * dy;
+      if (lenSq === 0) return Math.sqrt((px - x0) ** 2 + (py - y0) ** 2);
+      let t = ((px - x0) * dx + (py - y0) * dy) / lenSq;
+      t = Math.max(0, Math.min(1, t));
+      const projX = x0 + t * dx, projY = y0 + t * dy;
+      return Math.sqrt((px - projX) ** 2 + (py - projY) ** 2);
+    }
+
+    // -- 拖曳互動 --
+    function _updateTrendLine(drawing) {
+      if (!drawing.series || !drawing.points) return;
+      const sorted = drawing.points[0].time < drawing.points[1].time ? drawing.points : [drawing.points[1], drawing.points[0]];
+      drawing.series.setData(sorted.map(p => ({ time: p.time, value: p.value })));
+    }
+
+    function _updateHline(drawing, newPrice) {
+      drawing.price = newPrice;
+      if (drawing.priceLine) {
+        // 直接更新現有 priceLine，不重建
+        drawing.priceLine.applyOptions({
+          price: newPrice,
+          title: Math.round(newPrice).toString(),
+        });
+      } else {
+        drawing.priceLine = candleSeries.createPriceLine({
+          price: newPrice,
+          color: drawing.color,
+          lineWidth: drawing.width || 2,
+          lineStyle: 0,
+          axisLabelVisible: true,
+          title: Math.round(newPrice).toString(),
+        });
+      }
+    }
+
+    function setupChartDrawing() {
+      if (!chart) return;
+      const container = document.getElementById('chart-container');
+      if (!container) return;
+
+      // Load saved drawings
+      _loadDrawingsFromStorage();
+
+      // --- Mouse down: start drag or drawing ---
+      container.addEventListener('mousedown', (e) => {
+        if (drawingMode.value) return; // drawing mode uses click, not drag
+        const rect = container.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+
+        const hit = _hitTestDrawings(px, py);
+        if (hit) {
+          e.preventDefault();
+          e.stopPropagation();
+          selectedDrawing.value = hit.index;
+          const d = drawnLines.value[hit.index];
+
+          dragState.active = true;
+          chart.applyOptions({ handleScroll: false, handleScale: false });
+          dragState.type = d.type;
+          dragState.index = hit.index;
+          dragState.endpoint = hit.endpoint;
+          dragState.startX = px;
+          dragState.startY = py;
+
+          if (d.type === 'hline') {
+            dragState.origPrice = d.price;
+          } else if (d.type === 'trendline') {
+            dragState.origPoints = d.points.map(p => ({ ...p }));
+          }
+          container.style.cursor = hit.endpoint >= 0 ? 'grab' : 'move';
+        }
+      });
+
+      // --- Mouse move: drag ---
+      container.addEventListener('mousemove', (e) => {
+        if (!dragState.active) {
+          // 趨勢線畫線中：即時預覽 A→滑鼠 的投影線
+          if (drawingMode.value === 'trendline' && drawingState.startPoint && drawingState.tempLine) {
+            const rect = container.getBoundingClientRect();
+            const px = e.clientX - rect.left;
+            const py = e.clientY - rect.top;
+            const timeCoord = _coordToTime(px);
+            const priceCoord = candleSeries.coordinateToPrice(py);
+            if (timeCoord != null && priceCoord != null) {
+              const pts = [
+                { time: drawingState.startPoint.time, value: drawingState.startPoint.value },
+                { time: timeCoord, value: Math.round(priceCoord) },
+              ];
+              const sorted = pts[0].time < pts[1].time ? pts : [pts[1], pts[0]];
+              drawingState.tempLine.setData(sorted);
+            }
+            return;
+          }
+          // Show cursor hint on hover
+          if (!drawingMode.value) {
+            const rect = container.getBoundingClientRect();
+            const px = e.clientX - rect.left;
+            const py = e.clientY - rect.top;
+            const hit = _hitTestDrawings(px, py);
+            container.style.cursor = hit ? (hit.endpoint >= 0 ? 'grab' : 'move') : 'crosshair';
+          }
+          return;
+        }
+        e.preventDefault();
+        const rect = container.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        const d = drawnLines.value[dragState.index];
+        if (!d) return;
+
+        if (d.type === 'hline') {
+          const newPrice = candleSeries.coordinateToPrice(py);
+          if (newPrice != null) _updateHline(d, Math.round(newPrice));
+        } else if (d.type === 'trendline') {
+          if (dragState.endpoint >= 0) {
+            // Drag single endpoint
+            const newTime = _coordToTime(px);
+            const newPrice = candleSeries.coordinateToPrice(py);
+            if (newTime != null && newPrice != null) {
+              d.points[dragState.endpoint] = { time: newTime, value: Math.round(newPrice) };
+              _updateTrendLine(d);
+            }
+          } else {
+            // Drag entire line (move both points by delta)
+            const dy = py - dragState.startY;
+            const dx = px - dragState.startX;
+            for (let i = 0; i < 2; i++) {
+              const origPx = chart.timeScale().timeToCoordinate(dragState.origPoints[i].time);
+              const origPy = candleSeries.priceToCoordinate(dragState.origPoints[i].value);
+              if (origPx != null && origPy != null) {
+                const newTime = _coordToTime(origPx + dx);
+                const newPrice = candleSeries.coordinateToPrice(origPy + dy);
+                if (newTime != null && newPrice != null) {
+                  d.points[i] = { time: newTime, value: Math.round(newPrice) };
+                }
+              }
+            }
+            _updateTrendLine(d);
+          }
+        }
+      });
+
+      // --- Mouse up: end drag ---
+      const endDrag = () => {
+        if (dragState.active) {
+          dragState.active = false;
+          chart.applyOptions({ handleScroll: true, handleScale: true });
+          container.style.cursor = 'crosshair';
+          _saveDrawingsToStorage();
+        }
+      };
+      container.addEventListener('mouseup', endDrag);
+      container.addEventListener('mouseleave', endDrag);
+
+      // --- Click: draw new lines or select ---
+      container.addEventListener('click', (e) => {
+        if (!chart || !candleSeries) return;
+        const rect = container.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+
+        // If not in drawing mode, handle selection
+        if (!drawingMode.value) {
+          const hit = _hitTestDrawings(px, py);
+          selectedDrawing.value = hit ? hit.index : null;
+          return;
+        }
+
+        const timeCoord = _coordToTime(px);
+        const priceCoord = candleSeries.coordinateToPrice(py);
+        if (timeCoord == null || priceCoord == null) return;
+
+        if (drawingMode.value === 'hline') {
+          _addHline(Math.round(priceCoord), drawingColor.value, Number(drawingWidth.value));
+          drawingMode.value = null;
+        }
+
+        if (drawingMode.value === 'trendline') {
+          if (!drawingState.startPoint) {
+            drawingState.startPoint = { time: timeCoord, value: Math.round(priceCoord) };
+            if (drawingState.tempLine) { chart.removeSeries(drawingState.tempLine); }
+            drawingState.tempLine = chart.addLineSeries({
+              color: drawingColor.value,
+              lineWidth: Number(drawingWidth.value),
+              lineStyle: 2,
+              priceLineVisible: false,
+              lastValueVisible: false,
+              crosshairMarkerVisible: false,
+              priceFormat: { type: 'price', precision: 0, minMove: 1 },
+            });
+            drawingState.tempLine.setData([
+              { time: timeCoord, value: Math.round(priceCoord) },
+            ]);
+          } else {
+            const startT = drawingState.startPoint.time;
+            const startV = drawingState.startPoint.value;
+            if (drawingState.tempLine) { chart.removeSeries(drawingState.tempLine); drawingState.tempLine = null; }
+            const points = [
+              { time: startT, value: startV },
+              { time: timeCoord, value: Math.round(priceCoord) },
+            ];
+            const series = _createTrendLineSeries(drawingColor.value, Number(drawingWidth.value), points);
+            drawnLines.value.push({
+              type: 'trendline',
+              series: series,
+              points: points,
+              color: drawingColor.value,
+              width: Number(drawingWidth.value),
+            });
+            drawingState.startPoint = null;
+            drawingMode.value = null;
+            _saveDrawingsToStorage();
+          }
+        }
+      });
+
+      // --- Keyboard ---
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+          if (drawingMode.value) {
+            drawingMode.value = null;
+            drawingState.startPoint = null;
+            if (drawingState.tempLine) { chart.removeSeries(drawingState.tempLine); drawingState.tempLine = null; }
+          }
+          selectedDrawing.value = null;
+        }
+        if ((e.key === 'Delete' || e.key === 'Backspace') && selectedDrawing.value !== null) {
+          if (!e.target.closest('input, select, textarea')) {
+            e.preventDefault();
+            removeDrawingAt(selectedDrawing.value);
+          }
+        }
+        if (e.key === 't' || e.key === 'T') {
+          if (!e.target.closest('input, select, textarea')) toggleDrawing('trendline');
+        }
+        if (e.key === 'h' || e.key === 'H') {
+          if (!e.target.closest('input, select, textarea')) toggleDrawing('hline');
+        }
+        if (e.key === 'p' || e.key === 'P') {
+          if (!e.target.closest('input, select, textarea')) promptHlinePrice();
+        }
+      });
+
+      // --- Double-click hline: edit price ---
+      container.addEventListener('dblclick', (e) => {
+        const rect = container.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        const hit = _hitTestDrawings(px, py);
+        if (hit && drawnLines.value[hit.index]?.type === 'hline') {
+          const d = drawnLines.value[hit.index];
+          const input = prompt('修改水平線點位：', Math.round(d.price).toString());
+          if (input == null) return;
+          const newPrice = Math.round(Number(input));
+          if (isNaN(newPrice) || newPrice <= 0) return;
+          _updateHline(d, newPrice);
+          _saveDrawingsToStorage();
+        }
+      });
+    }
+
+    return {
+      state, currentPrice, prevPrice, trades, stats, timeframe, tickCount, intel, modes, switchMode,
+      activityLog, activityLogReversed,
+      showIntel, showActivity,
+      tradesExpanded, displayTrades, cumPerf, cumPnlCurve, dailyPerf, perfDate, todayStr, shiftPerfDate,
+      activeInstrument, instrumentList, getInstData, switchInstrument, activeInstData,
+      realAccount, realPositions, fetchRealAccount,
+      manualOpen, manualClose, closeRealPosition, getInstPriceClass, getInstPriceChange,
+      getEstLoss, getEstProfit, getEstSLMult, getEstTPMult, getEstRR,
+      realPosLivePrice, realPosLivePnl, realPosPriceChange,
+      riskProfiles, getSignalLight, getTradeAdvice, getRecommended, getInstruction, getDistancePoints,
+      liveTotalPnl,
+      statusClass, statusText, signalStrength, signalBarStyle,
+      circuitDotClass, circuitText,
+      leftScoreColor, leftSignalText,
+      activityIcon, activityMsgClass, formatActivityTime,
+      formatPrice, formatNumber, formatTime,
+      drawingMode, drawingColor, drawingWidth, drawnLines, selectedDrawing,
+      toggleDrawing, undoLastLine, clearAllLines, removeDrawingAt, promptHlinePrice,
+      engineAction, setRiskProfile, switchTimeframe, refreshIntel,
+    };
+  },
+}).mount('#app');
+</script>
+</body>
+</html>

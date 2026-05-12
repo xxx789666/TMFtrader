@@ -1,0 +1,193 @@
+{
+  "v1": {
+    "full": {
+      "n": 517,
+      "wr": 53.8,
+      "pf": 1.212,
+      "max_dd": 19.9,
+      "net": 137250,
+      "n_months": 27.2,
+      "nm": 19.0,
+      "params": {
+        "orb_minutes": 45,
+        "entry_filter_atr": 0.0,
+        "sl_type": "atr",
+        "sl_atr": 2.0,
+        "trail_trigger_atr": 0.8,
+        "trail_dist_atr": 1.25,
+        "adx_min": 0,
+        "max_bars": 60,
+        "early_cut_bars": 30,
+        "early_cut_loss_atr": 1.5,
+        "session_start": [21, 30],
+        "force_close_time": [4, 0],
+        "allow_both_directions": true,
+        "trend_filter": false,
+        "point_value": 10.0,
+        "max_loss_twd": 4000.0
+      }
+    },
+    "qqqm_validation": {
+      "method": "direction_alignment",
+      "note": "MXF ORB 信號方向 vs QQQM 當日開→收方向一致率",
+      "n_matched": 491,
+      "alignment_pct": 67.6,
+      "random_baseline": 50.0,
+      "data_period_months": 64.2
+    },
+    "sweep": {
+      "total_combos": 324,
+      "passed_quality_gate": 3,
+      "quality_gate": {
+        "min_nm": 3,
+        "min_wr": 0.50,
+        "min_pf": 1.20,
+        "max_dd": 30
+      }
+    }
+  },
+  "b2_ml_filter": {
+    "version": "B2",
+    "date": "2026-04-18",
+    "note": "B2 ML Filter：新增 max_breakout_vol_ratio=2.0 過濾高量假突破，TMF Layer 1 WR 48.4%→55.6%",
+    "layer1_change": {
+      "filter": "max_breakout_vol_ratio",
+      "value": 2.0,
+      "tmf_training_wr_before": 0.484,
+      "tmf_training_wr_after": 0.556,
+      "tmf_training_n_before": 225,
+      "tmf_training_n_after": 135
+    },
+    "model": {
+      "file": "orb_filter_b2.pkl",
+      "features": "selected_features_b2.txt",
+      "n_features": 30,
+      "best_params": "best_params_b2.json",
+      "algorithm": "XGBoost + LightGBM + RandomForest Ensemble"
+    },
+    "training": {
+      "instruments": ["FNGS","IBB","IVV","QQQM","SOXX","SPXL","TECL","TMF","TQQQ","XLK"],
+      "total_trades": 2104,
+      "tmf_trades": 135,
+      "overall_wr": 51.2,
+      "period": "2024-01 ~ 2026-04"
+    },
+    "optuna": {
+      "tmf_oos_trades": 46,
+      "best_threshold": 0.521,
+      "best_filtered_wr": 50.0,
+      "best_filtered_pf": 3.78,
+      "best_filtered_n": 26,
+      "pareto_trials": 1
+    },
+    "stage7_robustness": {
+      "mc": "PASS",
+      "label_shuffle": "PASS",
+      "perturbation": "FAIL",
+      "loio_cv": "PASS",
+      "loio_mean_auc": 0.601,
+      "loio_tmf_auc": 0.621,
+      "gate": "3/4"
+    },
+    "oos_tmf": {
+      "period": "2025-07-01 ~ 2026-04-17",
+      "months": 9.5,
+      "no_filter": {
+        "n": 46, "nm": 4.8, "wr": 50.0, "avg_r": 0.0
+      },
+      "threshold_0_40": {
+        "n": 34, "nm": 3.6, "wr": 50.0, "avg_r": 0.300
+      },
+      "threshold_0_45": {
+        "n": 31, "nm": 3.3, "wr": 48.4, "avg_r": 0.068
+      },
+      "threshold_0_521": {
+        "n": 26, "nm": 2.7, "wr": 50.0, "avg_r": 0.098
+      }
+    },
+    "deployment": {
+      "recommended_threshold": 0.40,
+      "status": "paper_trading_pending",
+      "retrain_trigger": "TMF OOS >= 150 trades"
+    }
+  },
+  "b1_ml_filter": {
+    "version": "B1",
+    "date": "2026-04-18",
+    "note": "B1 ML Filter：TMF 只保留 ORB 寬度過濾（3-5 ATR），移除 EMA200 和 RSI 過濾",
+    "model": {
+      "file": "orb_filter_b1.pkl",
+      "features": "selected_features_b1.txt",
+      "n_features": 30,
+      "best_params": "best_params_b1.json",
+      "algorithm": "XGBoost + LightGBM + RandomForest Ensemble"
+    },
+    "training": {
+      "instruments": ["FNGS","IBB","IVV","QQQM","SOXX","SPXL","TECL","TMF","TQQQ","XLK"],
+      "total_trades": 2194,
+      "tmf_trades": 225,
+      "overall_wr": 50.6,
+      "period": "2024-01 ~ 2026-04"
+    },
+    "optuna": {
+      "tmf_oos_trades": 77,
+      "best_threshold": 0.576,
+      "best_filtered_wr": 61.1,
+      "best_filtered_pf": 4.95,
+      "best_filtered_n": 18,
+      "pareto_trials": 4
+    },
+    "stage7_robustness": {
+      "mc": "FAIL",
+      "label_shuffle": "PASS",
+      "perturbation": "FAIL",
+      "loio_cv": "PASS",
+      "loio_mean_auc": 0.5774,
+      "loio_tmf_auc": 0.527,
+      "loio_pass_rate": "9/10",
+      "gate": "2/4"
+    },
+    "oos_tmf": {
+      "period": "2025-07-01 ~ 2026-04-17",
+      "months": 9.5,
+      "no_filter": {
+        "n": 77, "nm": 8.1, "wr": 42.9, "avg_r": 0.027, "total_r": 2.09
+      },
+      "threshold_0_45": {
+        "n": 50, "nm": 5.2, "wr": 48.0, "avg_r": 0.167, "total_r": 8.36
+      },
+      "threshold_0_50": {
+        "n": 42, "nm": 4.4, "wr": 42.9, "avg_r": 0.126, "total_r": 5.27
+      },
+      "threshold_0_576": {
+        "n": 34, "nm": 3.6, "wr": 44.1, "avg_r": 0.187, "total_r": 6.36
+      }
+    },
+    "oos_all_instruments": {
+      "threshold": 0.45,
+      "period": "2025-07-01 ~ 2026-04-17",
+      "months": 9.5,
+      "total_n": 261,
+      "total_nm": 27.4,
+      "overall_wr": 49.4,
+      "overall_avg_r": 0.119,
+      "by_instrument": {
+        "FNGS": {"nm": 2.8, "wr": 59.3, "avg_r": 0.661},
+        "IBB":  {"nm": 2.5, "wr": 41.7, "avg_r": -0.167},
+        "IVV":  {"nm": 2.4, "wr": 34.8, "avg_r": -0.197},
+        "QQQM": {"nm": 2.7, "wr": 50.0, "avg_r": 0.166},
+        "SOXX": {"nm": 1.9, "wr": 66.7, "avg_r": 0.142},
+        "SPXL": {"nm": 2.4, "wr": 43.5, "avg_r": -0.040},
+        "TECL": {"nm": 2.6, "wr": 44.0, "avg_r": 0.184},
+        "TMF":  {"nm": 5.2, "wr": 48.0, "avg_r": 0.167},
+        "TQQQ": {"nm": 2.9, "wr": 50.0, "avg_r": 0.069},
+        "XLK":  {"nm": 1.8, "wr": 64.7, "avg_r": 0.052}
+      }
+    },
+    "deployment": {
+      "recommended_threshold": 0.45,
+      "status": "paper_trading_pending",
+      "retrain_trigger": "TMF OOS >= 150 trades"
+    }
+  }
+}
