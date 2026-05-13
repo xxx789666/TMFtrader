@@ -106,11 +106,14 @@ all_txf = [c for c in api.Contracts.Futures.TXF if c.code[-2:] not in ("R1", "R2
 near = min(all_txf, key=lambda c: c.delivery_date)
 print(f"  TXF 近月 = code={near.code}, delivery={near.delivery_date}, name={near.name}")
 
-# ============== Step 4: 下測試單 ==============
-print("\n[Step 4] 下測試單 (Buy 1 lot TXF @ 15000 ROD)...")
-order = api.Order(
+# ============== Step 4: 下測試單（用 contract.reference 動態合理價、避免漲跌幅 reject）==============
+ref_price = getattr(near, "reference", None)
+if ref_price is None or ref_price <= 0:
+    ref_price = 15000  # fallback 用官方舊範例的固定價（會被 reject 但 trace 仍計入）
+print(f"\n[Step 4] 下測試單 (Buy 1 lot {near.code} @ {ref_price} ROD)...")
+order = sj.order.FuturesOrder(
     action=sj.constant.Action.Buy,
-    price=15000,
+    price=ref_price,
     quantity=1,
     price_type=sj.constant.FuturesPriceType.LMT,
     order_type=sj.constant.OrderType.ROD,
@@ -118,6 +121,8 @@ order = api.Order(
     account=fut_account,
 )
 trade = api.place_order(near, order)
+time.sleep(0.5)
+api.update_status()  # 同步真實 status
 status = getattr(trade.status, "status", "?")
 order_id = getattr(trade.status, "order_id", "?")
 print(f"  status = {status}    ← 應為 'Submitted'（非 'Failed'）")
