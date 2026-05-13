@@ -35,6 +35,7 @@ from core.market_data import Tick, KBar, TickAggregator, IndicatorEngine, Market
 from core.position import PositionManager, Position, Side
 from core.logger import setup_logger, log_trade, log_order, log_fill, log_pnl
 from core.notify import notify_entry, notify_exit, notify_exit_failed
+from core import position_lock
 from core.instrument_config import INSTRUMENT_SPECS, get_spec, InstrumentSpec
 from strategy.base import BaseStrategy, Signal, SignalDirection
 from strategy.momentum import AdaptiveMomentumStrategy
@@ -1066,6 +1067,15 @@ class TradingEngine:
         if phase in (SessionPhase.CLOSED, SessionPhase.CLOSING):
             return
 
+        # ──【跨策略持倉鎖】── 若 ORB 已持倉、breakout 跳過進場
+        blocker = position_lock.is_blocked("breakout")
+        if blocker:
+            logger.info(
+                f"[Lock] breakout 進場跳過：{blocker.get('owner')} 已持倉 "
+                f"({blocker.get('side')} {blocker.get('instrument')} @ {blocker.get('entry_price')})"
+            )
+            return
+
         # 下單失敗冷卻中 → 跳過（所有模式適用）
         if self._is_order_cooled_down(instrument):
             return
@@ -1124,6 +1134,12 @@ class TradingEngine:
             }
             self._broadcast("trade", {**signal_data, "reason": f"[PAPER] {signal.reason}"})
             notify_entry("paper", instrument, action, price, qty, signal.stop_loss, signal.reason)
+            # 取得跨策略持倉鎖
+            position_lock.acquire(
+                owner="breakout", side=action.lower(),
+                entry_price=price, instrument=instrument, quantity=qty,
+                mode="paper", reason=signal.reason,
+            )
             if self.performance:
                 self.performance.on_paper_signal(signal_data)
             return
@@ -1184,6 +1200,12 @@ class TradingEngine:
         log_fill(action, fill_price, decision.quantity)
         self._save_strategy_state(instrument)
         notify_entry("live", instrument, action, fill_price, decision.quantity, signal.stop_loss, signal.reason)
+        # 取得跨策略持倉鎖（live）
+        position_lock.acquire(
+            owner="breakout", side=action.lower(),
+            entry_price=fill_price, instrument=instrument, quantity=decision.quantity,
+            mode="live", reason=signal.reason,
+        )
 
         self._broadcast("trade", {
             "time": datetime.now().isoformat(),
@@ -1298,6 +1320,8 @@ class TradingEngine:
             _exit_pnl = trade.net_pnl if trade else pnl
             _exit_pts = trade.pnl_points if trade else round((price - pos.entry_price) * (1 if pos.side == Side.LONG else -1), 1)
             notify_exit("paper", instrument, pos.side.value, price, _exit_pnl, _exit_pts, signal.reason)
+            # 釋放跨策略持倉鎖
+            position_lock.release("breakout")
 
             if trade and self.risk_manager:
                 self.risk_manager.on_trade_closed(trade.net_pnl)
@@ -1365,6 +1389,8 @@ class TradingEngine:
         if trade:
             log_pnl(trade.net_pnl, f"[{instrument}] {signal.reason}")
             notify_exit("live", instrument, trade.side, fill_price, trade.net_pnl, trade.pnl_points, signal.reason)
+            # 釋放跨策略持倉鎖（live）
+            position_lock.release("breakout")
 
             if isinstance(self.broker, MockBroker):
                 self.broker.update_balance(trade.pnl)

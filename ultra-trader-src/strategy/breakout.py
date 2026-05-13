@@ -170,10 +170,10 @@ class BreakoutTrendStrategy(BaseStrategy):
             self._prev_ema20 = snapshot.ema20
             return None
 
-        # 2026-05-13 改：VPS 部署只讓 breakout 做日盤、夜盤交給 paper_night_orb.py (ORB)
-        # 原本：if not (in_day or in_night) → 允許日夜盤
-        # 現在：if not in_day → 只允許日盤
-        if not in_day:
+        # 2026-05-13 第二版：breakout 24h 可進場、由 core/position_lock.py 決定能否真進場
+        # 邏輯：ORB 若已持倉、engine._execute_entry 會 reject breakout 訊號
+        # 兩策略絕不會同時持倉
+        if not (in_day or in_night):
             self._prev_ema5 = snapshot.ema5
             self._prev_ema20 = snapshot.ema20
             return None

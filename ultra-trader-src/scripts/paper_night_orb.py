@@ -46,6 +46,19 @@ def tg_night(msg: str):
     except Exception:
         pass
 
+# ─── 跨策略持倉鎖（與 engine.py 共用 data/active_position.json）────
+try:
+    from core import position_lock
+except Exception:
+    class _NoLock:
+        @staticmethod
+        def is_blocked(o): return None
+        @staticmethod
+        def acquire(**kw): pass
+        @staticmethod
+        def release(o): pass
+    position_lock = _NoLock()
+
 # ─── 路徑設定 ───────────────────────────────────────────────
 MODEL_PATH    = ROOT / "deployed_strategies" / "tmf_orb_night" / "orb_filter_b2.pkl"
 FEATURES_PATH = ROOT / "deployed_strategies" / "tmf_orb_night" / "selected_features_b2.txt"
@@ -519,6 +532,15 @@ class NightORBEngine:
             self._session_done = True
             return
 
+        # ──【跨策略持倉鎖】── 若 breakout 已持倉、ORB 跳過進場
+        blocker = position_lock.is_blocked("orb")
+        if blocker:
+            logger.info(f"[Lock] ORB 進場跳過：{blocker.get('owner')} 已持倉 "
+                        f"({blocker.get('side')} {blocker.get('instrument')} @ {blocker.get('entry_price')})")
+            tg_night(f"⛔ 訊號跳過：{blocker.get('owner')} 已持倉")
+            self._session_done = True
+            return
+
         # ── 進場
         sl = price - SL_ATR * atr * direction
         self._in_trade    = True
@@ -541,6 +563,12 @@ class NightORBEngine:
         logger.info(f"[Trade] ENTER {enter_dir} "
                     f"@ {price:.0f}  SL={sl:.0f}  ATR={atr:.1f}")
         tg_night(f"📥 進場 {enter_dir} @ {price:.0f}  SL={sl:.0f}  ATR={atr:.1f}  ML={ml_prob:.2f}")
+        # 取得跨策略持倉鎖
+        position_lock.acquire(
+            owner="orb", side=enter_dir.lower(),
+            entry_price=float(price), instrument="MXF", quantity=1,
+            mode="paper", reason=f"ORB B2 ML prob={ml_prob:.3f}",
+        )
 
     def _close(self, reason: str, price: float, ts: datetime):
         pnl = (price - self._entry_price) * self._direction
@@ -568,6 +596,8 @@ class NightORBEngine:
         emoji = "🎯" if r_mult > 0 else "🛑"
         tg_night(f"{emoji} 出場 {rec['direction']} @ {price:.0f} "
                  f"進場 {self._entry_price:.0f} | R={r_mult:+.2f} | 原因: {reason}")
+        # 釋放跨策略持倉鎖
+        position_lock.release("orb")
 
 
 # ─── 強制平倉守護執行緒 ───────────────────────────────────────
