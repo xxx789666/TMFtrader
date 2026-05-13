@@ -545,15 +545,27 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 **5/13（三）**
 - [x] 早盤前看夜盤 5/12 結果：22:05 啟動、23:10 區間建立、無突破（CSV 空 = 預期）
 - [x] 09:23 修好 broker Options bug、日盤重啟成功、TMF tick 即時進來
-- [ ] 13:45 收盤後檢查 `data/performance/daily/2026-05-13_live.json` 有沒有日盤交易
-- [ ] 14:55 確認夜盤 cron 自動重啟
-- [ ] 21:30 ORB session 啟動觀察
+- [x] 13:45 收盤後檢查 `data/performance/daily/2026-05-13_live.json` 有沒有日盤交易 → paper 模式檔名為 `2026-05-13.json`、0 trade、`daily_pnl=0`（日盤無 breakout 訊號、正常市況）
+- [x] 14:55 確認夜盤 cron 自動重啟 → syslog `06:55:01 CRON CMD restart_night.sh` + `06:56:01 start_watchdog.sh`（UTC=TST 14:55/14:56）、`paper_night_orb.py PID=10442` 14:55:04 起跑
+- [x] **21:30 ORB session 啟動觀察** → 21:35:00 `[ORB] New session: 2026-05-13-N`、22:15:00 `[ORB] Range skipped: width=2.70×ATR (need 3.0-5.0)` 區間太窄、今夜停手（TG 應推「區間跳過」）。ORB process PID=15720 穩定跑、tick feed 即時、heartbeat=flat 全程乾淨、無 ERROR
+- [x] **TG 全事件覆蓋（commit `44bbb90`）**：補三個缺口
+  - (1) `risk/circuit_breaker.py` `on_connection_lost/restored` 加 `tg()` + `was_active/was_stopped` flag 防 spam
+  - (2) `paper_night_orb.py` 加 monotonic tick heartbeat（120s timeout、21:00-04:30 主時段告警）
+  - (3) `restart_day.sh` / `restart_night.sh` 結尾加 curl notify、cron 排程重啟也推 TG
+  - (4) 新 `daily_status_ping.sh`（cron `50 5 * * 1-5 day` + `15 21 * * 0-4 night`）日報推 TG
+  - (5) `restart_*.sh` 從 VPS-only 改為 git tracked
+  - 部署完成、ORB session 未中斷、新 cron 已生效、TG 測試訊息已驗收
 
 **5/14（四）+ 5/15（五）**
+- [ ] **08:35 TG 是否收到「🔄 [Cron] 日盤 start.py 排程重啟」**（驗 restart_day.sh TG hook、commit `44bbb90`）
+- [ ] **13:50 TG 是否收到「📊 [日盤日報]」**（驗 daily_status_ping.sh day）
+- [ ] **14:55 TG 是否收到「🌙 [Cron] 夜盤 paper_night_orb 排程重啟」**（驗 restart_night.sh TG hook、且生效後 ORB 該有 tick heartbeat）
+- [ ] **05:15 隔日 TG 是否收到「🌙 [夜盤日報]」**（驗 daily_status_ping.sh night）
 - [ ] 每日早 check：`ssh ultratrader-night 'tail data/logs/ultratrader_*.log' ; cat data/risk_state*.json`
 - [ ] TG 是否有「策略心跳異常」spam
-- [ ] 對比 VPS / 桌機 paper（兩邊各自跑、訊號邏輯應一致、時間有差）
-- [ ] **驗證 watchdog 自癒**：手動 `kill` paper_night_orb.py → 看 watchdog 是否在 ≤ 12 分鐘內重啟
+- ~~[ ] 對比 VPS / 桌機 paper~~ ⚠️ **過時、5/13 起 VPS 唯一 live、桌機已無 TMF paper 進程**（per memory [[paper-ea-actual-location]]）
+- [ ] **驗證 watchdog 自癒**：手動 `ssh ultratrader-night 'kill <paper_night_orb_PID>'` → 新 `vps_watchdog.sh` 每分鐘 cron、預期 **≤ 2 分鐘**（不是舊版 12 分鐘）內重啟、且 TG 收到「🔧 [VPS Watchdog] paper_night_orb 重啟成功」
+- [ ] **審查 5/13 restart 風暴根因**：16:02–17:25 vps_watchdog.log 顯示 start.py 連續判定「8888 not listening 10-min grace」+ paper_night_orb 多輪 restart FAILED、PID 一路換到 15720/17085 才穩定。要看：(1) 8888 為何在 16:02 卡住 → broker login race? Shioaji reconnect? (2) commit `16123b9` 的 `/tmp/ultratrader_restart_in_progress` 60s lock 是否真有阻擋互打 (3) 17:25 後靜默是 mutex 生效還是只是 lucky stable
 
 **5/16（六）**
 - [ ] **09:00 Hermes 自動跑首份「來自 VPS」的覆盤、確認 TG 收到**
