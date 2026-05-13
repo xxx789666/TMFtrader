@@ -71,11 +71,13 @@
 
 ## 運行的 process
 
-| Process | 角色 | 觸發 |
-|---|---|---|
-| `python3.12 scripts/start.py --no-browser` | 日盤 FastAPI server（port 8888）| cron 每週一~五 08:30 |
-| `python3.12 scripts/paper_night_orb.py --threshold 0.40` | 夜盤 ORB B2 ML paper | cron 每週一~五 14:55 |
-| `python3.12 scripts/watchdog.py --night` | 12-min 心跳 + 自癒重啟 | cron 每週一~五 14:56 |
+| Process | 角色 | 商品 | 進場時段 | 觸發 |
+|---|---|---|---|---|
+| `python3.12 scripts/start.py --no-browser` | 日盤 breakout 策略（24h 跑、引擎不關）| TMF | **只 08:45–13:45**（`in_day=True`） | cron 每日 08:30 重啟一次 |
+| `python3.12 scripts/paper_night_orb.py --threshold 0.40` | 夜盤 ORB B2 ML strategy | MXF | **21:30–04:00** | cron 每日 14:55 啟動、05:10 關 |
+| `python3.12 scripts/watchdog.py --night` | 12-min 心跳 + 自癒重啟 | — | — | cron 每日 14:56 啟動 |
+
+> **雙策略分工**（2026-05-13）：start.py 24h 不關、breakout.py 內部用 `in_day` 過濾只下日盤；夜盤 21:30–04:00 完全交給 ORB（不同商品 MXF + B2 ML filter）。詳見 memory `vps-session-strategy-split`。
 
 確認用：
 ```bash
@@ -87,9 +89,8 @@ pgrep -fa "scripts/start.py|paper_night_orb.py|watchdog.py"
 ## Crontab 排程（UTC → 台北時間 -8）
 
 ```cron
-# === 日盤 ===
-30 0 * * 1-5    /home/xx/ultra-trader-src/scripts/restart_day.sh        # 08:30 TST 啟動
-45 5 * * 1-5    pkill -f 'scripts/start.py'                              # 13:45 TST 關閉
+# === 日盤（start.py 24h 跑、breakout 內部過濾 in_day）===
+30 0 * * 1-5    /home/xx/ultra-trader-src/scripts/restart_day.sh        # 08:30 TST 重啟一次（fresh state）
 
 # === 夜盤 ===
 55 6 * * 1-5    /home/xx/ultra-trader-src/scripts/restart_night.sh      # 14:55 TST 啟動
@@ -98,7 +99,9 @@ pgrep -fa "scripts/start.py|paper_night_orb.py|watchdog.py"
 10 21 * * 0-4   pkill -f 'watchdog.py.*--night'                          # 05:10 TST 關 watchdog
 ```
 
-> ⚠️ **2026-05-13 修過**：原 `pkill -f 'api.server.*8888'` / `api.server.*8889` 抓不到實際 entry（scripts/start.py / paper_night_orb.py），舊 process 不會被收盤指令關掉、heartbeat 持續報「未收到 tick」假錯誤。已改成對齊真實 process 名稱。
+> ⚠️ **2026-05-13 改過兩次**：
+> 1. 第一次：原 `pkill -f 'api.server.*8888'` 抓不到 entry → 改 `pkill -f 'scripts/start.py'`
+> 2. 第二次（最終）：拿掉 13:45 day kill。breakout 改為只在 `in_day=True` 才下單、夜盤 15:00–05:00 區間不交易（交給 paper_night_orb.py）。詳見 memory `vps-session-strategy-split`。
 
 看 / 改：`crontab -l` / `crontab -e`
 

@@ -170,7 +170,10 @@ class BreakoutTrendStrategy(BaseStrategy):
             self._prev_ema20 = snapshot.ema20
             return None
 
-        if not (in_day or in_night):
+        # 2026-05-13 改：VPS 部署只讓 breakout 做日盤、夜盤交給 paper_night_orb.py (ORB)
+        # 原本：if not (in_day or in_night) → 允許日夜盤
+        # 現在：if not in_day → 只允許日盤
+        if not in_day:
             self._prev_ema5 = snapshot.ema5
             self._prev_ema20 = snapshot.ema20
             return None
