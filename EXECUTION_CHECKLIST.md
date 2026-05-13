@@ -10,20 +10,25 @@
 >
 > **時程**：5/12 開 VPS ✅ → **5/13–15 paper 驗證（進行中）** → 5/16 Sat 09:00 Hermes 首次覆盤 → **5/19 Mon 08:30 切實單** 🚀
 
-## ⏰ 今日 (5/13 三) 必做
+## ⏰ 今日 (5/13 三) 進度
 
-1. **08:00–20:00** 跑 Shioaji API 開通測試（你做）：
-   ```
-   cd "C:\Users\xx\Desktop\永豐-自動化交易\ultra-trader-src"
-   python "C:\Users\xx\Desktop\vps永豐微台指\scripts\shioaji_api_test.py"
-   ```
-   通過 = `signed=True` + `status=Submitted`、約 5 分鐘審核
-2. **早盤前**先看 VPS 夜盤 paper 結果（昨晚 22:03 啟動）：
-   ```
-   wsl bash -c "ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes xx@35.221.239.245 'tail -50 ~/ultra-trader-src/data/logs/ultratrader_*.log'"
-   ```
-3. **08:30** VPS cron 會自動啟動日盤、等 10:00 看是否有交易 / 心跳異常
-4. Claude 接 Hermes orchestrator → VPS（填 `.env.sync`、改 TMF_DATA_ROOT）
+- [x] **API 開通測試**：本機 IP 撞 `Sign data is timeout` → 改 VPS 跑、5 分鐘審核通過、`futopt_account.signed=True` ✅
+- [x] **看 VPS 夜盤過夜結果**：22:05 session 啟動、23:10 區間建立 [41010,41383] / 3.82×ATR、之後無突破訊號（CSV 空、ML filter 未放行）✅
+- [x] **修 VPS 日盤 broker Options bug**：`fetch_contract=True` 強制下載 Options 撞權限 → patch 改 False + 手動 fetch_contracts、09:23 重啟成功、TMF tick 即時進來 ✅
+- [x] **Hermes orchestrator 接 VPS**：`.env.sync` 改 VPS_HOST、TMF_DATA_ROOT 切到 sync 目錄、rsync 12 個 daily JSON、load_week dry-run 對 ✅
+- [x] **commit + push fix**：`cfdd758` Fix Shioaji Options fetch ✅
+
+## ⏰ 接下來時間軸
+
+| 時 | 動作 |
+|---|---|
+| 09:30–13:45 | VPS 日盤 TMF tick / 訊號自動跑、看 TG |
+| 14:55 | VPS cron 自動重啟夜盤 |
+| 21:30–04:00 | MXF 夜盤 ORB session、有訊號就 paper 下單 |
+| **5/14 早** | 看 `data/performance/daily/2026-05-13_*.json` 整日紀錄 |
+| 5/14–15 | 持續 paper 觀察、TG 監看 |
+| **5/16 Sat 09:00** | Hermes 自動跑首份來自 VPS 資料的覆盤 |
+| **5/19 Mon 08:30** | 切 `TRADING_MODE=live` 🚀 |
 >
 > **未來**（VPS 租用後）：交易 EA 搬到 VPS、資料寫 VPS，本機 WSL2 透過 `sync_from_vps.sh` 拉資料；本架構同時支援這兩種模式（orchestrator 偵測有沒有 `.env.sync` 自動切換）。
 >
@@ -117,6 +122,8 @@
 | 12 | TG bot token **硬編在 4 個 .py/.md 內**、且**被 push 到 GitHub** | 用 `gh search code` 確認後選方案 A：刪 repo 重建乾淨版 |
 | 13 | PowerShell 5.1 讀 UTF-8 無 BOM `.ps1` 含中文會 **parser error** | 移除 .ps1 內所有中文字串、用 `$PSScriptRoot` 動態取路徑 |
 | 14 | `secret_scan.sh` 對 209 檔跑 13 patterns 太慢（2700 grep 呼叫）| 後續可優化、當前用直接 grep 替代 |
+| 15 | VPS 日盤 broker 撞 `SecurityType.Option` 載入失敗 → engine.start bail | 改 `login(fetch_contract=False)` + 手動 `fetch_contracts()` try/except、見 [[shioaji-options-fetch-fix]] |
+| 16 | Shioaji 開通測試 Windows 本機 IP 撞 `Sign data is timeout` | 改用 VPS IP（35.221.239.245）跑、5 分鐘審核通過、`futopt_account.signed=True` |
 
 ## Phase 0 — 架構釐清 ✅
 
@@ -526,31 +533,30 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 - [x] **22:03 啟動夜盤 ORB paper**：ML model 載入 OK、訂閱 MXF tick feed、PID 4619 running
 - [x] paper log 寫入 `~/ultra-trader-src/data/paper_trading/night_orb_20260512.csv`
 
-### Day 1（Claude 做、orchestrator 接 VPS）⏳ 今日待做
+### Day 1（Claude 做、orchestrator 接 VPS）✅ 完成
 
-> SSH key 已存在（`~/.ssh/google_compute_engine`、gcloud 自動產的）、可直接給 .env.sync 用。
-
-- [ ] 編輯 `~/vps_trader/scripts/.env.sync` 改成：
-  - `VPS_HOST=xx@35.221.239.245`
-  - `VPS_PROJECT_DIR=/home/xx/ultra-trader-src`
-  - `SSH_KEY=$HOME/.ssh/google_compute_engine`
-  - 加 `TMF_DATA_ROOT=$HOME/vps_trader/ultra-trader-src/data`（改讀 sync 來的 VPS 資料，不再讀本機 paper）
-- [ ] 手動跑一次：`bash ~/vps_trader/scripts/run_weekly_review.sh`
-  - 應該看到 Step 1 **不再跳過 sync**、改成 rsync 拉 VPS daily JSON
-  - 第 2c 用 NIM 產報告、第 2d 推 TG
-- [ ] 確認 5/16 (Sat) 09:00 Task Scheduler 自動跑時、會自動 sync from VPS
+- [x] `~/vps_trader/scripts/.env.sync` 改為 `VPS_HOST=xx@35.221.239.245` / `SSH_KEY=$HOME/.ssh/google_compute_engine` / `TMF_DATA_ROOT=$HOME/vps_trader/ultra-trader-src/data`
+- [x] `bash sync_from_vps.sh` rsync 拉 12 個 daily JSON 到本機 sync 目錄
+- [x] `load_week` dry-run 驗證：5/11–5/15 trades=4 net=+5,880 best=5/11 +4740 worst=5/12 +1140
+- [x] 5/16 (Sat) 09:00 Task Scheduler 跑時、Step 1 sync 不再跳過、改 rsync VPS
 
 ### Day 2~4（你 + Claude，5/13 ~ 5/15）⏳ 進行中
 
-- [ ] **5/13 早盤前看夜盤結果**：昨晚 22:03 啟動的夜盤 paper 若有觸發 ORB → 看 `~/ultra-trader-src/data/paper_trading/night_orb_20260512.csv`
-- [ ] 每日早上 check（用 `gcloud compute ssh ultratrader-night --zone=asia-east1-b` 或 ssh）：
-  - [ ] `tail data/logs/ultratrader_$(date +%Y%m%d).log` 看訊號 / 出場
-  - [ ] `cat data/risk_state_night.json` peak_equity 合理（≈ INITIAL_BALANCE）
-  - [ ] TG 是否有「策略心跳異常」spam
-  - [ ] 對比 VPS 跟桌機 paper：相同訊號嗎？（兩邊各自跑、會有時間差但邏輯應一致）
-- [ ] 至少跑滿 **3 個完整交易日**（5/13 三、5/14 四、5/15 五）
-- [ ] **5/16 週六 09:00**：Hermes 自動跑首份「來自 VPS 資料」的覆盤、確認 TG 收到
-- [ ] **驗證 watchdog 自癒**：手動 `kill` VPS 上 paper_night_orb.py → 看 watchdog 是否在 ≤ 12 分鐘內重啟
+**5/13（三）**
+- [x] 早盤前看夜盤 5/12 結果：22:05 啟動、23:10 區間建立、無突破（CSV 空 = 預期）
+- [x] 09:23 修好 broker Options bug、日盤重啟成功、TMF tick 即時進來
+- [ ] 13:45 收盤後檢查 `data/performance/daily/2026-05-13_live.json` 有沒有日盤交易
+- [ ] 14:55 確認夜盤 cron 自動重啟
+- [ ] 21:30 ORB session 啟動觀察
+
+**5/14（四）+ 5/15（五）**
+- [ ] 每日早 check：`ssh ultratrader-night 'tail data/logs/ultratrader_*.log' ; cat data/risk_state*.json`
+- [ ] TG 是否有「策略心跳異常」spam
+- [ ] 對比 VPS / 桌機 paper（兩邊各自跑、訊號邏輯應一致、時間有差）
+- [ ] **驗證 watchdog 自癒**：手動 `kill` paper_night_orb.py → 看 watchdog 是否在 ≤ 12 分鐘內重啟
+
+**5/16（六）**
+- [ ] **09:00 Hermes 自動跑首份「來自 VPS」的覆盤、確認 TG 收到**
 
 ### Day 5（你做、2026-05-19 週一切實單）
 
