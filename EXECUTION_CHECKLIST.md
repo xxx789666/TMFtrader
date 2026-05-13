@@ -1,8 +1,29 @@
-# 永豐微台指 — Hermes Agent 每週自動覆盤 執行清單
+# 永豐微台指 — 自動化交易 + Hermes 週度覆盤 執行清單
 
-> 建立日期：2026-05-12 ｜ 改週度：2026-05-12 ｜ 改本機 WSL2：2026-05-12 ｜ 確認 VPS 尚未租用：2026-05-12
+> 建立 2026-05-12 ｜ Hermes 覆盤已上線 ｜ **Phase 8 進行中：VPS 實戰部署，目標 2026-05-19 (Mon) 切實單** 🚀
 >
-> **現況**（2026-05-12）：交易 EA 在 **本機 Windows** 上跑（VPS 尚未租用），資料寫在本機 `ultra-trader-src/data/performance/daily/`。Hermes / 覆盤 / TG 推送全部在本機 WSL2 跑，**不需要 sync**。
+> **現況（2026-05-13）**：
+> - 交易（VPS）：**GCP e2-small 35.221.239.245** 跑夜盤 paper、22:03 啟動、等開盤訊號（昨晚已上線）
+> - 交易（本機）：原 `永豐-自動化交易/` 同步 redact、可繼續同步 paper 做比對
+> - 覆盤：本機 WSL2 + Hermes + NIM、curl 推 TG（已驗證、5/16 首次自動跑）
+> - GitHub：`xxx789666/VPS--` private（secret leak 已清理重建）
+>
+> **時程**：5/12 開 VPS ✅ → **5/13–15 paper 驗證（進行中）** → 5/16 Sat 09:00 Hermes 首次覆盤 → **5/19 Mon 08:30 切實單** 🚀
+
+## ⏰ 今日 (5/13 三) 必做
+
+1. **08:00–20:00** 跑 Shioaji API 開通測試（你做）：
+   ```
+   cd "C:\Users\xx\Desktop\永豐-自動化交易\ultra-trader-src"
+   python "C:\Users\xx\Desktop\vps永豐微台指\scripts\shioaji_api_test.py"
+   ```
+   通過 = `signed=True` + `status=Submitted`、約 5 分鐘審核
+2. **早盤前**先看 VPS 夜盤 paper 結果（昨晚 22:03 啟動）：
+   ```
+   wsl bash -c "ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes xx@35.221.239.245 'tail -50 ~/ultra-trader-src/data/logs/ultratrader_*.log'"
+   ```
+3. **08:30** VPS cron 會自動啟動日盤、等 10:00 看是否有交易 / 心跳異常
+4. Claude 接 Hermes orchestrator → VPS（填 `.env.sync`、改 TMF_DATA_ROOT）
 >
 > **未來**（VPS 租用後）：交易 EA 搬到 VPS、資料寫 VPS，本機 WSL2 透過 `sync_from_vps.sh` 拉資料；本架構同時支援這兩種模式（orchestrator 偵測有沒有 `.env.sync` 自動切換）。
 >
@@ -10,32 +31,43 @@
 > 覆盤頻率：**每週六 09:00 (Asia/Taipei)** 一次（Windows Task Scheduler 觸發），聚合上週 Mon-Fri 的日盤+夜盤
 > 專案模組：`ultra-trader-src/review/`（資料層）+ `hermes_skills/`（skill）+ `scripts/`（orchestrator + 可選 sync）
 
-## 部署架構速覽
+## 部署架構速覽（**VPS 已上線、5/13 進入 paper 觀察期**）
 
 ```
-VPS (GCP e2-small 2GB)            本機 Windows (WSL2 Ubuntu)
-─────────────────────             ────────────────────────────
-ultra-trader-src/                 ~/vps_trader/  (symlink → /mnt/c/...)
-├ strategy/ core/                 ├ ultra-trader-src/
-├ data/performance/daily/   ━━┓   │   ├ review/ (loader/tools/guard)
-│  *_live*.json              ┃   │   └ data/performance/daily/ ◀━━┛
-├ data/risk_state*.json     ━╋━ rsync (WSL2, every Sat 08:55)
-└ Shioaji + watchdog         ┃   ├ hermes_skills/tmf-weekly-review/
-                             ┃   ├ scripts/sync_from_vps.sh
-                             ┃   ├ scripts/run_weekly_review.sh
-                             ┃   └ scripts/scheduled_trigger.ps1
-                             ┃
-                             ┃   ~/.hermes/  (WSL2 home)
-                             ┃   ├ skills/tmf-weekly-review (→ vps_trader)
-                             ┃   ├ memory.sqlite
-                             ┃   └ gateway/ (Telegram bot)
-                             ┃
-                             ┗━ Windows Task Scheduler (Sat 09:00)
-                                  └─ scheduled_trigger.ps1
-                                       └─ wsl.exe → run_weekly_review.sh
-                                                      ├─ sync_from_vps.sh
-                                                      ├─ hermes invoke skill
-                                                      └─ runaway_guard.py
+☁️ GCP VPS: ultratrader-night (asia-east1-b, e2-small, 35.221.239.245 靜態 IP)
+  /home/xx/ultra-trader-src/
+    ├─ scripts/restart_{day,night}.sh    Linux 啟動腳本
+    ├─ scripts/paper_night_orb.py        夜盤 ORB B2 ML strategy
+    ├─ scripts/start.py                  日盤 FastAPI 8888
+    ├─ scripts/watchdog.py               12-min 心跳監控
+    ├─ deployed_strategies/tmf_orb_night/orb_filter_b2.pkl   B2 ML model
+    ├─ certs/cert.pfx                    Shioaji 憑證
+    ├─ .env                              TRADING_MODE=paper（即將 5/19 切 live）
+    └─ .venv (Python 3.12.13 + Shioaji 1.3.3 + xgboost/lightgbm)
+  crontab (UTC):
+    30 0 * * 1-5    日盤 08:30 啟動
+    55 6 * * 1-5    夜盤 14:55 啟動
+    56 6 * * 1-5    Watchdog 啟動
+    10 21 * * 0-4   夜盤 05:10 關（隔日）
+
+🖥️ 本機 Windows
+  └─ WSL2 Ubuntu (~/.local/bin/hermes)
+      ├─ ~/vps_trader        → /mnt/c/.../vps永豐微台指    (本專案、git tracked)
+      ├─ ~/vps_trader_paper  → /mnt/c/.../永豐-自動化交易  (本機 paper、雙重備援)
+      ├─ ~/.ssh/google_compute_engine  ← SSH key 連 VPS
+      └─ ~/.hermes/                                 Hermes runtime + NIM provider
+
+每週六 09:00 (Asia/Taipei)：
+  Windows Task Scheduler "TMF_Weekly_Review"  (wake-to-run, 30 min cap)
+    └─ scheduled_trigger.ps1
+          └─ wsl.exe -d Ubuntu -- bash -lc 'cd ~/vps_trader && bash scripts/run_weekly_review.sh'
+                ├─ [0]  kill_switch 預檢
+                ├─ [1]  sync from VPS（5/13 後：rsync xx@35.221.239.245:~/ultra-trader-src/data/）
+                ├─ [2a] python load_week → JSON
+                ├─ [2b] bash 格式化成 facts
+                ├─ [2c] curl NIM hosted → 繁中報告 ★直接 API★
+                ├─ [2d] curl Telegram → 你手機
+                └─ [3]  runaway_guard (≤8 tool calls / 10 min / 50k tokens / 30 RPH)
 ```
 
 ## 進度總覽
@@ -45,11 +77,12 @@ ultra-trader-src/                 ~/vps_trader/  (symlink → /mnt/c/...)
 - [x] **Phase 2** 第一版 skill 檔（`hermes_skills/tmf-weekly-review/SKILL.md`，含 budget + kill-switch 自律規則）
 - [x] **Phase 2.5** 失控防禦 —— skill 預檢 + 外部 watchdog（`review/runaway_guard.py`）
 - [x] **Phase 3** 本機 WSL2 安裝 Hermes Agent + 接 NIM ✅
-- [ ] **Phase 4** 部署 skill + Windows Task Scheduler 排程
-- [ ] **Phase 4.5** orchestrator 內整合 runaway_guard
-- [ ] **Phase 5** Telegram gateway 串接（在 WSL2 內）—— wizard 已設好，需驗證
-- [ ] **Phase X**（**未來**，VPS 租用後）：設定 `.env.sync` 啟用 sync from VPS
-- [ ] **Phase 6** 上線驗證（paper 4 週 → 開放低風險自動套用）
+- [x] **Phase 4** 部署 skill + Windows Task Scheduler 排程 ✅
+- [x] **Phase 4.5** orchestrator 內整合 runaway_guard ✅
+- [x] **Phase 5** Telegram 整合（**改用 curl 直推、不繞 Hermes gateway**）✅
+- [x] **Phase 7（中途插入）** Secret leak 善後 —— TG token + Shioaji key redact、刪 repo 重建乾淨版 ✅
+- [/] **Phase 8（進行中）** Day 0-1 完成 ✅（VPS 上線）｜ 5/13 跑 API 開通測試 + Hermes 接 VPS ｜ 5/13–15 paper 驗證 ｜ 5/19 切實單 🚀
+- [ ] **Phase 6** Hermes 覆盤上線驗證（paper 4 週 → 開放低風險自動套用）— 第 1 週已自動跑、繼續觀察 3 週
 
 ## 改週度的決策（2026-05-12）
 
@@ -63,6 +96,27 @@ ultra-trader-src/                 ~/vps_trader/  (symlink → /mnt/c/...)
 | 跨日模式偵測 | 弱（只看單日）| **強**（best/worst day、連虧日數、跨日訊號對比）|
 
 ---
+
+## 上線過程關鍵發現（2026-05-12，照時序）
+
+實際做下去發現很多原計畫沒考慮到的事，逐一記錄：
+
+| # | 發現 | 影響 / 修法 |
+|---|---|---|
+| 1 | Grok 截圖描述的 Hermes Agent **是真的**（我知識截止 1 月、它 2 月發佈）| 全面 pivot 到 Hermes Agent，省 80% 自寫 |
+| 2 | NVIDIA NIM 已**廢除 credits 制度**、改 forever-free + ~40 RPM rate limit | 附錄 A 改為「rate-limit 退路」、不是「credits 燒完」 |
+| 3 | 手機驗證後 NVIDIA 給「**Unlimited API, no daily limits**」| 比 forum 提的 40 RPM 寬鬆，週度用量 ~4 calls/月實質無限 |
+| 4 | VPS（GCP e2-small 2GB）跑 Hermes 會搶 EA 記憶體 | 改本機 WSL2 跑 |
+| 5 | **VPS 根本還沒租** | orchestrator 加偵測：無 `.env.sync` → 跳過 sync、直接用本機資料 |
+| 6 | `vps永豐微台指/` 是**打包快照**、實際 live EA 在 `永豐-自動化交易/` | 加 `TMF_DATA_ROOT` env var 支援、`~/vps_trader_paper` symlink 指 live |
+| 7 | WSL2 已預先裝好（Ubuntu 24.04 + Python 3.12） | Phase 3 半數步驟跳過 |
+| 8 | `hermes setup` wizard 重跑會把 key value **串接**（70 → 210 字元）| 直接覆寫 `~/.hermes/.env` 修 |
+| 9 | Hermes **execute_code 沙箱 CWD 不固定** | skill 改用 `subprocess.run(... env={'PYTHONPATH': ...})`、不用 `cd` |
+| 10 | `hermes chat -Q` 對純摘要 prompt 常回**空 response**（Nemotron 對大塊 JSON 不友善）| 跳過 Hermes、orchestrator 直接 curl NIM API |
+| 11 | Hermes `send_message` 需 gateway daemon 持續跑 | TG 推送改 bash 直接 curl Telegram、不依賴 daemon |
+| 12 | TG bot token **硬編在 4 個 .py/.md 內**、且**被 push 到 GitHub** | 用 `gh search code` 確認後選方案 A：刪 repo 重建乾淨版 |
+| 13 | PowerShell 5.1 讀 UTF-8 無 BOM `.ps1` 含中文會 **parser error** | 移除 .ps1 內所有中文字串、用 `$PSScriptRoot` 動態取路徑 |
+| 14 | `secret_scan.sh` 對 209 檔跑 13 patterns 太慢（2700 grep 呼叫）| 後續可優化、當前用直接 grep 替代 |
 
 ## Phase 0 — 架構釐清 ✅
 
@@ -147,7 +201,7 @@ ultra-trader-src/                 ~/vps_trader/  (symlink → /mnt/c/...)
 
 ---
 
-## Phase 3 — 本機 WSL2 安裝 Hermes Agent + 接 NIM
+## Phase 3 — 本機 WSL2 安裝 Hermes Agent + 接 NIM ✅
 
 ### 申請 + 取得 API key ✅
 
@@ -236,64 +290,43 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
 
 ---
 
-## Phase 4 — 部署 skill + Task Scheduler 排程
+## Phase 4 — 部署 skill + Task Scheduler 排程 ✅
 
-### 部署 skill（WSL2 內 symlink）
+### 部署 skill（WSL2 內 symlink）✅
 
-- [ ] `mkdir -p ~/.hermes/skills`
-- [ ] symlink：
-  ```bash
-  ln -s ~/vps_trader/hermes_skills/tmf-weekly-review ~/.hermes/skills/tmf-weekly-review
-  ls -la ~/.hermes/skills/
-  ```
-- [ ] 在 Hermes 內執行 `hermes skill list` 或 TUI `/skill list` 確認偵測到
-- [ ] 手動觸發測試（只用便宜 model 確認流程通）：
-  ```bash
-  hermes --skill tmf-weekly-review --prompt "覆盤 2026-05-11 那週 TMF，依 skill 流程執行"
-  ```
+- [x] `mkdir -p ~/.hermes/skills`
+- [x] symlink 建好：`~/.hermes/skills/tmf-weekly-review → ~/vps_trader/hermes_skills/tmf-weekly-review`
+- [x] `hermes skills list` 確認偵測：tmf-weekly-review (local, enabled)
+- [x] paper data symlink：`~/vps_trader_paper → /mnt/c/.../永豐-自動化交易`（指向 live EA）
 
-### 設定 .env.sync（VPS 連線資訊）
+### 路徑與環境變數 ✅
 
-- [ ] `cp ~/vps_trader/scripts/.env.sync.example ~/vps_trader/scripts/.env.sync`
-- [ ] 編輯 `.env.sync` 填入：
-  - `VPS_HOST=root@<GCP VM 外部 IP>`
-  - `VPS_PROJECT_DIR=/root/ultra-trader-src`
-  - `SSH_KEY=$HOME/.ssh/id_ed25519`
-  - `TG_BOT_TOKEN` + `TG_CHAT_ID`（從 `ultra-trader-src/.env` 抄過來）
+- [x] `~/vps_trader/scripts/.env.sync` 已建（含 TG_BOT_TOKEN / TG_CHAT_ID）
+- [x] orchestrator 自動偵測：無 VPS_HOST → 跳過 sync、用 `~/vps_trader_paper` 內 live 資料
+- [x] `TMF_DATA_ROOT` env var 由 orchestrator 自動 export
 
-### 手動測一次完整 orchestrator
+### 手動測完整 orchestrator ✅
 
-- [ ] WSL2 內跑：
-  ```bash
-  bash ~/vps_trader/scripts/run_weekly_review.sh
-  ```
-- [ ] 觀察 log 三段都 OK：
-  - [ ] sync 成功（拉到本機 N 個 daily JSON）
-  - [ ] Hermes 完成覆盤、TG 推送格式正確
-  - [ ] runaway_guard 通過（exit 0）
+- [x] WSL2 跑 `bash ~/vps_trader/scripts/run_weekly_review.sh`
+- [x] 全 3 步通過：
+  - [x] Step 1: 跳過 sync（無 VPS、正確行為）
+  - [x] Step 2a-2d: load_week → facts → NIM API → TG curl
+  - [x] Step 3: runaway_guard 通過
+- [x] **TG 手機收到繁中報告**（+5,880 / 4 筆 / WR 75% / 最佳日 5/11）
 
-### Windows Task Scheduler 排程
+### Windows Task Scheduler 排程 ✅
 
-- [ ] PowerShell **系統管理員**權限執行：
-  ```powershell
-  powershell.exe -ExecutionPolicy Bypass -File "C:\Users\xx\Desktop\vps永豐微台指\scripts\install_task_scheduler.ps1"
-  ```
-- [ ] 立即觸發測試（不等到週六）：
-  ```powershell
-  Start-ScheduledTask -TaskName "TMF_Weekly_Review"
-  Start-Sleep 3
-  Get-Content "C:\Users\xx\Desktop\vps永豐微台指\scripts\logs\scheduled_*.log" -Tail 50
-  ```
-- [ ] 確認電腦電源計畫允許「喚醒以執行排程」：
-  - 控制台 → 電源選項 → 變更計畫設定 → 進階設定 → 睡眠 → 允許喚醒計時器 = **啟用**
-- [ ] 確認排程：
-  ```powershell
-  Get-ScheduledTaskInfo -TaskName "TMF_Weekly_Review" | Select-Object NextRunTime, LastRunTime, LastTaskResult
-  ```
+- [x] `scripts/install_task_scheduler.ps1`（已重寫為 ASCII、用 `$PSScriptRoot`）
+- [x] `scripts/scheduled_trigger.ps1`（已重寫為 ASCII）
+- [x] PowerShell 跑 `install_task_scheduler.ps1` → Task 已註冊
+- [x] **`Start-ScheduledTask` 觸發測試 → LastTaskResult=0、TG 二次收到**
+- [x] State: Ready / WakeToRun: True / ExecutionTimeLimit: 30 min
+- [x] **NextRunTime: 2026-05-16 (Sat) 09:00** ← 第一次正式自動跑
+- [ ] 確認電源計畫「允許喚醒計時器」= 啟用（如桌機平常睡眠、必做）
 
 ---
 
-## Phase 5 — Telegram gateway 串接（WSL2 內）
+## Phase 5 — Telegram 整合（**改用 curl 直推、不繞 Hermes gateway**）✅
 
 ### 設 bot（在 WSL2 內）
 
@@ -314,21 +347,17 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
 
 - [ ] 確認 `scripts/sync_from_vps.sh` 失敗時會推 TG
 - [ ] 確認 `scripts/run_weekly_review.sh` 各步完成 / 失敗時會推 TG
-- [ ] 確認 `runaway_guard.py` 觸發時會推 TG
-- [ ] 確認 SKILL 內 prompt 要求 agent 把覆盤結果用人類格式推 TG（非 raw JSON）
+- [x] 確認 `runaway_guard.py` 觸發時會推 TG（已實作於 `runaway_guard.py` 內）
+- [x] **改用 curl 推 TG**（不繞 Hermes gateway daemon）—— orchestrator step 2d 直接 `curl https://api.telegram.org/.../sendMessage`
+- [x] 訊息格式人類友善（NIM 直接產繁中段落、不是 raw JSON）
 
-### 推送多管道（可選）
+### 為什麼不用 Hermes gateway
 
-- [ ] 若要同時推 Discord / Slack / Signal：
-  ```bash
-  hermes gateway add discord
-  hermes gateway add slack
-  ```
-- [ ] 修改 SKILL.md Procedure step 6 改成「Channels: all」
+實測 `hermes chat -Q` 對「純摘要」prompt 常回空 response（empty model output）。而且 `send_message` tool 需要 `hermes gateway start` daemon 持續跑 —— WSL2 重開 daemon 沒起來就 silent fail。**改用 bash 直接 curl** 反而最可靠、最少依賴。Hermes 留著但只用於將來互動式覆盤（人工 `hermes chat` 進 TUI）。
 
 ---
 
-## Phase 4.5 — runaway_guard 整合到 orchestrator（L2 外部監控）
+## Phase 4.5 — runaway_guard 整合到 orchestrator（L2 外部監控）✅
 
 > 原本規劃 runaway_guard 用獨立系統 cron 跑，但既然 orchestrator 是序貫流程，直接把 guard 串成 orchestrator 第 3 步更乾淨（已實作於 `scripts/run_weekly_review.sh`）。
 
@@ -370,17 +399,20 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
 
 ### Paper 階段（4 週 — 週度覆盤 N=4 才有比較基礎）
 
-- [ ] 第 1 週：TG 收到第一份週度覆盤，人工 review 品質
-  - [ ] 數字是否跟 `load_week` 回傳一致（用工具當 ground truth）
-  - [ ] 有沒有對 best_day / worst_day 真的呼叫 `load_daily` 縱深
+- [x] **第 0 次（手動觸發 dry-run，2026-05-12）**：TG 收到報告
+  - [x] 數字對：+5,880 / 4 筆 / WR 75% / best=5/11 / max_consec_loss=0 跟 `load_week` 一致
+  - [x] 建議具體：「考慮調整短倉比例」「優化停損」
+  - [x] 走 curl 直推（不繞 Hermes gateway）—— TG 推送成功
+- [ ] **第 1 週（首次自動跑：2026-05-16 Sat 09:00）**：等實際跑
+  - [ ] Task Scheduler 真的喚醒 / 觸發
+  - [ ] 數字跟 `load_week --week_ending=2026-05-15` 一致
   - [ ] 有無幻覺（編造訊號類型 / 參數 / 不存在的訊號）
-  - [ ] 建議是否具體（不能是「優化止損」這種空話）
-  - [ ] 若 `n_trades < 5`，建議是否真的都是 observe-only
-- [ ] 第 2–3 週：開始觀察跨週引用
-  - [ ] 第 2 週起，記憶有沒有引用上週的觀察
-  - [ ] `evidence_weeks` 欄位有沒有正確標示
-  - [ ] `~/.hermes/skills/` 有沒有 Hermes 自動生出的衍生 skill
-- [ ] 第 4 週：累積 4 週基礎後評估
+  - [ ] 若 `n_trades < 5`，建議是否都是 observe-only
+- [ ] **第 2–3 週**：觀察跨週模式
+  - [ ] 報告品質是否穩定（不時好時壞）
+  - [ ] 是否抓得到本週與上週的對比
+  - [ ] orchestrator 失敗時 TG 是否真的會推警告
+- [ ] **第 4 週**：累積基礎後評估
   - [ ] 整體建議品質是否穩定提升
   - [ ] 信心校準：高信心建議是否真的更準
 
@@ -397,6 +429,168 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
 - [ ] 寫第二支 skill `tmf-strategy-tune`：接受 `tmf-daily-review` 的建議、產出 unified diff、TG `/approve_<hash>` 才套用
 - [ ] 串 pytest gate：套用前必過全綠
 - [ ] 套用後 git auto-commit、3 天 PnL 惡化自動回滾
+
+---
+
+## Phase 7 — Secret leak 善後 ✅（2026-05-12 同日插入處理）
+
+### 為何插入 Phase 7
+
+第一次 push `vps永豐微台指` 到 GitHub `xxx789666/VPS--` 時，pre-flight scan **漏抓 TG bot token + chat_id**（硬編在 `core/notify.py` × 2 + `watchdog.py` × 2 + `README.md`）。即使 .gitignore 擋住了 `.env` / `*.pfx` 等檔，hardcoded 在 source 內的 secret 沒擋。
+
+### 處理動作
+
+- [x] 4 個檔 redact 為從 env var 讀（`vps永豐微台指/` repo 內）
+- [x] 4 個檔 redact 為從 env var 讀（`永豐-自動化交易/` live EA 內，未在 git，但仍同步處理）
+- [x] live EA `.env` 補上 `TG_BOT_TOKEN` + `TG_CHAT_ID`
+- [x] 強化 `.gitignore`：補 `scripts/.env*`、`scripts/_*.sh`（測試用 helper）、`scripts/logs/`
+- [x] 寫 `scripts/secret_scan.sh`：13 patterns × 整 staged tree、push 前必跑
+- [x] **方案 A 處理 history**：`gh repo delete` + `rm -rf .git` + fresh `git init` + `gh repo create` + push 乾淨版
+- [x] 驗證：`gh api search/code?q=<TG_TOKEN_PREFIX>+repo:xxx789666/VPS--` → **0 hits**
+- [x] 新 repo 只有 1 commit：`ccfdc92 Initial commit (re-init after secret leak cleanup)`
+- [x] 使用者選擇**不 rotate token**（評估 private repo + 沒 collaborator 風險可接受）
+
+### 教訓（已寫進 memory）
+
+memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignore，要 grep 整個 staged tree 找 token/key 字串。
+
+---
+
+## Phase 8 — VPS 實戰部署（Day 0-1 完成 ✅、3 天 paper 驗證進行中）
+
+> **目標**：5/12 啟動 → 5/15 前完成 VPS paper 驗證 → **5/19（下週一 08:30）切實單開盤**
+>
+> **為何走這條**：桌機 24/7 開機風險（藍屏 / 斷網 / Windows update）。VPS 在台灣彰化機房、< 5ms 到 Shioaji、月費 NT$490。
+
+### Day 0 預檢狀態（2026-05-12 已查）
+
+| 項 | 狀態 |
+|---|---|
+| Shioaji API Key + Secret | ✅ 都有（`.env` 內） |
+| 憑證 `Sinopac.pfx` | ✅ `C:/Users/xx/Downloads/Sinopac.pfx` 存在（4/9 下載、約 2027/4 到期）|
+| 憑證密碼 + 身分證號 | ✅ 都在 `.env` |
+| GCP 帳戶 | ❌ **沒有、需註冊**（拿 $300 / 90 天免費試用）|
+| 永豐期貨下單權限 | ⚠️ **未確認、user 需查**（電子戶 → 我的服務 → 開通服務）|
+| TG bot token / chat id | ✅ live EA `.env` 已補 |
+
+### Day 0（你做）✅ 完成（除 API 測試明日跑）
+
+- [x] 永豐電子戶確認「**期貨/選擇權電子下單**」已開通
+- [x] **簽署「API 電子交易風險預告書暨使用同意書」**
+  - 詳細條款摘要 + 系統合規檢查見 memory: [[sinopac-api-consent]]
+- [x] **跑 Shioaji API 開通測試** ✅ 已通過 (5/13 09:15)、`futopt_account.signed=True`
+  - 時段：08:00–20:00（18:00–20:00 限台灣 IP）
+  - 指令（在 Windows PowerShell 跑、用既有 .env）：
+    ```
+    cd "C:\Users\xx\Desktop\永豐-自動化交易\ultra-trader-src"
+    python "C:\Users\xx\Desktop\vps永豐微台指\scripts\shioaji_api_test.py"
+    ```
+  - 腳本流程：login (sim=True) → activate_ca → 取 TXF 近月 → Buy 15000 / 1 口 / ROD → sleep 2s → cancel
+  - 通過條件：`signed=True` + `ca_ok=True` + `status=Submitted`
+  - **審核約 5 分鐘**（隨到隨審）→ 通過後 simulation=False 才能跑實單
+  - 完整規格：https://sinotrade.github.io/zh/tutor/prepare/terms/
+- [x] 註冊 Google Cloud
+  - [x] 用 Gmail (`x011training@gmail.com`) 登入
+  - [x] 啟用 $300 免費試用
+  - [x] Project ID: `project-ae93c5d6-cf6e-402d-969`
+
+### Day 0 同步同意書合規檢查（已查、全綠）
+
+| 條款 | 對我們系統的要求 | 狀態 |
+|---|---|---|
+| 條 1（程式錯誤自負）| 3 天 paper 驗證 + watchdog 必要 | ✅ Phase 8 已安排 |
+| 條 2（key / 不全權委託）| key 不入 git、不交第三方、Hermes 不能下單 | ✅ 已 redact + skill 限制 |
+| 條 3（委託即正式、需主動查）| 每筆 push TG + JSON 紀錄 | ✅ notify.py |
+| 條 6（**有線網路、不宜 Wi-Fi**）| 桌機 Wi-Fi 不合規 → 必須遷 VPS | ⭐ **這就是切 live 必走 VPS 的合規依據** |
+| 條 7（永豐可逕行限流）| Shioaji 報錯先換備用 key + 換 IP、不狂重試 | ✅ [[shioaji-login-ban-diagnosis]] |
+| 條 9（**嚴禁行情轉散布**）| TG 只推私人 chat、GitHub 不放 raw tick | ✅ historical/ 在 .gitignore |
+
+### Day 0–1（Claude 做）✅ 完成
+
+- [x] **gcloud CLI 裝 WSL2 內**（v568.0.0）
+- [x] **開 VM** `ultratrader-night` 在 `asia-east1-b`（e2-small / Ubuntu 22.04 / 50GB SSD pd-balanced）
+- [x] 設靜態 IP `ultratrader-ip` = **35.221.239.245**
+- [x] 啟用 Compute Engine API + 確認 billing
+- [x] 防火牆：建 `deny-trading-ports` 規則（block 8888/8889 對外、target trader-vm tag）
+- [x] ufw：本機只允許 SSH 22
+- [x] 裝 Python 3.12.13 + pip 26.1.1（deadsnakes PPA）
+- [x] rsync 上傳 `ultra-trader-src/`（342 檔、52MB、排除 historical/data/logs）
+- [x] rsync 上傳 `Sinopac.pfx` → `~/ultra-trader-src/certs/cert.pfx`
+- [x] rsync 上傳 `deployed_strategies/` (B2 ML model)
+- [x] 修 `.env`：`SHIOAJI_CA_PATH=/home/xx/ultra-trader-src/certs/cert.pfx`
+- [x] 建 venv + `pip install -r requirements.txt`
+- [x] 補裝 ML 依賴：xgboost / scikit-learn / lightgbm + sys libgomp1
+- [x] **Shioaji simulation 登入測試成功**（Session up、期貨帳戶 `徐安利` 抓到）
+- [x] 寫 Linux 啟動腳本：`restart_day.sh` / `restart_night.sh` / `start_watchdog.sh`
+- [x] crontab：日盤 30 0 * * 1-5（UTC=TST−8）、夜盤 55 6 * * 1-5、watchdog 56 6 * * 1-5、收盤關 server
+- [x] **22:03 啟動夜盤 ORB paper**：ML model 載入 OK、訂閱 MXF tick feed、PID 4619 running
+- [x] paper log 寫入 `~/ultra-trader-src/data/paper_trading/night_orb_20260512.csv`
+
+### Day 1（Claude 做、orchestrator 接 VPS）⏳ 今日待做
+
+> SSH key 已存在（`~/.ssh/google_compute_engine`、gcloud 自動產的）、可直接給 .env.sync 用。
+
+- [ ] 編輯 `~/vps_trader/scripts/.env.sync` 改成：
+  - `VPS_HOST=xx@35.221.239.245`
+  - `VPS_PROJECT_DIR=/home/xx/ultra-trader-src`
+  - `SSH_KEY=$HOME/.ssh/google_compute_engine`
+  - 加 `TMF_DATA_ROOT=$HOME/vps_trader/ultra-trader-src/data`（改讀 sync 來的 VPS 資料，不再讀本機 paper）
+- [ ] 手動跑一次：`bash ~/vps_trader/scripts/run_weekly_review.sh`
+  - 應該看到 Step 1 **不再跳過 sync**、改成 rsync 拉 VPS daily JSON
+  - 第 2c 用 NIM 產報告、第 2d 推 TG
+- [ ] 確認 5/16 (Sat) 09:00 Task Scheduler 自動跑時、會自動 sync from VPS
+
+### Day 2~4（你 + Claude，5/13 ~ 5/15）⏳ 進行中
+
+- [ ] **5/13 早盤前看夜盤結果**：昨晚 22:03 啟動的夜盤 paper 若有觸發 ORB → 看 `~/ultra-trader-src/data/paper_trading/night_orb_20260512.csv`
+- [ ] 每日早上 check（用 `gcloud compute ssh ultratrader-night --zone=asia-east1-b` 或 ssh）：
+  - [ ] `tail data/logs/ultratrader_$(date +%Y%m%d).log` 看訊號 / 出場
+  - [ ] `cat data/risk_state_night.json` peak_equity 合理（≈ INITIAL_BALANCE）
+  - [ ] TG 是否有「策略心跳異常」spam
+  - [ ] 對比 VPS 跟桌機 paper：相同訊號嗎？（兩邊各自跑、會有時間差但邏輯應一致）
+- [ ] 至少跑滿 **3 個完整交易日**（5/13 三、5/14 四、5/15 五）
+- [ ] **5/16 週六 09:00**：Hermes 自動跑首份「來自 VPS 資料」的覆盤、確認 TG 收到
+- [ ] **驗證 watchdog 自癒**：手動 `kill` VPS 上 paper_night_orb.py → 看 watchdog 是否在 ≤ 12 分鐘內重啟
+
+### Day 5（你做、2026-05-19 週一切實單）
+
+- [ ] **盤前再 review 3 天 paper 結果**：
+  - [ ] 無連續心跳異常
+  - [ ] PnL 計算正確（跟桌機 paper 一致）
+  - [ ] risk_state 沒殘留 peak_equity bug（[[paper-trading-peak-equity-bug]]）
+- [ ] SSH 到 VPS 改 `.env`：
+  - [ ] `TRADING_MODE=live`
+  - [ ] `INITIAL_BALANCE=<永豐戶頭實際權益>`（不是 paper 的 222890）
+- [ ] 重啟：`bash ~/ultra-trader-src/scripts/restart_night.sh`
+- [ ] `curl localhost:8889/api/state | jq '.trading_mode'` 確認 = `"live"`
+- [ ] TG 收到「實單模式啟動」通知
+- [ ] **第一筆進場後**：永豐 App **必檢成交回報**（最重要）
+- [ ] 第一天保持手機在身邊、隨時可緊急平倉：`curl -X POST http://VPS:8889/api/close_all`（透過 SSH tunnel）
+
+### 緊急退場開關
+
+```bash
+# 切回 paper（不平倉、新單轉 paper）
+ssh VPS "sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/ultra-trader-src/.env && bash ~/ultra-trader-src/scripts/restart_night.sh"
+
+# 全部平倉（緊急）
+ssh -L 8889:localhost:8889 VPS &
+curl -X POST http://localhost:8889/api/close_all
+
+# 停止整個 EA
+ssh VPS "pkill -f 'api.server.*8889'"
+```
+
+### 風險清單（必看）
+
+| 風險 | 機率 | 處置 |
+|---|---|---|
+| Shioaji 換 IP 第一次登入被擋（風控）| 中 | 第一次失敗別重試、聯絡券商客服解禁 |
+| 憑證路徑 Linux 大小寫不同步 | 中 | 路徑大小寫嚴格一致、用 `ls -la` 對 |
+| GCP UTC 時區 vs cron 寫成台北 | 高 | crontab 時間 −8、或 `TZ=Asia/Taipei` 在 crontab 開頭 |
+| Python 3.12 vs ta-lib 不相容 | 低 | 先驗 `python -c "import shioaji"` 再上線 |
+| 桌機 paper 跟 VPS paper 訊號錯位 | 低（同 code）| 確認 .env / strategy/*.py 完全一致 |
+| 切 live 第一筆爆損 | 中 | 第一筆下完手動關掉、看 5 分鐘確認沒問題再開回 |
 
 ---
 
@@ -424,26 +618,42 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
 python -m review.tools_for_hermes load_week  --week_ending=2026-05-15 --compact
 python -m review.tools_for_hermes load_daily --date=2026-05-11 --session=day --compact
 
-# Hermes Agent
+# Orchestrator（手動跑覆盤）
+bash ~/vps_trader/scripts/run_weekly_review.sh                        # 預設 today
+WEEK_ENDING=2026-05-15 bash ~/vps_trader/scripts/run_weekly_review.sh  # 指定週末
+
+# Hermes Agent（互動用，不在 orchestrator 內）
 hermes                          # 進 TUI
 hermes model                    # 切 provider/model
-hermes config set KEY VALUE     # 設環境變數
-hermes gateway setup            # 設 Telegram bot
-hermes gateway start            # 啟動 gateway daemon
-hermes cron list                # 看排程
-hermes cron run <id>            # 立即執行某條 cron（用來測試週度流程）
+hermes config show              # 看當前設定
+hermes status                   # 環境健康檢查
+hermes skills list              # 看載入哪些 skill
+
+# Windows Task Scheduler（PowerShell）
+Get-ScheduledTaskInfo -TaskName "TMF_Weekly_Review"        # 看下次跑、上次結果
+Start-ScheduledTask -TaskName "TMF_Weekly_Review"          # 立即觸發測試
+Get-Content "C:\Users\xx\Desktop\vps永豐微台指\scripts\logs\scheduled_*.log" -Tail 50
+
+# Secret scan（push 前必跑）
+bash scripts/secret_scan.sh
+
+# 失控防禦
+ls ~/.hermes/kill_switch                                   # 看是否被 trip
+rm ~/.hermes/kill_switch                                   # 解除
+GUARD_MAX_TOOL_CALLS=0 bash scripts/run_weekly_review.sh   # 故意觸發測試
 ```
 
 ## 附錄 C — 檔案位置對照
 
-### 整體拓撲
+### 整體拓撲（**現況：VPS 未租、live EA 在本機**）
 
 | 用途 | 位置 |
 |---|---|
-| **交易執行** | VPS：`/root/ultra-trader-src/`（GCP e2-small）|
-| **交易資料寫入** | VPS：`/root/ultra-trader-src/data/performance/daily/*_live*.json` |
-| **本機開發** | Windows：`C:\Users\xx\Desktop\vps永豐微台指\` |
-| **WSL2 內視角** | `~/vps_trader/` → symlink → `/mnt/c/Users/xx/Desktop/vps永豐微台指/` |
+| **交易執行 + 寫資料**（LIVE）| Windows：`C:\Users\xx\Desktop\永豐-自動化交易\ultra-trader-src\` |
+| **本專案（git tracked）** | Windows：`C:\Users\xx\Desktop\vps永豐微台指\` → `xxx789666/VPS--` |
+| **WSL2 內視角（本專案）** | `~/vps_trader/` → symlink → `/mnt/c/.../vps永豐微台指/` |
+| **WSL2 內視角（live data）** | `~/vps_trader_paper/` → symlink → `/mnt/c/.../永豐-自動化交易/` |
+| **資料根（TMF_DATA_ROOT）** | `~/vps_trader_paper/ultra-trader-src/data/` —— loader 從這讀 |
 | **資料層 Python 模組** | `~/vps_trader/ultra-trader-src/review/` |
 | **Skill 原檔（git 版控）** | `~/vps_trader/hermes_skills/tmf-weekly-review/` |
 | **Sync/orchestrator scripts** | `~/vps_trader/scripts/` |
@@ -451,19 +661,22 @@ hermes cron run <id>            # 立即執行某條 cron（用來測試週度�
 | **部署 skill 方式** | symlink: `~/.hermes/skills/tmf-weekly-review` → `~/vps_trader/hermes_skills/tmf-weekly-review` |
 | **Task Scheduler 入口** | `C:\Users\xx\Desktop\vps永豐微台指\scripts\scheduled_trigger.ps1` |
 
-### 資料流向
+### 資料流向（現況：無 sync、本機 live）
 
 ```
-VPS write *_live*.json
+本機 EA (永豐-自動化交易/) write *_live*.json
    │
-   │  (rsync over SSH, 每週六 08:55 WSL2 拉)
+   │  (~/vps_trader_paper symlink，無延遲、無 sync)
    ▼
-本機 WSL2 ~/vps_trader/ultra-trader-src/data/
+WSL2 orchestrator (run_weekly_review.sh)
    │
-   │  (Hermes execute_code → python3 -m review.tools_for_hermes)
+   │  python3 -m review.tools_for_hermes load_week  →  JSON
+   │  bash 格式化為純文字 facts
+   │  curl POST integrate.api.nvidia.com/v1/chat/completions
    ▼
-JSON 統計餵 LLM (NIM hosted)
+NIM 回繁中報告 (~500 bytes)
    │
+   │  curl POST api.telegram.org/.../sendMessage
    ▼
 Telegram → 你的手機
 ```

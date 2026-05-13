@@ -142,8 +142,13 @@ class ShioajiBroker(BaseBroker):
                 api_key=self._api_key,
                 secret_key=self._secret_key,
                 receive_window=300000,
-                fetch_contract=True,
+                fetch_contract=False,
             )
+            # 手動 fetch contracts，容忍 Options 失敗（部分帳號 / IP 沒 Options 權限）
+            try:
+                self._api.fetch_contracts(contract_download=True, contracts_timeout=30000)
+            except Exception as fc_err:
+                logger.warning(f"[Shioaji] fetch_contracts partial: {fc_err}")
 
             if not accounts:
                 logger.error("登入失敗：沒有取得帳戶資訊")
@@ -279,8 +284,12 @@ class ShioajiBroker(BaseBroker):
                     api_key=self._api_key,
                     secret_key=self._secret_key,
                     receive_window=300000,
-                    fetch_contract=True,
+                    fetch_contract=False,
                 )
+                try:
+                    self._api.fetch_contracts(contract_download=True, contracts_timeout=30000)
+                except Exception as fc_err:
+                    logger.warning(f"[Shioaji] fetch_contracts partial: {fc_err}")
 
                 if not accounts:
                     logger.error(f"[Reconnect] 登入失敗（第 {attempt} 次）")

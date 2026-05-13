@@ -1,75 +1,66 @@
-# Windows Task Scheduler 入口（PowerShell → WSL2 → run_weekly_review.sh）
+# Windows Task Scheduler entry point (PowerShell -> WSL2 -> run_weekly_review.sh)
+# ASCII-only to avoid PowerShell 5.1 codepage parse errors on Chinese paths.
 #
-# Task Scheduler 每週六 09:00 (Asia/Taipei) 觸發。本腳本：
-#   1. 確認 WSL2 Ubuntu 在跑（沒在跑就喚起）
-#   2. 在 WSL2 內執行 run_weekly_review.sh
-#   3. 把整段 log 寫回 Windows 端 logs/
-#   4. 失敗時透過 Telegram 通知
-#
-# Task Scheduler 設定建議：
-#   - Trigger: Weekly, Saturday 09:00 (start now), local time
-#   - Action: Start a program
-#       Program/script: powershell.exe
-#       Add arguments:  -NoProfile -ExecutionPolicy Bypass -File "C:\Users\xx\Desktop\vps永豐微台指\scripts\scheduled_trigger.ps1"
-#   - Conditions: ✅ Wake the computer to run this task
-#   - Settings:   ✅ Run task as soon as possible after a scheduled start is missed
-#                 ✅ If the task fails, restart every 10 minutes, up to 3 times
-#                 ✅ Stop task if runs longer than 30 minutes
+# Triggered every Saturday 09:00. This script:
+#   1. Confirms WSL2 Ubuntu is reachable
+#   2. Runs run_weekly_review.sh inside WSL Ubuntu (via ~/vps_trader symlink)
+#   3. Captures all output into ./logs/scheduled_*.log
+#   4. On failure: Telegram alert via Invoke-RestMethod
 
 $ErrorActionPreference = "Stop"
-$ProjectRoot = "C:\Users\xx\Desktop\vps永豐微台指"
-$LogDir      = Join-Path $ProjectRoot "scripts\logs"
-$null = New-Item -ItemType Directory -Force -Path $LogDir
+
+# Resolve project paths from $PSScriptRoot (no hardcoded Chinese path)
+$ProjectRoot = Split-Path -Parent $PSScriptRoot   # ...\vps<Chinese>
+$LogDir      = Join-Path $PSScriptRoot "logs"
+$null        = New-Item -ItemType Directory -Force -Path $LogDir
 $Stamp       = Get-Date -Format "yyyyMMdd_HHmmss"
-$LogFile     = Join-Path $LogDir "scheduled_$Stamp.log"
+$LogFile     = Join-Path $LogDir ("scheduled_" + $Stamp + ".log")
+$EnvFile     = Join-Path $ProjectRoot (Join-Path "ultra-trader-src" ".env")
 
 function Write-Log($msg) {
   $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
-  Add-Content -Path $LogFile -Value $line -Encoding utf8
+  Add-Content -LiteralPath $LogFile -Value $line -Encoding utf8
   Write-Output $line
 }
 
 function Send-TG($text) {
-  $envFile = Join-Path $ProjectRoot "ultra-trader-src\.env"
-  if (-not (Test-Path $envFile)) { return }
-  $token = (Get-Content $envFile | Where-Object { $_ -match "^(TG_BOT_TOKEN|TELEGRAM_BOT_TOKEN)=" } | Select-Object -First 1) -replace "^[^=]+=", ""
-  $chat  = (Get-Content $envFile | Where-Object { $_ -match "^(TG_CHAT_ID|TELEGRAM_CHAT_ID)=" }   | Select-Object -First 1) -replace "^[^=]+=", ""
+  if (-not (Test-Path -LiteralPath $EnvFile)) { return }
+  $token = (Get-Content -LiteralPath $EnvFile -Encoding utf8 | Where-Object { $_ -match "^(TG_BOT_TOKEN|TELEGRAM_BOT_TOKEN)=" } | Select-Object -First 1) -replace "^[^=]+=", ""
+  $chat  = (Get-Content -LiteralPath $EnvFile -Encoding utf8 | Where-Object { $_ -match "^(TG_CHAT_ID|TELEGRAM_CHAT_ID)=" }   | Select-Object -First 1) -replace "^[^=]+=", ""
   if (-not ($token -and $chat)) { return }
   try {
-    $body = @{ chat_id = $chat; text = $text; parse_mode = "Markdown" }
-    Invoke-RestMethod -Uri "https://api.telegram.org/bot$token/sendMessage" -Method Post -Body $body -TimeoutSec 10 | Out-Null
+    $body = @{ chat_id = $chat; text = $text }
+    Invoke-RestMethod -Uri ("https://api.telegram.org/bot" + $token + "/sendMessage") -Method Post -Body $body -TimeoutSec 10 | Out-Null
   } catch {
-    Write-Log "TG send failed: $_"
+    Write-Log ("TG send failed: " + $_)
   }
 }
 
 Write-Log "================================================================"
-Write-Log "scheduled_trigger 啟動"
+Write-Log "scheduled_trigger starting"
 Write-Log "================================================================"
 
-# ---- 預檢 WSL2 ----
-$wslList = wsl.exe --list --running 2>&1
-Write-Log "WSL running: $wslList"
-
-# WSL2 內專案路徑（從 /mnt/c/... 經 ~/vps_trader symlink 進去）
-$wslCmd = "bash -lc 'cd ~/vps_trader && bash scripts/run_weekly_review.sh 2>&1'"
+$wslList = wsl.exe --list --running 2>&1 | Out-String
+Write-Log ("WSL running list: " + ($wslList -replace "[\r\n]+", " "))
 
 try {
-  Write-Log "呼叫 wsl.exe 跑 run_weekly_review.sh"
-  $output = wsl.exe -d Ubuntu -- bash -lc "cd ~/vps_trader && bash scripts/run_weekly_review.sh 2>&1"
-  $exit = $LASTEXITCODE
-  Add-Content -Path $LogFile -Value $output -Encoding utf8
-  Write-Log "wsl exit code: $exit"
+  Write-Log "Invoking wsl.exe -> ~/vps_trader/scripts/run_weekly_review.sh"
+  # WSL2 sees the project via ~/vps_trader symlink (created during setup_wsl_local.sh)
+  $cmd    = 'cd ~/vps_trader && bash scripts/run_weekly_review.sh 2>&1'
+  $output = wsl.exe -d Ubuntu -- bash -lc $cmd
+  $exit   = $LASTEXITCODE
+  Add-Content -LiteralPath $LogFile -Value $output -Encoding utf8
+  Write-Log ("wsl exit code: " + $exit)
 
   if ($exit -ne 0) {
-    Send-TG "⚠️ *週度覆盤 Task Scheduler 異常*`nexit=$exit`nlog: ``$LogFile``"
-    Write-Log "FAILED (exit=$exit)"
+    Send-TG ("[ALERT] TMF weekly review scheduled task exit=" + $exit + " log: " + $LogFile)
+    Write-Log ("FAILED (exit=" + $exit + ")")
     exit $exit
   }
   Write-Log "DONE"
 } catch {
   $msg = $_.Exception.Message
-  Write-Log "ERROR: $msg"
-  Send-TG "🛑 *週度覆盤 Task Scheduler 例外*``$msg``"
+  Write-Log ("ERROR: " + $msg)
+  Send-TG ("[ALERT] TMF weekly review scheduled task exception: " + $msg)
   exit 1
 }
