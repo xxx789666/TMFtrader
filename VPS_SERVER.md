@@ -89,14 +89,16 @@ pgrep -fa "scripts/start.py|paper_night_orb.py|watchdog.py"
 ```cron
 # === 日盤 ===
 30 0 * * 1-5    /home/xx/ultra-trader-src/scripts/restart_day.sh        # 08:30 TST 啟動
-45 5 * * 1-5    pkill -f 'api.server.*8888'                              # 13:45 TST 關閉
+45 5 * * 1-5    pkill -f 'scripts/start.py'                              # 13:45 TST 關閉
 
 # === 夜盤 ===
 55 6 * * 1-5    /home/xx/ultra-trader-src/scripts/restart_night.sh      # 14:55 TST 啟動
 56 6 * * 1-5    /home/xx/ultra-trader-src/scripts/start_watchdog.sh     # 14:56 TST watchdog
-10 21 * * 0-4   pkill -f 'api.server.*8889'                              # 05:10 TST(隔日) 關
+10 21 * * 0-4   pkill -f 'paper_night_orb.py'                            # 05:10 TST(隔日) 關
 10 21 * * 0-4   pkill -f 'watchdog.py.*--night'                          # 05:10 TST 關 watchdog
 ```
+
+> ⚠️ **2026-05-13 修過**：原 `pkill -f 'api.server.*8888'` / `api.server.*8889` 抓不到實際 entry（scripts/start.py / paper_night_orb.py），舊 process 不會被收盤指令關掉、heartbeat 持續報「未收到 tick」假錯誤。已改成對齊真實 process 名稱。
 
 看 / 改：`crontab -l` / `crontab -e`
 
