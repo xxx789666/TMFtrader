@@ -145,16 +145,41 @@ class CircuitBreaker:
     def on_connection_lost(self):
         """連線中斷"""
         with self._lock:
+            was_active = self._state == CircuitState.ACTIVE
             self._state = CircuitState.EMERGENCY_STOP
             self._halt_reason = "券商連線中斷"
             logger.error("🚨 緊急停機: 券商連線中斷")
+        if was_active:
+            try:
+                from core.notify import tg
+                tg(
+                    "🚨 [UltraTrader] 券商連線中斷\n"
+                    "緊急停機\n"
+                    f"時間: {datetime.now().strftime('%H:%M:%S')}"
+                )
+            except Exception:
+                pass
 
     def on_connection_restored(self):
         """連線恢復"""
         with self._lock:
-            if self._state == CircuitState.EMERGENCY_STOP and "連線" in self._halt_reason:
+            was_stopped = (
+                self._state == CircuitState.EMERGENCY_STOP
+                and "連線" in self._halt_reason
+            )
+            if was_stopped:
                 self._state = CircuitState.ACTIVE
                 logger.info("✅ 連線恢復，解除緊急停機")
+        if was_stopped:
+            try:
+                from core.notify import tg
+                tg(
+                    "✅ [UltraTrader] 券商連線恢復\n"
+                    "解除緊急停機\n"
+                    f"時間: {datetime.now().strftime('%H:%M:%S')}"
+                )
+            except Exception:
+                pass
 
     def manual_resume(self):
         """手動恢復交易"""

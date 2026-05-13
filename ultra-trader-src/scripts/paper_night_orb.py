@@ -649,8 +649,16 @@ def main():
 
     contract = api.Contracts.Futures.MXF.MXFR1
 
+    # ── Tick heartbeat 狀態（monotonic clock 防 NTP 跳動）
+    _hb_state = {"last": None, "disconnected": False}
+
     # ── Tick 訂閱
     def on_tick(exchange, tick):
+        _hb_state["last"] = time.monotonic()
+        if _hb_state["disconnected"]:
+            _hb_state["disconnected"] = False
+            tg_night(f"✅ Tick 恢復 @ {datetime.now():%H:%M:%S}")
+            logger.info("[Heartbeat] Tick 恢復")
         try:
             ts = datetime.fromtimestamp(tick.datetime / 1e9) \
                 if isinstance(tick.datetime, (int, float)) else tick.datetime
@@ -670,6 +678,32 @@ def main():
         name="ForceCloseGuard",
     )
     guard_thread.start()
+
+    # ── Tick heartbeat 監控（>120s 無 tick 視為斷線、僅在 21:00-04:30 主時段告警）
+    def _tick_heartbeat(stop_ev, timeout_sec=120):
+        from datetime import time as dtime
+        while not stop_ev.is_set():
+            time.sleep(10)
+            t = datetime.now().time()
+            in_window = (t >= dtime(21, 0)) or (t <= dtime(4, 30))
+            if not in_window:
+                continue
+            last = _hb_state["last"]
+            if last is None:
+                continue  # 還沒收到第一筆 tick
+            elapsed = time.monotonic() - last
+            if elapsed > timeout_sec and not _hb_state["disconnected"]:
+                _hb_state["disconnected"] = True
+                logger.error(f"[Heartbeat] {elapsed:.0f}s 未收到 tick")
+                tg_night(f"🚨 Tick 中斷 {elapsed:.0f}s 沒收到 @ {datetime.now():%H:%M:%S}")
+
+    hb_thread = threading.Thread(
+        target=_tick_heartbeat,
+        args=(stop_event,),
+        daemon=True,
+        name="TickHeartbeat",
+    )
+    hb_thread.start()
 
     logger.info(f"[Subscribe] MXF tick feed active. Waiting for bars...")
     logger.info(f"[Paper] Log: {paper.path}")
