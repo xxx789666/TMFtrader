@@ -33,6 +33,19 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8")
 load_dotenv(ROOT / ".env")
 
+# ─── TG 推送（沿用 core/notify.py 的 tg() 函式、失敗靜默）────
+try:
+    from core.notify import tg as _tg
+except Exception:
+    def _tg(msg: str): pass  # 沒 core/notify 就 noop
+
+def tg_night(msg: str):
+    """夜盤專用 TG 推送、加 [Night ORB] 前綴"""
+    try:
+        _tg(f"🌙 [Night ORB] {msg}")
+    except Exception:
+        pass
+
 # ─── 路徑設定 ───────────────────────────────────────────────
 MODEL_PATH    = ROOT / "deployed_strategies" / "tmf_orb_night" / "orb_filter_b2.pkl"
 FEATURES_PATH = ROOT / "deployed_strategies" / "tmf_orb_night" / "selected_features_b2.txt"
@@ -463,10 +476,12 @@ class NightORBEngine:
                     self._orb_ready = True
                     logger.info(f"[ORB] Range ready: [{self._orb_low:.0f},{self._orb_high:.0f}] "
                                 f"width={orb_w_atr:.2f}×ATR")
+                    tg_night(f"區間建立 [{self._orb_low:.0f},{self._orb_high:.0f}] width={orb_w_atr:.2f}×ATR")
                 else:
                     self._session_done = True
                     logger.info(f"[ORB] Range skipped: width={orb_w_atr:.2f}×ATR "
                                 f"(need {MIN_ORB_WIDTH_ATR}-{MAX_ORB_WIDTH_ATR})")
+                    tg_night(f"區間跳過 width={orb_w_atr:.2f}×ATR 不在 {MIN_ORB_WIDTH_ATR}-{MAX_ORB_WIDTH_ATR} 範圍、今夜停手")
             return
 
         if self._session_done:
@@ -495,8 +510,10 @@ class NightORBEngine:
         feats = _compute_live_features(list(self.bars))
         ml_pass, ml_prob = self.ml.predict(feats)
 
-        logger.info(f"[ORB] Signal {'LONG' if direction==1 else 'SHORT'} @ {price:.0f} "
+        sig_dir = 'LONG' if direction==1 else 'SHORT'
+        logger.info(f"[ORB] Signal {sig_dir} @ {price:.0f} "
                     f"| ML prob={ml_prob:.3f} {'✅ PASS' if ml_pass else '❌ SKIP'}")
+        tg_night(f"訊號 {sig_dir} @ {price:.0f} | ML prob={ml_prob:.3f} {'✅ PASS' if ml_pass else '❌ SKIP'}")
 
         if not ml_pass:
             self._session_done = True
@@ -520,8 +537,10 @@ class NightORBEngine:
         self._session_entry = sess
         self._session_done = True
 
-        logger.info(f"[Trade] ENTER {'LONG' if direction==1 else 'SHORT'} "
+        enter_dir = 'LONG' if direction==1 else 'SHORT'
+        logger.info(f"[Trade] ENTER {enter_dir} "
                     f"@ {price:.0f}  SL={sl:.0f}  ATR={atr:.1f}")
+        tg_night(f"📥 進場 {enter_dir} @ {price:.0f}  SL={sl:.0f}  ATR={atr:.1f}  ML={ml_prob:.2f}")
 
     def _close(self, reason: str, price: float, ts: datetime):
         pnl = (price - self._entry_price) * self._direction
@@ -545,6 +564,10 @@ class NightORBEngine:
         }
         self.paper.log(rec)
         self._in_trade = False
+        # TG 推送出場
+        emoji = "🎯" if r_mult > 0 else "🛑"
+        tg_night(f"{emoji} 出場 {rec['direction']} @ {price:.0f} "
+                 f"進場 {self._entry_price:.0f} | R={r_mult:+.2f} | 原因: {reason}")
 
 
 # ─── 強制平倉守護執行緒 ───────────────────────────────────────
