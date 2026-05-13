@@ -29,6 +29,19 @@ HOUR=$(date +%H)
 MIN=$(date +%M)
 DAY=$(date +%u)   # 1=Mon ... 7=Sun
 
+# ─── Restart 互斥：若 restart_*.sh 正在跑、本輪 watchdog skip ─────
+RESTART_LOCK=/tmp/ultratrader_restart_in_progress
+if [ -f "$RESTART_LOCK" ]; then
+  LOCK_TIME=$(awk '{print $2}' "$RESTART_LOCK" 2>/dev/null)
+  NOW=$(date +%s)
+  if [ -n "$LOCK_TIME" ] && [ $((NOW - LOCK_TIME)) -lt 60 ]; then
+    # 60s 內、restart 仍進行中、跳過本輪
+    exit 0
+  fi
+  # 過期、視為殭屍 lock、刪掉
+  rm -f "$RESTART_LOCK"
+fi
+
 log()    { echo "[$(date '+%F %T')] $*" >> "$LOG"; }
 notify() {
   [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ] && \
