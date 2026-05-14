@@ -556,19 +556,86 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
   - (5) `restart_*.sh` 從 VPS-only 改為 git tracked
   - 部署完成、ORB session 未中斷、新 cron 已生效、TG 測試訊息已驗收
 
-**5/14（四）+ 5/15（五）**
-- [ ] **08:35 TG 是否收到「🔄 [Cron] 日盤 start.py 排程重啟」**（驗 restart_day.sh TG hook、commit `44bbb90`）
-- [ ] **13:50 TG 是否收到「📊 [日盤日報]」**（驗 daily_status_ping.sh day）
-- [ ] **14:55 TG 是否收到「🌙 [Cron] 夜盤 paper_night_orb 排程重啟」**（驗 restart_night.sh TG hook、且生效後 ORB 該有 tick heartbeat）
-- [ ] **05:15 隔日 TG 是否收到「🌙 [夜盤日報]」**（驗 daily_status_ping.sh night）
-- [ ] 每日早 check：`ssh ultratrader-night 'tail data/logs/ultratrader_*.log' ; cat data/risk_state*.json`
-- [ ] TG 是否有「策略心跳異常」spam
-- ~~[ ] 對比 VPS / 桌機 paper~~ ⚠️ **過時、5/13 起 VPS 唯一 live、桌機已無 TMF paper 進程**（per memory [[paper-ea-actual-location]]）
-- [ ] **驗證 watchdog 自癒**：手動 `ssh ultratrader-night 'kill <paper_night_orb_PID>'` → 新 `vps_watchdog.sh` 每分鐘 cron、預期 **≤ 2 分鐘**（不是舊版 12 分鐘）內重啟、且 TG 收到「🔧 [VPS Watchdog] paper_night_orb 重啟成功」
-- [ ] **審查 5/13 restart 風暴根因**：16:02–17:25 vps_watchdog.log 顯示 start.py 連續判定「8888 not listening 10-min grace」+ paper_night_orb 多輪 restart FAILED、PID 一路換到 15720/17085 才穩定。要看：(1) 8888 為何在 16:02 卡住 → broker login race? Shioaji reconnect? (2) commit `16123b9` 的 `/tmp/ultratrader_restart_in_progress` 60s lock 是否真有阻擋互打 (3) 17:25 後靜默是 mutex 生效還是只是 lucky stable
+**5/14（四）**
+- [x] **08:30 日盤 cron restart 驗證**：TG 收到「🔄 [Cron] 日盤 start.py 排程重啟 PID=49253」✅
+- [x] **13:45 日盤收盤 broker spam 風波**：發現 circuit_breaker 在收盤 dead zone 震盪、8 則「[UltraTrader] 券商連線中斷/恢復」湧入 TG、commit `0f45ea7` 加 5 分鐘 cooldown、commit `3d687fd` rename [UltraTrader]→[Sinopac-Paper]/[Sinopac-Live] 動態 tag、PID 60541 重啟生效
+- [x] **🚨 重大發現：日盤 0 trade 是 kbars API bug 不是市況**
+  - log `[Shioaji] TMF 歷史 K 棒: 0 bars` (broker.py:727)、整個早盤 09:00-12:59 共 4.5 小時 [Scan] log=0、breakout.py:145 `if bar_count < 80: return None` 全程觸發
+  - 進一步測試（`scripts/_test_kbars.py`）：TMFR1 / TXFR1 / MXFR1 / 股票 2330 / 古老日期、**全部 0 bars**
+  - 結論：永豐 `api.kbars()` 帳號層級失能、不是合約 / 日期 / 程式碼問題
+  - 影響：每日 08:30 cron restart 後策略要 6.5h warm-up 才能 scan、整個早盤幾乎 mute
+  - memory: [[shioaji-kbars-api-zero-bars]]
+- [x] **🚨 根因再深挖：`api.usage()` 流量配額爆量 318%**
+  - bytes=1.59 GB / limit=500 MB (paper、0 成交額等級)、remaining=-1.07 GB
+  - 完全符合官方「流量超量 → 行情查詢類 API 回空值」說法
+  - 升級規則：近 30 日 API 成交額 ≥ 1 大台 (或 4 小台) 即升 2GB/日（官方文檔）
+  - TMF 微台口數換算 / 自動 vs 申請 / paper 是否算成交 → 官方未寫、已 email 永豐
+- [x] **14:30 現場處置：止血**
+  - 手動 `kill` start.py PID 60541、註解 `vps_watchdog.sh` crontab → 完全停止 quota 累積
+  - ORB PID 63301 仍在跑（14:55 cron 自動啟動、Shioaji 直連、不受 kbars 影響）
+  - 預期：5/15 00:00 TST quota reset → 08:30 cron 自然恢復日盤
+- [x] **修法 A 已 commit + rsync（commit `0892ac7`）**
+  - `core/broker.py::_start_kbar_poller()` 加 env var `ENABLE_KBAR_POLLER` 開關、預設停用
+  - VPS disk 已是新版（md5 對齊）、明早 08:30 cron 起的 start.py 才會載入
+  - 預期節省：~10-50 MB/日（Solace 斷線時不再 REST fallback 浪費）
+  - 副作用詳見 memory: [[vps-traffic-optimization-side-effects]]
+
+**5/15（五）— 早上必做（按時間）**
+- [ ] **00:30 TST**（若還醒著）：跑 `bash scripts/_test_kbars.py`、看 bytes 是否歸 0 → 若是 = TST 00:00 重置
+- [ ] **07:30 TST**：再跑 `_test_kbars.py`、若才剛重置 = UTC 00:00 重置；若仍未重置 = IP 整日被鎖、需打永豐
+- [ ] **08:30 TST**：cron 自動 restart start.py、看 TG 應收「🔄 [Cron] 日盤」+ log 應有「[KbarPoller] 已停用（節省流量、設 ENABLE_KBAR_POLLER=true 可復開）」
+- [ ] **08:31 TST**：解註解 crontab `* * * * * /home/xx/ultra-trader-src/scripts/vps_watchdog.sh >/dev/null 2>&1`（恢復守護）
+- [ ] **09:00 TST**：跑 `api.usage()`、看 30 分鐘流量 → 推算今日 baseline、應該 <300 MB
+- [ ] **13:50 TST**：TG 收「📊 [日盤日報]」、trades 應該 ≥ 1（如果 kbars 恢復、breakout 能正常 scan）
+- [ ] **14:55 TST**：TG 收「🌙 [Cron] 夜盤」、ORB 上線
+- [ ] **21:30 TST**：ORB session 啟動觀察
+- [ ] 永豐客服回覆（已寄 email、9 個問題）
+
+**5/15（五）— 隨時可做**
+- [ ] **驗證 watchdog 自癒**：手動 `kill <paper_night_orb_PID>` → `vps_watchdog.sh` 預期 ≤ 2 分鐘內重啟 + TG 「🔧 paper_night_orb 重啟成功」
+- [ ] **審查 5/13 restart 風暴根因**：16:02–17:25 vps_watchdog.log 顯示 start.py 8888 卡死。看：(1) 8888 為何 16:02 卡住 → broker login race? Shioaji reconnect? (2) commit `16123b9` mutex 真有效嗎 (3) 17:25 後靜默是 mutex 還是 lucky
 
 **5/16（六）**
 - [ ] **09:00 Hermes 自動跑首份「來自 VPS」的覆盤、確認 TG 收到**
+- [ ] **架構優化評估**（依 5/15 觀察結果）：
+  - [ ] 修法 B：取消 daily 08:30 cron restart（前置：先驗 `risk/manager.py` 新交易日內部 reset 邏輯）
+  - [ ] 修法 C：reconnect 不重抓 fetch_contracts
+  - [ ] 提早 daily cron 08:30 → 02:00、或 bar buffer 持久化、根治日盤暖機依賴
+
+---
+
+### 🔴 5/19 切 live 前必修待解問題清單（總覽）
+
+**P0 阻塞切 live**
+- [ ] kbars API 是否真會在 quota reset 後恢復（隨時測 `_test_kbars.py`）
+- [ ] paper 500MB/日 對雙策略不夠 → 修法 A 已 commit、明天 08:30 後驗效
+- [ ] 日盤 breakout 80-bar warm-up 仍依賴 kbars → 短期靠 quota 恢復、長期靠修法 B 或提早 cron
+
+**P1 等永豐客服回覆**
+- [ ] quota reset 時區（TST vs UTC vs 滾動 24h）
+- [ ] TMF 微台口數如何換算（決定第一筆 live 下哪個合約）
+- [ ] 升等是即時 / 隔日 / 月結
+- [ ] paper mode 是否算成交
+- [ ] 雙策略 24h 訂閱合理流量 / IP 白名單
+- [ ] 帳號 / IP 是否已被當日暫停、是否需主動 unblock 申請
+
+**P3 架構優化**
+- [ ] 修法 B：取消 daily 08:30 cron restart（需先驗 risk_state 新交易日 reset 邏輯）
+- [ ] 修法 C：reconnect 不重抓 fetch_contracts
+- [ ] 提早 cron 啟動時間（08:30 → 02:00、避開 kbars 依賴）
+- [ ] bar buffer 持久化（每根 K 棒寫 csv、startup 讀回、完全擺脫 kbars 依賴）
+
+**P4 細節未深究**
+- [ ] daily JSON 顯示 `contract=MXF` 而非 `TMF`（顯示 bug、不影響交易）
+- [ ] `_kbar_poller_started` flag 在 reconnect 時的邊際 case（修法 A 已從根本避免）
+- [ ] risk_state.json 跨日 reset 邏輯（修法 B 前置條件）
+- [ ] `scripts/_test_kbars.py` 是否加進 `.gitignore: scripts/_*.py`
+
+**memory 參考**
+- [[shioaji-kbars-api-zero-bars]]：kbars 0 bars 根因
+- [[vps-traffic-optimization-side-effects]]：3 個修法的副作用清單
+- [[tg-full-event-coverage-preference]]：所有異動推 TG 偏好
+- [[vps-deploy-without-restart]]：rsync 後不手動重啟偏好
 
 ### Day 5（你做、2026-05-19 週一切實單）
 
