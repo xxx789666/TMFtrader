@@ -50,6 +50,10 @@ class CircuitBreaker:
         self._daily_loss: float = 0.0
         self._consecutive_losses: int = 0
         self._today: Optional[str] = None
+        # TG 防 spam：同一 reason 5 分鐘內不重推（避免收盤 dead zone heartbeat 誤判震盪）
+        self._last_tg_lost_time: Optional[datetime] = None
+        self._last_tg_restored_time: Optional[datetime] = None
+        self._tg_cooldown_sec: int = 300
 
     @property
     def state(self) -> CircuitState:
@@ -149,13 +153,20 @@ class CircuitBreaker:
             self._state = CircuitState.EMERGENCY_STOP
             self._halt_reason = "券商連線中斷"
             logger.error("🚨 緊急停機: 券商連線中斷")
-        if was_active:
+            now = datetime.now()
+            should_push = was_active and (
+                self._last_tg_lost_time is None
+                or (now - self._last_tg_lost_time).total_seconds() > self._tg_cooldown_sec
+            )
+            if should_push:
+                self._last_tg_lost_time = now
+        if should_push:
             try:
                 from core.notify import tg
                 tg(
                     "🚨 [UltraTrader] 券商連線中斷\n"
                     "緊急停機\n"
-                    f"時間: {datetime.now().strftime('%H:%M:%S')}"
+                    f"時間: {now.strftime('%H:%M:%S')}"
                 )
             except Exception:
                 pass
@@ -170,13 +181,20 @@ class CircuitBreaker:
             if was_stopped:
                 self._state = CircuitState.ACTIVE
                 logger.info("✅ 連線恢復，解除緊急停機")
-        if was_stopped:
+            now = datetime.now()
+            should_push = was_stopped and (
+                self._last_tg_restored_time is None
+                or (now - self._last_tg_restored_time).total_seconds() > self._tg_cooldown_sec
+            )
+            if should_push:
+                self._last_tg_restored_time = now
+        if should_push:
             try:
                 from core.notify import tg
                 tg(
                     "✅ [UltraTrader] 券商連線恢復\n"
                     "解除緊急停機\n"
-                    f"時間: {datetime.now().strftime('%H:%M:%S')}"
+                    f"時間: {now.strftime('%H:%M:%S')}"
                 )
             except Exception:
                 pass
