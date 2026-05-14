@@ -430,7 +430,18 @@ class ShioajiBroker(BaseBroker):
         REST K棒輪詢 fallback：
         當 Solace 失敗（超過 interval 秒沒收到 Tick）時，
         每 interval 秒從 api.kbars() 取最新 1 分 K 棒，合成假 Tick 注入。
+
+        2026-05-14: 預設停用、節省 500MB/日流量配額。
+        若 Solace 真斷線、改靠 circuit_breaker.on_connection_lost() 推 TG 通知人工處理、
+        不再合成假 tick 餵策略（避免基於 stale 資料的錯誤訊號）。
+        要復開：環境變數 ENABLE_KBAR_POLLER=true。
         """
+        import os as _os
+        if (_os.environ.get("ENABLE_KBAR_POLLER", "").strip().lower()
+                not in ("1", "true", "yes")):
+            logger.info("[KbarPoller] 已停用（節省流量、設 ENABLE_KBAR_POLLER=true 可復開）")
+            return
+
         if getattr(self, '_kbar_poller_started', False):
             return  # 已有輪詢線程，避免重連後重複啟動
         self._kbar_poller_started = True
