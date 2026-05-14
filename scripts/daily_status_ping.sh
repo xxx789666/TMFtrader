@@ -26,18 +26,29 @@ fi
 
 TODAY=$(date +%F)
 TODAY_COMPACT=$(date +%Y%m%d)
+# 夜盤 session 跨日（昨晚啟動、今晨 05:10 收盤）、CSV 用啟動日命名、所以 night 模式抓昨天
+YESTERDAY=$(date -d "yesterday" +%F)
+YESTERDAY_COMPACT=$(date -d "yesterday" +%Y%m%d)
 
 if [ "$SESSION" = "day" ]; then
   HEADER="📊 [日盤日報] $TODAY"
   PROC_NAME='scripts/start.py'
+  REPORT_DATE="$TODAY"
+  REPORT_COMPACT="$TODAY_COMPACT"
 else
-  HEADER="🌙 [夜盤日報] $TODAY"
+  # 夜盤日報跑在 05:15、報的是「昨夜啟動的 session」
+  HEADER="🌙 [夜盤日報] $YESTERDAY 夜盤"
   PROC_NAME='paper_night_orb.py'
+  REPORT_DATE="$YESTERDAY"
+  REPORT_COMPACT="$YESTERDAY_COMPACT"
 fi
 
 # Process 狀態
 if pgrep -f "$PROC_NAME" >/dev/null; then
   PROC_STATUS="✅ 跑中"
+elif [ "$SESSION" = "night" ]; then
+  # 夜盤日報跑在 05:15、cron 已於 05:10 pkill paper_night_orb、process 不在是預期
+  PROC_STATUS="✅ 已收盤（05:10 cron 自動停）"
 else
   PROC_STATUS="❌ 沒在跑"
 fi
@@ -63,7 +74,7 @@ except Exception as e:
     SUMMARY="(無交易紀錄檔)"
   fi
 else
-  NIGHT_CSV="$PROJECT/data/paper_trading/night_orb_${TODAY_COMPACT}.csv"
+  NIGHT_CSV="$PROJECT/data/paper_trading/night_orb_${REPORT_COMPACT}.csv"
   if [ -f "$NIGHT_CSV" ]; then
     TOTAL=$(wc -l < "$NIGHT_CSV")
     TRADES=$((TOTAL - 1))
