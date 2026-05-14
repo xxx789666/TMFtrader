@@ -3,12 +3,19 @@ UltraTrader 熔斷機制
 異常狀況自動停機，保護帳戶安全
 """
 
+import os
 import threading
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Optional
 
 from loguru import logger
+
+
+def _tg_tag() -> str:
+    """根據 TRADING_MODE 決定 TG prefix（paper / live 切換時自動跟進）"""
+    mode = (os.environ.get("TRADING_MODE", "paper") or "paper").strip().lower()
+    return "[Sinopac-Live]" if mode == "live" else "[Sinopac-Paper]"
 
 
 class CircuitState(Enum):
@@ -164,7 +171,7 @@ class CircuitBreaker:
             try:
                 from core.notify import tg
                 tg(
-                    "🚨 [UltraTrader] 券商連線中斷\n"
+                    f"🚨 {_tg_tag()} 券商連線中斷\n"
                     "緊急停機\n"
                     f"時間: {now.strftime('%H:%M:%S')}"
                 )
@@ -192,7 +199,7 @@ class CircuitBreaker:
             try:
                 from core.notify import tg
                 tg(
-                    "✅ [UltraTrader] 券商連線恢復\n"
+                    f"✅ {_tg_tag()} 券商連線恢復\n"
                     "解除緊急停機\n"
                     f"時間: {now.strftime('%H:%M:%S')}"
                 )
