@@ -61,10 +61,29 @@ python3 /tmp/_test_kbars.py 2>&1 | tail -10
 UsageStatus(connections=N, bytes=X, limit_bytes=Y, remaining_bytes=Z)
 ```
 
-### 方法 B：未來可實現（待開發）
-- `scripts/_log_quota.py`：純 login + api.usage() + logout（不 fetch_contracts、最省）
-- cron 一日 4 次自動記錄到此檔
-- 警戒推 TG（remaining < 100MB 時告警）
+### 方法 B：自動記錄（**已部署 2026-05-15**）
+
+腳本：`scripts/log_quota.py`、cron 一日 4 次自動跑：
+
+| UTC | TST | 用途 |
+|---|---|---|
+| 01:05 | 09:05 | 開盤後 baseline |
+| 06:00 | 14:00 | 日盤收盤後、夜盤前 |
+| 14:00 | 22:00 | 夜盤開盤 + ORB session 啟動 |
+| 20:30 | 04:30（隔日）| 強平前最後快照 |
+
+行為：
+- 短暫 `api.login(fetch_contract=False)` → `api.usage()` → `logout`（每次 ~1MB）
+- 追加一行到 `data/quota_history.csv`
+- `remaining_bytes < 100 MB` 自動推 TG 警示 🚨
+- stdout summary + `data/logs/quota_cron.log` 紀錄
+
+手動跑（隨時）：
+```bash
+ssh ultratrader-night '/home/xx/ultra-trader-src/.venv/bin/python3 \
+  /home/xx/ultra-trader-src/scripts/log_quota.py --verbose'
+# --verbose 每次都推 TG（debug 用）、不加只在警戒時推
+```
 
 ---
 
@@ -96,6 +115,7 @@ UsageStatus(connections=N, bytes=X, limit_bytes=Y, remaining_bytes=Z)
 | **2026-05-14 14:30** | **1,519 MB** | **-1,019 MB** | 2 | 雙策略 + 重連風暴 + 手動 restart | 🚨 **爆量 318%、kbars 全 0** |
 | 2026-05-14 14:30+ | (持續) | (繼續累積) | 1 → 0 | 手動 kill start.py、剩 ORB | 止血、避免進第二階段 |
 | **2026-05-15 08:57** | **29 MB** | **471 MB** | 2 | 08:30 start.py 重啟 + `_test_kbars.py` 測 | ✅ **quota 已重置、kbars 恢復** |
+| 2026-05-15 10:12 | 30 MB | 470 MB | 2 | start.py + `log_quota.py` 部署測 | log_quota.py 自動化已上、第一筆 CSV |
 
 ---
 
