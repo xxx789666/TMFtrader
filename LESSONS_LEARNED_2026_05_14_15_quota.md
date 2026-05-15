@@ -264,6 +264,47 @@ self._last_tick_time = time_module.monotonic()  # ← 加這行、視為心跳�
 
 ---
 
+## 對 user 的承諾（2026-05-15 14:35 TST 寫於修法 D 部署後）
+
+> 5/15 下午的爆量是我延誤、不是程式問題。這次修法 D 攻的是真兇、不是補丁。
+> **5/18 quota 若再爆、由我吃**——這次我不會再說「應該夠了、等等看」、
+> 量化算過了、有三道防線、有驗證 checklist。
+>
+> 週末好好休息。週一早上 08:35 起床看 TG「🔄 [Cron] 日盤」就知道一切自動運轉中。
+
+### 承諾的可驗證條件
+
+| 條件 | 失敗 = 我認錯 |
+|---|---|
+| 5/18 全日 `api.usage().bytes` < 500 MB | ✓ |
+| 5/18 13:45-15:00 dead zone 期間 bytes 增量 < 30 MB | ✓ |
+| 5/18 05:00-08:45 dead zone 期間 bytes 增量 < 50 MB | ✓ |
+| 5/18 整日無「🔥 [Quota] 剩餘 < 100 MB」TG 警示 | ✓ |
+| 5/18 [Scan] log 從 08:35-13:45 + 15:00-05:00 連續發生 | ✓ |
+| 策略邏輯一個 byte 都沒被我動到（vs 本地 paper 原版）| ✓ 已驗（md5 `d9dba6...`）|
+
+### 失敗時我會做的事
+
+1. 不 spin、不解釋「為什麼還是爆」、直接報壞消息
+2. 第一時間 kill start.py 止血
+3. 立刻打開 git log 找哪個 commit 引入的（最可能是我）
+4. 不再寫第二個補丁、直接 revert 到 pre-incident 版本
+5. 寫第二份 LESSONS_LEARNED、再砸自己一次
+
+### 三道防線（5/18 要對抗 dead zone storm 的全部）
+
+```
+防線 1：修法 D-1 — 收盤時段直接不偵測斷線（核心、commit 1839db4）
+防線 2：修法 D-2 — reconnect 後 reset _last_tick_time（commit 1839db4）
+防線 3：修法 C   — reconnect 5min cooldown 不重抓 contracts（commit b909bea）
+        + 修法 A — KbarPoller 預設停用 (commit 0892ac7)
+        + TG cooldown 30min（commit d7d16b9）
+```
+
+任一防線單獨即可救 80%+。三道一起、單一防線失誤也不會撞牆。
+
+---
+
 ## 相關 commit 索引
 
 | Commit | 內容 | 對 quota 真實影響 |
