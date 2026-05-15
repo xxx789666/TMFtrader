@@ -231,12 +231,36 @@ class ShioajiBroker(BaseBroker):
                 logger.warning(f"登出時發生錯誤: {e}")
 
     def start_heartbeat_monitor(self, tick_timeout_sec: int = 30):
-        """啟動 tick 心跳監控 — 超過 N 秒沒收到 tick 視為斷線（使用 monotonic clock 防 NTP 跳動）"""
+        """啟動 tick 心跳監控 — 超過 N 秒沒收到 tick 視為斷線（使用 monotonic clock 防 NTP 跳動）
+
+        2026-05-15 修法 D-1：加 dead zone 判斷、市場休市時段不偵測斷線、避免 storm。
+        交易時段（08:45-13:45 日盤 / 15:00-05:00 夜盤 / 平日）保持原 30s 敏感偵測。
+        環境變數 DISABLE_HEARTBEAT_DEAD_ZONE=true 可關閉、回到舊行為。
+        """
+        from datetime import datetime as _dt_now, time as _dt_time
+
+        def _is_dead_zone():
+            """週末 + 日盤夜盤 gap、無 tick 是預期、不算斷線。"""
+            import os as _os
+            if _os.environ.get("DISABLE_HEARTBEAT_DEAD_ZONE", "").strip().lower() in ("1", "true", "yes"):
+                return False
+            now = _dt_now.now()
+            if now.weekday() >= 5:  # Sat=5, Sun=6
+                return True
+            t = now.time()
+            if _dt_time(13, 45) <= t < _dt_time(15, 0):  # 日盤→夜盤 gap
+                return True
+            if _dt_time(5, 0) <= t < _dt_time(8, 45):  # 夜盤→日盤 gap
+                return True
+            return False
+
         def _monitor():
             while self._connected:
                 time_module.sleep(10)
                 if not self._connected:
                     break
+                if _is_dead_zone():
+                    continue  # 收盤時段不偵測、避免 reconnect storm
                 if self._last_tick_time:
                     elapsed = time_module.monotonic() - self._last_tick_time
                     if elapsed > tick_timeout_sec and not self._reconnecting:
@@ -366,7 +390,10 @@ class ShioajiBroker(BaseBroker):
 
                 self._connected = True
                 self._reconnecting = False
-                logger.info(f"[Reconnect] 重連成功！")
+                # 修法 D-2：reconnect 成功後 reset 心跳基準、避免 _last_tick_time 不更新導致無限重試
+                # 即使下一秒仍無 tick、也要等 tick_timeout_sec 才會再觸發 reconnect、不會立即又 fire
+                self._last_tick_time = time_module.monotonic()
+                logger.info(f"[Reconnect] 重連成功！（_last_tick_time 已重置）")
 
                 if self._on_connection_restored_cb:
                     try:
