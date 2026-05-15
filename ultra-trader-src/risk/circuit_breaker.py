@@ -57,10 +57,13 @@ class CircuitBreaker:
         self._daily_loss: float = 0.0
         self._consecutive_losses: int = 0
         self._today: Optional[str] = None
-        # TG 防 spam：同一 reason 5 分鐘內不重推（避免收盤 dead zone heartbeat 誤判震盪）
+        # TG 防 spam：同一 reason 30 分鐘內不重推（避免收盤 dead zone 70min storm 反覆穿透 cooldown）
+        # 2026-05-15 從 300s → 1800s：5min cooldown 期間 ~14 pair × 28 則 TG、太吵
+        # 真實斷線情境也只會落一次 TG、30min 後仍未恢復才會 fire 第二則、合理
+        # 環境變數可調：CIRCUIT_BREAKER_TG_COOLDOWN_SEC
         self._last_tg_lost_time: Optional[datetime] = None
         self._last_tg_restored_time: Optional[datetime] = None
-        self._tg_cooldown_sec: int = 300
+        self._tg_cooldown_sec: int = int(os.environ.get("CIRCUIT_BREAKER_TG_COOLDOWN_SEC", "1800"))
 
     @property
     def state(self) -> CircuitState:
