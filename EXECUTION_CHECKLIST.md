@@ -737,6 +737,12 @@ user 醒來必做（5 分鐘）：
 
 ## Phase 9 — 5/20（三）切實單（你做、Claude 旁觀準備）
 
+> **第一筆下單建議：1 口小台 MXF**（不是 TMF 微台）
+> 理由：永豐升等門檻明列「1-4000 口小台」、但 TMF 微台換算未證實（Discord 2026-05-16 ShioajiCSBot escalating to victoryang）。
+> 1 口 MXF 保證金 ~50K + 手續費 ~100 + 滑價 ~50-100 ≈ 升等成本 < 300 NTD。
+> **隔日 5/21 (Thu) 08:00 TST quota reset 同時、limit_bytes 應跳 2GB**。
+> 後續所有交易可改回 TMF（微台保證金低、適合策略）。
+
 ### 9.0 盤前確認（08:00 TST 前）
 - [ ] 跑 `_test_kbars.py` 驗 quota < 100 MB（reset 後乾淨）
 - [ ] 跑 `git log -1` 確認 broker.py 是 `1839db4` 或更新（修法 D 在）
