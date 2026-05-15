@@ -1,14 +1,31 @@
 # 永豐微台指 — 自動化交易 + Hermes 週度覆盤 執行清單
 
-> 建立 2026-05-12 ｜ Hermes 覆盤已上線 ｜ **Phase 8 進行中：VPS 實戰部署，目標 2026-05-19 (Mon) 切實單** 🚀
+> **這份文件**：伴隨「第一天用 VPS → 實際用真錢下單成功」全旅程的執行紀錄與下一步指南。
 >
-> **現況（2026-05-13）**：
-> - 交易（VPS）：**GCP e2-small 35.221.239.245** 跑夜盤 paper、22:03 啟動、等開盤訊號（昨晚已上線）
-> - 交易（本機）：原 `永豐-自動化交易/` 同步 redact、可繼續同步 paper 做比對
-> - 覆盤：本機 WSL2 + Hermes + NIM、curl 推 TG（已驗證、5/16 首次自動跑）
-> - GitHub：`xxx789666/VPS--` private（secret leak 已清理重建）
+> 建立 2026-05-12 ｜ Hermes 覆盤已上線 ｜ **Phase 8 後期、Phase 9 待 5/19 啟動** 🚀
 >
-> **時程**：5/12 開 VPS ✅ → **5/13–15 paper 驗證（進行中）** → 5/16 Sat 09:00 Hermes 首次覆盤 → **5/19 Mon 08:30 切實單** 🚀
+> **最新進度（2026-05-15 收線）**：
+> - 交易（VPS）：start.py 已 emergency kill、watchdog disabled、夜盤 ORB 24:00 前還會跑、之後週末完全靜默
+> - 修法 D（broker.heartbeat dead-zone aware）已 commit `1839db4`、disk 上 VPS、明（5/18）08:30 cron 自然套用
+> - LESSONS_LEARNED 完整事件覆盤已寫（[[shioaji-kbars-api-zero-bars]] / quota 三波處理）
+> - **5/18 paper 最後驗證日 → 5/19 切實單**
+
+---
+
+## 📖 旅程地圖
+
+| 階段 | 日期 | 狀態 | 里程碑 |
+|---|---|---|---|
+| Phase 0-7 | 5/12 | ✅ 完成 | WSL2 + Hermes Agent + NIM + Telegram + Watchdog + Secret 善後 |
+| Phase 8 Day 0-1 | 5/12-5/13 | ✅ 完成 | GCP VPS 開機、Shioaji 登入成功、雙策略 paper 上線 |
+| Phase 8 Day 2-4 | 5/13-5/15 | ⏳ 完成 + 補救 | Paper 觀察、**quota 兩次爆量事件、修法 A/C/D 完整覆盤**（[LESSONS_LEARNED_2026_05_14_15_quota.md](LESSONS_LEARNED_2026_05_14_15_quota.md)）|
+| Phase 8 Day 5 | 5/18 | ⏰ 待跑 | Paper 最後驗證日（quota < 500 MB + ≥1 paper 進場）|
+| **Phase 9** | **5/19 (Mon)** | ⏰ **GO 切實單** | `TRADING_MODE=live`、第一筆真錢下單 🚀 |
+| Phase 10 | 5/19+ | - | 首單成交回報驗證、24h 嚴密監看 |
+| Phase 11 | 5/20-5/23 | - | Live 首週、確認 PnL 正確、覆盤對齊 |
+| Phase 12 | 5/24+ | - | 持續運維、每週六 Hermes 覆盤 |
+
+---
 
 ## ⏰ 今日 (5/13 三) 進度
 
@@ -691,7 +708,159 @@ user 醒來必做（5 分鐘）：
 - [[tg-full-event-coverage-preference]]：所有異動推 TG 偏好
 - [[vps-deploy-without-restart]]：rsync 後不手動重啟偏好
 
-### Day 5（你做、2026-05-19 週一切實單）
+## Phase 9 — 5/19（一）切實單（你做、Claude 旁觀準備）
+
+### 9.0 盤前確認（08:00 TST 前）
+- [ ] 跑 `_test_kbars.py` 驗 quota < 100 MB（reset 後乾淨）
+- [ ] 跑 `git log -1` 確認 broker.py 是 `1839db4` 或更新（修法 D 在）
+- [ ] SSH 確認 watchdog cron 仍啟用：`ssh ultratrader-night 'crontab -l | grep vps_watchdog'`
+- [ ] 確認本地 `永豐-自動化交易` paper 已停（如還沒）：[[paper-ea-actual-location]]
+- [ ] **永豐 App 確認可用 + 期貨帳戶有足夠保證金**（建議至少 1 口微台保證金 × 5 = 150K NTD）
+- [ ] 手機在身邊、SSH tunnel 可用：`ssh -L 8889:localhost:8889 ultratrader-night &`
+
+### 9.1 改設定（07:50-08:25 TST 之間、cron 觸發前）
+- [ ] SSH 到 VPS 改 `.env`：
+  ```bash
+  ssh ultratrader-night
+  cd ~/ultra-trader-src
+  cp .env .env.backup-paper   # 留 paper 版備份
+  sed -i 's/^TRADING_MODE=paper/TRADING_MODE=live/' .env
+  # 順便把 INITIAL_BALANCE 改成實際權益（不是 paper 的 222890）
+  # 用 nano 或 vim 改 INITIAL_BALANCE=<查永豐戶頭餘額>
+  nano .env
+  ```
+- [ ] 驗證 .env 改對：
+  ```bash
+  grep -E "TRADING_MODE|INITIAL_BALANCE" .env
+  # 應該看到 TRADING_MODE=live 跟 INITIAL_BALANCE=<你的數字>
+  ```
+
+### 9.2 cron 自然觸發 / 手動觸發（擇一）
+- 等 cron 08:30 自動跑 `restart_day.sh`、PID 新起、載入 `TRADING_MODE=live`
+- 或手動：`bash ~/ultra-trader-src/scripts/restart_day.sh`
+
+### 9.3 開盤前 5 分鐘驗證（08:30-08:45）
+- [ ] TG 收到「🔄 [Cron] 日盤 start.py 排程重啟 PID=...」
+- [ ] log 第一行有「[Mode] **live** (real orders enabled)」←（注意不是 paper）
+- [ ] log 內 KbarPoller 已停用 / Reconnect cooldown / Heartbeat 監控啟動 都看到
+- [ ] `curl -s http://localhost:8888/api/state | jq '.trading_mode'` 顯示 `"live"`
+- [ ] log 有 `[Warmup] N bars synthesized` + ema200 > 0
+- [ ] `cat data/risk_state.json` 看 peak_equity 對應你 INITIAL_BALANCE
+
+### 9.4 第一筆 live 訊號處置（最重要）
+- [ ] 守在電腦前到 09:30、看 [Scan] 確認策略持續 evaluate
+- [ ] 當 TG 推「[LIVE] 進場」：
+  - [ ] **立刻**開永豐 App → 期貨成交回報 → 確認真的下單 + 成交價 + 停損價
+  - [ ] 對應 log `notify_entry("live"...)` 進場價、跟 TG 一致、跟 App 一致
+  - [ ] **任一不一致立刻緊急退場**（見 9.6）
+- [ ] 第一筆出場（停損 / 停利 / 出場條件）：
+  - [ ] 永豐 App 確認平倉成功
+  - [ ] TG 推「[LIVE] 出場 ✅/❌ PnL=...」
+  - [ ] 三方一致：log / TG / App
+- [ ] 第一筆完成後**手動關閉 start.py 5 分鐘**：
+  ```bash
+  ssh ultratrader-night 'pkill -f start.py'
+  # 看 5 分鐘 broker 是否有殘留問題
+  # 確認沒事再啟動：ssh ultratrader-night 'bash ~/ultra-trader-src/scripts/restart_day.sh'
+  ```
+
+### 9.5 全日監看（5/19 8:30 - 5/20 8:30）
+- [ ] 每 1-2 小時看 TG 一次（quota / 心跳 / 進出場）
+- [ ] log_quota cron 4 次點都驗證 < 500 MB（特別注意 14:00 / 22:00 / 04:30）
+- [ ] 14:55 night ORB 啟動、ORB session 21:30 看是否進場
+- [ ] 04:00 force_close 後檢查 risk_state.json
+- [ ] 05:15 看 daily_status_ping night TG（夜盤日報）
+
+### 9.6 緊急退場 SOP（任何時刻可用）
+
+```bash
+# A. 切回 paper（不平倉、新單轉 paper）
+ssh ultratrader-night "sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/ultra-trader-src/.env"
+ssh ultratrader-night "bash ~/ultra-trader-src/scripts/restart_day.sh"
+
+# B. 全部平倉（緊急）
+ssh -L 8889:localhost:8889 ultratrader-night &
+curl -X POST http://localhost:8889/api/close_all
+
+# C. 停止整個 EA（包含夜盤、最徹底）
+ssh ultratrader-night "pkill -f 'start.py'; pkill -f 'paper_night_orb.py'"
+ssh ultratrader-night "crontab -l | sed 's/^\(30 0 .* restart_day\)/# \1/;s/^\(55 6 .* restart_night\)/# \1/' | crontab -"
+
+# D. 永豐 App 手動平倉（最終保險、24h 都可用）
+#    用手機 App 直接平掉所有期貨持倉、不依賴 VPS / 程式
+```
+
+---
+
+## Phase 10 — 5/19 首單實單成交驗收（你做）
+
+### 10.1 進場驗收
+- [ ] 永豐 App 期貨成交回報顯示 1 筆新單、合約 = TMFR1（或 TMFC6 之類具體月份）
+- [ ] 成交價跟 TG「[LIVE] 進場」訊息一致（容差 1-2 tick 正常）
+- [ ] 永豐 App 顯示有持倉、保證金被 hold 起來
+- [ ] log 內 `notify_entry("live", ...)` 對應該筆
+
+### 10.2 持倉期間（每 15 分鐘看一次）
+- [ ] 永豐 App 顯示未實現 PnL、跟 VPS api/state 的 unrealized_pnl 對得起來
+- [ ] log 內 `engine:_heartbeat` 顯示 position.side != flat
+
+### 10.3 出場驗收
+- [ ] TG「[LIVE] 出場 ✅ / ❌」訊息
+- [ ] 永豐 App 平倉成交回報、價格跟 TG 一致
+- [ ] 永豐 App 已實現損益 = TG 訊息內的 PnL（容差幾元手續費）
+- [ ] log 內 `notify_exit("live", ...)` 對應該筆
+- [ ] `data/performance/daily/2026-05-19.json` 內 trades 陣列多 1 筆、`trading_mode=live`
+
+### 10.4 失敗情境的紀錄
+- 若三方不一致（log / TG / App）：立刻緊急退場（9.6）+ 截圖保存 + 不再啟用直到查清楚
+
+---
+
+## Phase 11 — 5/19-5/23 Live 首週監控（你做、Claude 協助分析）
+
+每日 checklist：
+- [ ] 08:35 看 TG 「🔄 [Cron] 日盤」
+- [ ] 08:31 看 log 載入「TRADING_MODE=live」+ 修法 D 在
+- [ ] 09:00 / 14:00 / 22:00 / 04:30 log_quota cron 量測 < 500 MB
+- [ ] 13:50 日盤日報、看 trades 數 + PnL
+- [ ] 05:15 夜盤日報
+
+週六 5/23 09:00：
+- [ ] Hermes 自動跑「Live 首週覆盤」、TG 收到
+
+關鍵指標（5 個交易日累計）：
+- 總交易筆數 ≥ 5 筆（兩條策略都該有 fire 機會）
+- 三方一致率 100%（log / TG / App、容差內）
+- 0 次緊急退場
+- 0 次 quota 爆量
+- 0 次永豐 API 異常
+- PnL 跟手動算對得起來
+
+---
+
+## Phase 12 — 5/24+ 持續運維（穩定後）
+
+### 每日（自動 + 你看 TG）
+- cron 自動跑日夜盤、TG 自動推進出場 / 日報
+- 你看 TG 就好、無事不主動 SSH
+
+### 每週六 09:00（自動）
+- Hermes 跑週度覆盤、TG 推送
+- 你看完覆盤、決定下週是否要 tune 參數
+
+### 每月（你做）
+- 對帳：永豐月對帳單 vs 系統 `data/performance/daily/*.json` 累積
+- 結算日（每月第三個週三）：手動 ssh + `restart_day.sh` 一次（確保合約 reference 更新）
+
+### 例外時可能需要的事
+- 升級 API 等級（連續超量、聯絡永豐）
+- 重置 risk_state（peak_equity 異常時）
+- 切回 paper（觀察新策略 / 修 bug）
+- 短期停機（颱風 / 法說會 / 結算日波動大）
+
+---
+
+## ⚠️ 補：舊版 Day 5 計畫（已整合進 Phase 9-12、保留作 reference）
 
 - [ ] **盤前再 review 3 天 paper 結果**：
   - [ ] 無連續心跳異常
