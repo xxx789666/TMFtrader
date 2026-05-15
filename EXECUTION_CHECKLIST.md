@@ -604,12 +604,57 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 - [ ] **驗證 watchdog 自癒**：手動 `kill <paper_night_orb_PID>` → `vps_watchdog.sh` 預期 ≤ 2 分鐘內重啟 + TG 「🔧 paper_night_orb 重啟成功」
 - [ ] **審查 5/13 restart 風暴根因**：16:02–17:25 vps_watchdog.log 顯示 start.py 8888 卡死。看：(1) 8888 為何 16:02 卡住 → broker login race? Shioaji reconnect? (2) commit `16123b9` mutex 真有效嗎 (3) 17:25 後靜默是 mutex 還是 lucky
 
-**5/16（六）**
-- [ ] **09:00 Hermes 自動跑首份「來自 VPS」的覆盤、確認 TG 收到**
-- [ ] **架構優化評估**（依 5/15 觀察結果）：
-  - [ ] 修法 B：取消 daily 08:30 cron restart（前置：先驗 `risk/manager.py` 新交易日內部 reset 邏輯）
-  - [ ] 修法 C：reconnect 不重抓 fetch_contracts
-  - [ ] 提早 daily cron 08:30 → 02:00、或 bar buffer 持久化、根治日盤暖機依賴
+**5/15（五）下午—緊急事件補記**
+- [x] **13:45 第二次 quota 爆量 storm 重現**：bytes 從 144MB → 577MB（12 分鐘燒 433MB）
+- [x] **發現真兇**：broker.py `_attempt_reconnect()` 每次都 `fetch_contracts(~50MB)`、broker.heartbeat 把「市場無 tick」當「斷線」、dead zone 內無限重試
+- [x] **緊急止血**：kill start.py PID 246558、EMERGENCY DISABLE watchdog cron、quota 鎖在 577.9 MB
+- [x] **修法 D commit `1839db4`**：broker.heartbeat 加 dead-zone aware（13:45-15:00 / 05:00-08:45 / 週末不偵測）+ reconnect 成功 reset `_last_tick_time`
+- [x] **教訓 MD**：`LESSONS_LEARNED_2026_05_14_15_quota.md` 寫完、5 個錯誤 + 4 個反模式 + 真兇分析 + 週一驗證計畫
+- [x] **VPS broker.py rsync 完**：disk 上是新版、明天 08:30 cron 自然套用、不手動重啟
+
+**5/16（六）+ 5/17（日）— 週末完全休市、什麼都不用做**
+- 5/16 早上 05:10 cron 會自動關掉昨夜 ORB（最後一次夜盤）
+- 5/16 早上 05:15 daily_status_ping night 會推一則 TG「🌙 [夜盤日報]」
+- 之後整週末 VPS 完全靜默（start.py 不在跑、watchdog 停、cron `1-5` 週末不 fire restart_day / restart_night）
+- 5/16 09:00 TST Hermes 排程仍會跑「來自 VPS」覆盤、確認 TG 收到
+
+**5/18（一）— 切 live 前最後驗證日、自動 timeline**
+
+cron 自動觸發：
+- **08:30 TST**：cron `restart_day.sh` 自動跑、PID 新起、**載入修法 D broker.py**
+- **09:05 TST**：cron `log_quota.py` 自動量測、推 TG（若 > 100 MB 警示）
+- **13:45 TST**：日盤收盤、**修法 D 應該擋下 reconnect storm**
+- **13:50 TST**：cron `daily_status_ping.sh day` 推 TG 日盤日報
+- **14:00 TST**：cron `log_quota.py` 自動量測（**關鍵：應該 < 200 MB**）
+- **14:55 TST**：cron `restart_night.sh` 起 ORB
+- **21:30 TST**：ORB session 啟動
+- **22:00 TST**：cron `log_quota.py`（< 300 MB）
+- **04:30 TST 隔日**：cron `log_quota.py`（< 450 MB）
+- **05:10 TST 隔日**：cron pkill ORB
+- **05:15 TST 隔日**：daily_status_ping night 推 TG
+
+user 醒來必做（5 分鐘）：
+- [ ] 08:35 看 TG 「🔄 [Cron] 日盤 start.py 排程重啟」收到
+- [ ] **8:35 ssh 解註解 watchdog cron**：
+  ```bash
+  ssh ultratrader-night 'crontab -l | sed "s|^# EMERGENCY DISABLED.*||;s|^# \(\* \* \* \* \* /home/xx/.*vps_watchdog.sh.*\)$|\1|" | crontab -'
+  ssh ultratrader-night 'crontab -l | grep watchdog'   # 確認 watchdog 行不再有 # 開頭
+  ```
+- [ ] 09:00 看 log 有「[KbarPoller] 已停用」+「[Heartbeat] 監控啟動」
+- [ ] 09:05 後 TG 看是否有警示（**無警示 = quota 正常**）
+
+關鍵成功驗證（5/18 結束時）：
+- [ ] `api.usage()` 全日 < 500 MB（修法 D 真兇修對的證明）
+- [ ] [Scan] log 整個交易時段都有（策略真正在跑）
+- [ ] 至少 1 筆 paper trade（日盤 OR 夜盤、TG「📥 進場」）
+  - 若整日無進場：5/19 觀察、若連續 2 天無進場、審查策略條件是否過嚴
+  - 這是「下單進場成功」的驗收項目
+
+**5/19（二）切 live 前的 go / no-go 決策**
+- [ ] 5/18 quota < 500 MB ✓
+- [ ] 5/18 至少 1 筆 paper 進場、TG / CSV / daily JSON 三路一致 ✓
+- [ ] 永豐客服回覆（quota reset 時區 / TMF 口數 / 升等機制）
+- [ ] 改 `.env` `TRADING_MODE=live` + `INITIAL_BALANCE=<永豐實際權益>`
 
 ---
 
