@@ -729,7 +729,7 @@ user 醒來必做（5 分鐘）：
 - [ ] 5/18 + 5/19 至少 **1 筆完整 paper trade**（進場 + 出場、CSV / TG / daily JSON 三路一致）
 - [ ] 5/18 + 5/19 兩次 13:45 dead zone 都無 TG spam（修法 D 真擋下）
 - [ ] 5/18 + 5/19 兩次 05:00 dead zone 都無 TG spam
-- [ ] 永豐客服回覆 ≥ 3 題（quota 規則 / TMF 口數 / IP 狀態）
+- [x] 永豐客服回覆 ≥ 3 題（2026-05-15 17:24 SJ 客服確認：超量行為 / Solace 不切 / 升等靠實單下單、memory [[sinopac-api-quota-confirmed-2026-05-15]]）
 - [ ] 修法 C 的 cross-session subscribe 觀察：若 broker 有 reconnect、subscribe 沒 mute（tick 繼續進）
 - [ ] watchdog 自癒驗證（手動 kill paper_night_orb 看 ≤ 2 分鐘內拉起 + TG 通知）
 
