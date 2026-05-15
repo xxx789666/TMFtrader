@@ -2,13 +2,13 @@
 
 > **這份文件**：伴隨「第一天用 VPS → 實際用真錢下單成功」全旅程的執行紀錄與下一步指南。
 >
-> 建立 2026-05-12 ｜ Hermes 覆盤已上線 ｜ **Phase 8 後期、Phase 9 待 5/19 啟動** 🚀
+> 建立 2026-05-12 ｜ Hermes 覆盤已上線 ｜ **Phase 8 後期、Phase 9 待 5/20 啟動** 🚀
 >
 > **最新進度（2026-05-15 收線）**：
 > - 交易（VPS）：start.py 已 emergency kill、watchdog disabled、夜盤 ORB 24:00 前還會跑、之後週末完全靜默
-> - 修法 D（broker.heartbeat dead-zone aware）已 commit `1839db4`、disk 上 VPS、明（5/18）08:30 cron 自然套用
+> - 修法 D（broker.heartbeat dead-zone aware）已 commit `1839db4`、disk 上 VPS、5/18 08:30 cron 自然套用
 > - LESSONS_LEARNED 完整事件覆盤已寫（[[shioaji-kbars-api-zero-bars]] / quota 三波處理）
-> - **5/18 paper 最後驗證日 → 5/19 切實單**
+> - **切 live 日延後**：5/18-5/19 雙日 paper 驗證 → **5/20 (Wed) 切實單**（給修法 D 兩次 dead zone 實戰驗證）
 
 ---
 
@@ -19,11 +19,12 @@
 | Phase 0-7 | 5/12 | ✅ 完成 | WSL2 + Hermes Agent + NIM + Telegram + Watchdog + Secret 善後 |
 | Phase 8 Day 0-1 | 5/12-5/13 | ✅ 完成 | GCP VPS 開機、Shioaji 登入成功、雙策略 paper 上線 |
 | Phase 8 Day 2-4 | 5/13-5/15 | ⏳ 完成 + 補救 | Paper 觀察、**quota 兩次爆量事件、修法 A/C/D 完整覆盤**（[LESSONS_LEARNED_2026_05_14_15_quota.md](LESSONS_LEARNED_2026_05_14_15_quota.md)）|
-| Phase 8 Day 5 | 5/18 | ⏰ 待跑 | Paper 最後驗證日（quota < 500 MB + ≥1 paper 進場）|
-| **Phase 9** | **5/19 (Mon)** | ⏰ **GO 切實單** | `TRADING_MODE=live`、第一筆真錢下單 🚀 |
-| Phase 10 | 5/19+ | - | 首單成交回報驗證、24h 嚴密監看 |
-| Phase 11 | 5/20-5/23 | - | Live 首週、確認 PnL 正確、覆盤對齊 |
-| Phase 12 | 5/24+ | - | 持續運維、每週六 Hermes 覆盤 |
+| Phase 8 Day 5 | 5/18 (Mon) | ⏰ 待跑 | Paper 驗證日 1：修法 D 第一次實戰、quota < 500 MB + ≥1 paper 進場 |
+| Phase 8 Day 6 | 5/19 (Tue) | ⏰ 待跑 | Paper 驗證日 2：修法 D 穩定性、Go/No-Go 評估、永豐客服回覆 |
+| **Phase 9** | **5/20 (Wed)** | ⏰ **GO 切實單** | `TRADING_MODE=live`、第一筆真錢下單 🚀 |
+| Phase 10 | 5/20+ | - | 首單成交回報驗證、24h 嚴密監看 |
+| Phase 11 | 5/21-5/26 | - | Live 首週、確認 PnL 正確、覆盤對齊 |
+| Phase 12 | 5/27+ | - | 持續運維、每週六 Hermes 覆盤 |
 
 ---
 
@@ -45,7 +46,7 @@
 | **5/14 早** | 看 `data/performance/daily/2026-05-13_*.json` 整日紀錄 |
 | 5/14–15 | 持續 paper 觀察、TG 監看 |
 | **5/16 Sat 09:00** | Hermes 自動跑首份來自 VPS 資料的覆盤 |
-| **5/19 Mon 08:30** | 切 `TRADING_MODE=live` 🚀 |
+| **5/20 Wed 08:30** | 切 `TRADING_MODE=live` 🚀 |
 >
 > **未來**（VPS 租用後）：交易 EA 搬到 VPS、資料寫 VPS，本機 WSL2 透過 `sync_from_vps.sh` 拉資料；本架構同時支援這兩種模式（orchestrator 偵測有沒有 `.env.sync` 自動切換）。
 >
@@ -64,7 +65,7 @@
     ├─ scripts/watchdog.py               12-min 心跳監控
     ├─ deployed_strategies/tmf_orb_night/orb_filter_b2.pkl   B2 ML model
     ├─ certs/cert.pfx                    Shioaji 憑證
-    ├─ .env                              TRADING_MODE=paper（即將 5/19 切 live）
+    ├─ .env                              TRADING_MODE=paper（即將 5/20 切 live）
     └─ .venv (Python 3.12.13 + Shioaji 1.3.3 + xgboost/lightgbm)
   crontab (UTC):
     30 0 * * 1-5    日盤 08:30 啟動
@@ -103,7 +104,7 @@
 - [x] **Phase 4.5** orchestrator 內整合 runaway_guard ✅
 - [x] **Phase 5** Telegram 整合（**改用 curl 直推、不繞 Hermes gateway**）✅
 - [x] **Phase 7（中途插入）** Secret leak 善後 —— TG token + Shioaji key redact、刪 repo 重建乾淨版 ✅
-- [/] **Phase 8（進行中）** Day 0-1 完成 ✅（VPS 上線）｜ 5/13 跑 API 開通測試 + Hermes 接 VPS ｜ 5/13–15 paper 驗證 ｜ 5/19 切實單 🚀
+- [/] **Phase 8（進行中）** Day 0-1 完成 ✅（VPS 上線）｜ 5/13 跑 API 開通測試 + Hermes 接 VPS ｜ 5/13–15 paper 驗證 ｜ 5/20 切實單 🚀
 - [ ] **Phase 6** Hermes 覆盤上線驗證（paper 4 週 → 開放低風險自動套用）— 第 1 週已自動跑、繼續觀察 3 週
 
 ## 改週度的決策（2026-05-12）
@@ -482,7 +483,7 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 
 ## Phase 8 — VPS 實戰部署（Day 0-1 完成 ✅、3 天 paper 驗證進行中）
 
-> **目標**：5/12 啟動 → 5/15 前完成 VPS paper 驗證 → **5/19（下週一 08:30）切實單開盤**
+> **目標**：5/12 啟動 → 5/15 前完成 VPS paper 初次驗證 → 5/18-5/19 雙日 paper 最終驗證 → **5/20（週三 08:30）切實單開盤**
 >
 > **為何走這條**：桌機 24/7 開機風險（藍屏 / 斷網 / Windows update）。VPS 在台灣彰化機房、< 5ms 到 Shioaji、月費 NT$490。
 
@@ -667,7 +668,7 @@ user 醒來必做（5 分鐘）：
   - 若整日無進場：5/19 觀察、若連續 2 天無進場、審查策略條件是否過嚴
   - 這是「下單進場成功」的驗收項目
 
-**5/19（二）切 live 前的 go / no-go 決策**
+**5/20（三）切 live 前的 go / no-go 決策**（5/19 23:00 結算）
 - [ ] 5/18 quota < 500 MB ✓
 - [ ] 5/18 至少 1 筆 paper 進場、TG / CSV / daily JSON 三路一致 ✓
 - [ ] 永豐客服回覆（quota reset 時區 / TMF 口數 / 升等機制）
@@ -675,7 +676,7 @@ user 醒來必做（5 分鐘）：
 
 ---
 
-### 🔴 5/19 切 live 前必修待解問題清單（總覽）
+### 🔴 5/20 切 live 前必修待解問題清單（總覽）
 
 **P0 阻塞切 live**
 - [ ] kbars API 是否真會在 quota reset 後恢復（隨時測 `_test_kbars.py`）
@@ -708,7 +709,33 @@ user 醒來必做（5 分鐘）：
 - [[tg-full-event-coverage-preference]]：所有異動推 TG 偏好
 - [[vps-deploy-without-restart]]：rsync 後不手動重啟偏好
 
-## Phase 9 — 5/19（一）切實單（你做、Claude 旁觀準備）
+## Phase 8 Day 6 — 5/19（二）Paper 驗證日 2 + Go/No-Go 評估
+
+### 早上 8:30 cron 自動跑 → 看修法 D 第二次表現
+- [ ] 跑 `_test_kbars.py`、確認 quota < 200 MB（昨日累積 + 隔夜）
+- [ ] log 確認「[KbarPoller] 已停用」+「[Heartbeat] 監控啟動」+「[Reconnect] 跳過 fetch_contracts」（若有 reconnect 的話）
+- [ ] 09:00 跑 `api.usage()` 看 baseline、應該 < 50 MB（fresh quota 配合修法 D）
+
+### 整日觀察點
+- [ ] 13:45 dead zone：應該**完全靜默**（無 TG「斷線/恢復」、無 fetch_contracts log）
+- [ ] 13:50 日盤日報 TG
+- [ ] 14:55 夜盤 ORB cron + 21:30 session
+- [ ] 22:00 / 04:30 log_quota cron 量測 < 350 MB
+
+### Go/No-Go 評估表（5/19 23:00 TST 結算）
+打勾過 5 項以上 → 5/20 可切 live、否則延後一週至 5/26：
+
+- [ ] 5/18 + 5/19 兩日 quota 累計都 < 500 MB
+- [ ] 5/18 + 5/19 至少 **1 筆完整 paper trade**（進場 + 出場、CSV / TG / daily JSON 三路一致）
+- [ ] 5/18 + 5/19 兩次 13:45 dead zone 都無 TG spam（修法 D 真擋下）
+- [ ] 5/18 + 5/19 兩次 05:00 dead zone 都無 TG spam
+- [ ] 永豐客服回覆 ≥ 3 題（quota 規則 / TMF 口數 / IP 狀態）
+- [ ] 修法 C 的 cross-session subscribe 觀察：若 broker 有 reconnect、subscribe 沒 mute（tick 繼續進）
+- [ ] watchdog 自癒驗證（手動 kill paper_night_orb 看 ≤ 2 分鐘內拉起 + TG 通知）
+
+---
+
+## Phase 9 — 5/20（三）切實單（你做、Claude 旁觀準備）
 
 ### 9.0 盤前確認（08:00 TST 前）
 - [ ] 跑 `_test_kbars.py` 驗 quota < 100 MB（reset 後乾淨）
@@ -764,7 +791,7 @@ user 醒來必做（5 分鐘）：
   # 確認沒事再啟動：ssh ultratrader-night 'bash ~/ultra-trader-src/scripts/restart_day.sh'
   ```
 
-### 9.5 全日監看（5/19 8:30 - 5/20 8:30）
+### 9.5 全日監看（5/20 8:30 - 5/21 8:30）
 - [ ] 每 1-2 小時看 TG 一次（quota / 心跳 / 進出場）
 - [ ] log_quota cron 4 次點都驗證 < 500 MB（特別注意 14:00 / 22:00 / 04:30）
 - [ ] 14:55 night ORB 啟動、ORB session 21:30 看是否進場
@@ -792,7 +819,7 @@ ssh ultratrader-night "crontab -l | sed 's/^\(30 0 .* restart_day\)/# \1/;s/^\(5
 
 ---
 
-## Phase 10 — 5/19 首單實單成交驗收（你做）
+## Phase 10 — 5/20 首單實單成交驗收（你做）
 
 ### 10.1 進場驗收
 - [ ] 永豐 App 期貨成交回報顯示 1 筆新單、合約 = TMFR1（或 TMFC6 之類具體月份）
@@ -816,7 +843,7 @@ ssh ultratrader-night "crontab -l | sed 's/^\(30 0 .* restart_day\)/# \1/;s/^\(5
 
 ---
 
-## Phase 11 — 5/19-5/23 Live 首週監控（你做、Claude 協助分析）
+## Phase 11 — 5/21-5/26 Live 首週監控（你做、Claude 協助分析）
 
 每日 checklist：
 - [ ] 08:35 看 TG 「🔄 [Cron] 日盤」
@@ -838,7 +865,7 @@ ssh ultratrader-night "crontab -l | sed 's/^\(30 0 .* restart_day\)/# \1/;s/^\(5
 
 ---
 
-## Phase 12 — 5/24+ 持續運維（穩定後）
+## Phase 12 — 5/27+ 持續運維（穩定後）
 
 ### 每日（自動 + 你看 TG）
 - cron 自動跑日夜盤、TG 自動推進出場 / 日報
