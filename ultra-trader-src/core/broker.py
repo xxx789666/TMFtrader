@@ -286,10 +286,35 @@ class ShioajiBroker(BaseBroker):
                     receive_window=300000,
                     fetch_contract=False,
                 )
-                try:
-                    self._api.fetch_contracts(contract_download=True, contracts_timeout=30000)
-                except Exception as fc_err:
-                    logger.warning(f"[Shioaji] fetch_contracts partial: {fc_err}")
+
+                # 2026-05-15 修法 C：reconnect cooldown 內跳過 fetch_contracts、避免 dead zone
+                # storm（13:45-14:55 / 05:00-15:00）每 11s 一次 reconnect × ~50-100MB fetch、
+                # 一場 storm 可燒 200-400MB（昨日 quota 爆量主因）。
+                # cooldown 期內保留前次 cached self._contracts、跨 session 重用 contract 物件。
+                # 風險：cross-session subscribe 若 Shioaji 拒收會 mute、但 5min cooldown 過後
+                # 下一次 reconnect 會自動全抓恢復。設 DISABLE_RECONNECT_FETCH_COOLDOWN=true 可關。
+                import os as _os
+                _now_mono = time_module.monotonic()
+                _last_fetch = getattr(self, '_last_contracts_fetch_mono', 0)
+                _cooldown_sec = float(_os.environ.get("RECONNECT_FETCH_COOLDOWN_SEC", "300"))
+                _disable_cooldown = (
+                    _os.environ.get("DISABLE_RECONNECT_FETCH_COOLDOWN", "").strip().lower()
+                    in ("1", "true", "yes")
+                )
+                _should_fetch = _disable_cooldown or (_now_mono - _last_fetch) > _cooldown_sec
+
+                if _should_fetch:
+                    try:
+                        self._api.fetch_contracts(contract_download=True, contracts_timeout=30000)
+                        self._last_contracts_fetch_mono = _now_mono
+                    except Exception as fc_err:
+                        logger.warning(f"[Shioaji] fetch_contracts partial: {fc_err}")
+                else:
+                    _elapsed = _now_mono - _last_fetch
+                    logger.info(
+                        f"[Reconnect] 跳過 fetch_contracts（cooldown {_cooldown_sec:.0f}s 內、"
+                        f"上次 {_elapsed:.0f}s 前、節省流量、沿用 {len(self._contracts)} 個 cached 合約）"
+                    )
 
                 if not accounts:
                     logger.error(f"[Reconnect] 登入失敗（第 {attempt} 次）")
@@ -304,18 +329,20 @@ class ShioajiBroker(BaseBroker):
                         person_id=self._person_id,
                     )
 
-                # 重新取得合約
-                self._contracts.clear()
-                self._code_to_instrument.clear()
-                for code in self._contract_codes:
-                    contract = self._get_nearby_contract(code)
-                    if contract:
-                        self._contracts[code] = contract
-                        self._code_to_instrument[contract.code] = code
-                        if hasattr(contract, 'target_code') and contract.target_code:
-                            self._code_to_instrument[contract.target_code] = code
+                # 重新取得合約（修法 C：cooldown 跳過時複用 cached 合約物件、不 clear / rebuild）
+                if _should_fetch:
+                    self._contracts.clear()
+                    self._code_to_instrument.clear()
+                    for code in self._contract_codes:
+                        contract = self._get_nearby_contract(code)
+                        if contract:
+                            self._contracts[code] = contract
+                            self._code_to_instrument[contract.code] = code
+                            if hasattr(contract, 'target_code') and contract.target_code:
+                                self._code_to_instrument[contract.target_code] = code
 
-                self._contract = self._contracts.get(self._contract_code)
+                    self._contract = self._contracts.get(self._contract_code)
+                # else: 沿用前次 cached self._contracts / self._code_to_instrument / self._contract
 
                 # 重新註冊 callback + 重新訂閱
                 def _order_cb(stat, msg):
