@@ -580,13 +580,22 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
   - 預期節省：~10-50 MB/日（Solace 斷線時不再 REST fallback 浪費）
   - 副作用詳見 memory: [[vps-traffic-optimization-side-effects]]
 
+**5/14（四）夜盤結果（事後補記）**
+- ORB session 啟動 @ 21:35:00
+- 22:15 區間建立成功：**[41735, 42086] width=4.42×ATR**（不像 5/13 第一次 skipped 太窄）
+- 22:15 → 05:10 cron pkill、整夜**價格在區間內、零突破**、CSV 仍 header only
+- 結論：5/14 夜盤真的無下單條件（無突破訊號、不是腳本問題）
+
 **5/15（五）— 早上必做（按時間）**
-- [ ] **00:30 TST**（若還醒著）：跑 `bash scripts/_test_kbars.py`、看 bytes 是否歸 0 → 若是 = TST 00:00 重置
-- [ ] **07:30 TST**：再跑 `_test_kbars.py`、若才剛重置 = UTC 00:00 重置；若仍未重置 = IP 整日被鎖、需打永豐
-- [ ] **08:30 TST**：cron 自動 restart start.py、看 TG 應收「🔄 [Cron] 日盤」+ log 應有「[KbarPoller] 已停用（節省流量、設 ENABLE_KBAR_POLLER=true 可復開）」
-- [ ] **08:31 TST**：解註解 crontab `* * * * * /home/xx/ultra-trader-src/scripts/vps_watchdog.sh >/dev/null 2>&1`（恢復守護）
-- [ ] **09:00 TST**：跑 `api.usage()`、看 30 分鐘流量 → 推算今日 baseline、應該 <300 MB
-- [ ] **13:50 TST**：TG 收「📊 [日盤日報]」、trades 應該 ≥ 1（如果 kbars 恢復、breakout 能正常 scan）
+- [x] ~~00:30 TST `_test_kbars.py` 驗時區~~（沒做、跳到 08:57 一起測、由 08:57 結果反推 quota 在 08:57 之前某點重置）
+- [x] **08:57 TST 跑 `_test_kbars.py`** → **kbars 完全恢復**：TMFR1=1454 / 2330=798 / 昨日 TMFR1=1140 bars ✅
+- [x] **api.usage() 確認 quota 重置** → bytes=30MB / limit=500MB / **remaining=493MB** ✅ 配額正常
+- [x] **08:30 TST cron 自動 restart start.py**：PID=234932、TG 應收「🔄 [Cron] 日盤 start.py 排程重啟」
+- [x] **🎉 修法 A 生效驗證**：log 有 `08:30:53 [KbarPoller] 已停用（節省流量、設 ENABLE_KBAR_POLLER=true 可復開）`、commit `0892ac7` 真的在跑
+- [x] **🎉 Warmup 完全成功**：`[Shioaji] TMF 歷史 K 棒: 3722 bars`、合成 `404 bars for 5m / 138 bars for 15m`、`last_price=42360.0`、ema200=42077（不再是 0）
+- [x] **[Scan] 從 8:35 就開始**：09:00 前已 10 個 [Scan] log、整個早盤策略 active、**不再 mute 4.5 小時** 🎉
+- [x] **08:57 TST 解註解 watchdog cron**：`* * * * * /home/xx/ultra-trader-src/scripts/vps_watchdog.sh` 已恢復
+- [ ] **13:50 TST**：TG 收「📊 [日盤日報]」、trades 應該 ≥ 1（如果 breakout 真有訊號 fire）
 - [ ] **14:55 TST**：TG 收「🌙 [Cron] 夜盤」、ORB 上線
 - [ ] **21:30 TST**：ORB session 啟動觀察
 - [ ] 永豐客服回覆（已寄 email、9 個問題）
