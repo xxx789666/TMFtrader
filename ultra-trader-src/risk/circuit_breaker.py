@@ -64,10 +64,15 @@ class CircuitBreaker:
         self._last_tg_lost_time: Optional[datetime] = None
         self._last_tg_restored_time: Optional[datetime] = None
         self._tg_cooldown_sec: int = int(os.environ.get("CIRCUIT_BREAKER_TG_COOLDOWN_SEC", "1800"))
+        # 2026-05-18 修法：價格異常獨立 TG + auto-restore（與 broker 斷線分開、避免 label 誤導）
+        self._last_tg_anomaly_time: Optional[datetime] = None
+        self._anomaly_trigger_time: Optional[datetime] = None
+        self._anomaly_auto_restore_sec: int = int(os.environ.get("ANOMALY_AUTO_RESTORE_SEC", "60"))
 
     @property
     def state(self) -> CircuitState:
-        """取得當前狀態（自動檢查冷卻結束 + 新日重置）— 線程安全"""
+        """取得當前狀態（自動檢查冷卻結束 + 新日重置 + 價格異常 60s auto-restore）— 線程安全"""
+        anomaly_restored = False
         with self._lock:
             # 冷卻結束自動恢復
             if self._state == CircuitState.COOLDOWN and self._cooldown_until:
@@ -85,7 +90,29 @@ class CircuitBreaker:
                     self._state = CircuitState.ACTIVE
                     self._halt_reason = ""
                     logger.info("🔄 新交易日，熔斷自動重置")
-            return self._state
+            # 2026-05-18 修法：價格異常 EMERGENCY_STOP 若超過 anomaly_auto_restore_sec 自動恢復
+            if (self._state == CircuitState.EMERGENCY_STOP
+                    and self._anomaly_trigger_time
+                    and self._halt_reason.startswith("價格異常")
+                    and (datetime.now() - self._anomaly_trigger_time).total_seconds()
+                        > self._anomaly_auto_restore_sec):
+                logger.info(f"✅ 價格異常已穩定 {self._anomaly_auto_restore_sec}s、自動恢復交易")
+                self._state = CircuitState.ACTIVE
+                self._halt_reason = ""
+                self._anomaly_trigger_time = None
+                anomaly_restored = True
+            return_state = self._state
+        if anomaly_restored:
+            try:
+                from core.notify import tg
+                tg(
+                    f"✅ {_tg_tag()} 價格異常已穩定\n"
+                    f"自動恢復交易（{self._anomaly_auto_restore_sec}s 後）\n"
+                    f"時間: {datetime.now().strftime('%H:%M:%S')}"
+                )
+            except Exception:
+                pass
+        return return_state
 
     @property
     def can_trade(self) -> bool:
@@ -204,6 +231,39 @@ class CircuitBreaker:
                 tg(
                     f"✅ {_tg_tag()} 券商連線恢復\n"
                     "解除緊急停機\n"
+                    f"時間: {now.strftime('%H:%M:%S')}"
+                )
+            except Exception:
+                pass
+
+    def on_price_anomaly(self, reason: str):
+        """價格異常觸發暫停（與 broker 斷線分開、避免 TG label 誤導）
+
+        2026-05-18 加：engine._check_price_anomaly 觸發時呼叫此方法、
+        TG 訊息明確標示「價格異常」、不再借用「連線中斷」label。
+        state 在 anomaly_auto_restore_sec（預設 60s）後自動恢復 ACTIVE。
+        """
+        with self._lock:
+            was_active = self._state == CircuitState.ACTIVE
+            self._state = CircuitState.EMERGENCY_STOP
+            self._halt_reason = f"價格異常: {reason}"
+            self._anomaly_trigger_time = datetime.now()
+            logger.error(f"⚠️ 緊急停機: {self._halt_reason}")
+            now = datetime.now()
+            should_push = was_active and (
+                self._last_tg_anomaly_time is None
+                or (now - self._last_tg_anomaly_time).total_seconds() > self._tg_cooldown_sec
+            )
+            if should_push:
+                self._last_tg_anomaly_time = now
+        if should_push:
+            try:
+                from core.notify import tg
+                tg(
+                    f"⚠️ {_tg_tag()} 價格劇烈異常\n"
+                    f"自動暫停交易\n"
+                    f"原因: {reason}\n"
+                    f"{self._anomaly_auto_restore_sec}s 後自動恢復\n"
                     f"時間: {now.strftime('%H:%M:%S')}"
                 )
             except Exception:

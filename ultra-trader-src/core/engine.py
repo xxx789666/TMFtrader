@@ -1497,6 +1497,28 @@ class TradingEngine:
                 if pipeline:
                     pipeline._last_heartbeat_price = pipeline.aggregator.current_price
             return
+        # 2026-05-18 修法：session 開盤 ±2 min 跳過 anomaly 檢查
+        # 原因：日盤 08:45 / 夜盤 15:00 / ORB 21:30 開盤搶單常跳 50+ 點、5×ATR 易誤觸
+        # 環境變數 ANOMALY_SESSION_GRACE_SEC=0 可關閉 grace（不建議、會撞 anomaly 風暴）
+        import os as _os
+        from datetime import datetime as _dt
+        grace_sec = int(_os.environ.get("ANOMALY_SESSION_GRACE_SEC", "120"))
+        if grace_sec > 0:
+            now_t = _dt.now().time()
+            now_total = now_t.hour * 3600 + now_t.minute * 60 + now_t.second
+            session_boundaries = [
+                8 * 3600 + 45 * 60,   # 08:45 日盤開
+                14 * 3600 + 55 * 60,  # 14:55 夜盤 cron restart_night
+                21 * 3600 + 30 * 60,  # 21:30 ORB session start
+            ]
+            if any(abs(now_total - b) <= grace_sec for b in session_boundaries):
+                # session 開盤前後跳過 anomaly check（但仍更新 _last_heartbeat_price）
+                for inst in self.instruments:
+                    pipeline = self.pipelines.get(inst)
+                    if pipeline and pipeline.aggregator.current_price > 0:
+                        pipeline._last_heartbeat_price = pipeline.aggregator.current_price
+                return
+
         for inst in self.instruments:
             pipeline = self.pipelines.get(inst)
             if not pipeline or not pipeline.snapshot or pipeline.snapshot.atr <= 0:
@@ -1514,8 +1536,10 @@ class TradingEngine:
                     f"（偏離 {deviation:.1f} > 5×ATR {atr * 5:.1f}）— 自動暫停交易！"
                 )
                 if self.risk_manager:
-                    self.risk_manager.circuit_breaker.on_connection_lost()
-                    self.risk_manager.circuit_breaker._halt_reason = f"價格異常: {inst} 偏離 {deviation:.0f} 點"
+                    # 2026-05-18 修法：用 on_price_anomaly 分開 TG label、避免「連線中斷」誤導
+                    self.risk_manager.circuit_breaker.on_price_anomaly(
+                        f"{inst} 偏離 {deviation:.0f} 點 (5×ATR={atr * 5:.0f})"
+                    )
             elif deviation > atr * 3:
                 logger.warning(
                     f"[ANOMALY] {inst} 價格異常波動: {pipeline._last_heartbeat_price:.1f} → {price:.1f}"
