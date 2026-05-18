@@ -636,7 +636,45 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 - 之後整週末 VPS 完全靜默（start.py 不在跑、watchdog 停、cron `1-5` 週末不 fire restart_day / restart_night）
 - 5/16 09:00 TST Hermes 排程仍會跑「來自 VPS」覆盤、確認 TG 收到
 
-**5/18（一）— 切 live 前最後驗證日、自動 timeline**
+**5/18（一）— Paper 驗證日 1 結算（事後紀錄）**
+
+✅ **修法 D 真兇修對的鐵證**——五小時 quota 0 增加、修法 D-1 dead-zone aware 完美擋下 storm
+
+| 時間 (TST) | 事件 | 結果 |
+|---|---|---|
+| 08:30:04 | cron `restart_day.sh` 自動跑、PID 268323 | ⚠️ `fetch_contracts partial`、TMF 找不到合約（永豐 reset 後 server 還沒穩） |
+| 08:38:01 | watchdog 偵測 8888 not listening、10 min grace 開始 | 進入自癒流程 |
+| 08:39:21 | 手動 restart_day.sh → PID 269001 | ✅ Contract TMFR1 / Subscribe / KbarPoller off / Warmup 1442 bars 全綠 |
+| 09:05 / 14:00 | log_quota cron 自動量測 | bytes=28.6 MB（5 小時 0 增加）|
+| **13:45-14:55 dead zone** | **修法 D-1 真實首秀** | **0 reconnect、0 fetch_contracts、quota 0 燒** 🔥 |
+| 13:50 | daily_status_ping day TG | 推送正常 |
+| 14:55:04 | cron `restart_night.sh`、ORB PID 280699 | ✅ Login Shioaji OK / Subscribe MXF |
+| 21:30:00 | ORB session start: `[ORB] New session: 2026-05-18-N` | ✅ |
+| **21:35:16** | 🚨 TG「[Sinopac-Paper] 券商連線中斷」 | **誤報**：實為 engine `_check_price_anomaly` 觸發（TMF 21:30→21:35 跌 52 點 ≥ 5×ATR）、label 寫錯 |
+| 21:39:17 | 手動重啟 start.py → PID 294633 | ✅ circuit_breaker reset、broker 重連、quota 57 MB / 500 MB |
+
+**5/18 quota 全日預估**：~100-130 MB / 500 MB（早盤 restart 燒 28 + 開盤異常 restart 14 + 夜盤 ORB tick ~60 = ~100）= **降 87%**（vs 5/14 同期 1.59 GB）
+
+**5/18 paper trade**：0 筆（日盤單邊強空無壓縮無回調、breakout 設計不抓；夜盤待 22:15 區間判定）
+
+**5/18 Go/No-Go 條件對照**：
+- [x] quota < 500 MB ✅（57 MB、剩 443 MB buffer）
+- [x] 13:45 dead zone 無 TG spam ✅（修法 D 真兇修對）
+- [ ] 至少 1 筆 paper trade（今日 0、待 5/19 觀察）
+- [x] 05:00 dead zone 待 5/19 早上驗
+- [x] 永豐客服 + Discord 回覆 ≥ 3 題 ✅
+- [ ] 修法 C cross-session subscribe（今日無 reconnect 機會驗、明日看）
+- [ ] watchdog 自癒（08:38 grace + 08:39 真實 restart_day.sh 觸發、算半驗）
+
+**5/18 新發現待辦（5/20 切 live 前必修）**：
+- [ ] **anomaly threshold 太敏感**：5×ATR=52 點、夜盤開盤搶單常見、提高到 6-7×ATR 或開盤 ±2min grace（memory [[engine-price-anomaly-misnamed-connection-lost]]）
+- [ ] **TG label 分離**：`circuit_breaker.on_price_anomaly()` vs `on_connection_lost()`、避免文字誤導
+- [ ] **anomaly auto-restore**：1 分鐘內價格回穩、自動 resume active
+- [ ] **cron 08:30 → 08:35**：給永豐 5 分鐘穩定（memory [[sinopac-fetch-contracts-partial-after-reset]]）
+
+---
+
+**5/18（一）— 原計畫 timeline（保留作 reference）**
 
 cron 自動觸發：
 - **08:30 TST**：cron `restart_day.sh` 自動跑、PID 新起、**載入修法 D broker.py**
