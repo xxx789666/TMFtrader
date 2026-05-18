@@ -709,6 +709,20 @@ user 醒來必做（5 分鐘）：
 - [[tg-full-event-coverage-preference]]：所有異動推 TG 偏好
 - [[vps-deploy-without-restart]]：rsync 後不手動重啟偏好
 
+## ⚠️ 5/18 21:35 發現新問題（已修復、待 5/20 前評估永久解）
+
+- **症狀**：TG「🚨 [Sinopac-Paper] 券商連線中斷」at 21:35
+- **真因**：engine.py:1512 `_check_price_anomaly` 在 ORB session 開盤誤判（TMF 52 點跳價 > 5×ATR）、呼叫 circuit_breaker.on_connection_lost、TG label 錯誤
+- **已處置**：kill + restart_day.sh、PID 269001 → 294633、circuit_breaker reset
+- **5/20 切 live 前評估**：
+  - [ ] anomaly threshold 從 5×ATR 提高至 6-7×ATR
+  - [ ] 或 ORB session start 前後 2 分鐘 grace
+  - [ ] 或 anomaly 觸發 auto-restore（1 分鐘）
+  - [ ] TG label 分離（價格異常 vs 連線中斷）
+- memory: [[engine-price-anomaly-misnamed-connection-lost]]
+
+---
+
 ## Phase 8 Day 6 — 5/19（二）Paper 驗證日 2 + Go/No-Go 評估
 
 ### 早上 8:30 cron 自動跑 → 看修法 D 第二次表現
