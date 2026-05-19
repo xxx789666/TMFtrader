@@ -15,15 +15,20 @@
 
 ---
 
-## 7:40 — 入金確認（如還沒做）
+## 7:40 — 入金確認
 
-✅ **已完成 5/19**：入金 95,000 NTD
+✅ **5/19 已匯入 95,000 NTD**
+⏰ **5/20 早上再匯入 30,000 NTD**（總計 125,000）
 
 策略**只下 TMF 微台指**（.env 寫死 CONTRACT_CODE=TMF、max_contracts=3）：
 - 1 口微台保證金 ~28K
-- max 3 口 = ~84K + 11K 浮動 = 95K 配置完美
+- max 3 口 = ~84K
+- 125K - 84K = **41K 浮動 buffer**（充足）
 
-**驗證**：永豐 App → 期貨 → 帳戶 → 「**可用保證金**」≥ 90,000 → ✅
+**驗證**：永豐 App → 期貨 → 帳戶 → 「**可用保證金**」≥ 120,000 → ✅
+
+⚠️ 若 5/20 早上才匯款、注意銀行 T+0 / T+1 到帳時間、09:00 前要確認入帳完成。
+建議**現在用永豐銀行約定轉帳**（即時到、免手續費）、避免早上趕。
 
 ---
 
@@ -38,10 +43,11 @@ cp .env .env.backup-paper
 
 # 改 TRADING_MODE + INITIAL_BALANCE 一次到位
 sed -i 's/^TRADING_MODE=paper/TRADING_MODE=live/' .env
-sed -i 's/^INITIAL_BALANCE=222890.0/INITIAL_BALANCE=95000.0/' .env
+sed -i 's/^INITIAL_BALANCE=222890.0/INITIAL_BALANCE=125000.0/' .env
 
-# 注意：95000 是你實際匯入的金額、若銀行扣手續費實際入帳少 N 元
+# 注意：125000 是 5/19 (95K) + 5/20 早 (30K) 預計總入金
 # 以永豐 App 顯示的「可用保證金」為準、必要時用 nano 微調
+# nano .env  # Ctrl+O 存 / Ctrl+X 離開
 ```
 
 **驗證**：
@@ -51,7 +57,7 @@ grep -E "TRADING_MODE|INITIAL_BALANCE" .env
 應該看到：
 ```
 TRADING_MODE=live
-INITIAL_BALANCE=95000.0   ← 已入金額
+INITIAL_BALANCE=125000.0   ← 總入金額
 ```
 → ✅
 
