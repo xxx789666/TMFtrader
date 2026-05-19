@@ -678,7 +678,7 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 
 cron 自動觸發：
 - **08:30 TST**：cron `restart_day.sh` 自動跑、PID 新起、**載入修法 D broker.py**
-- **09:05 TST**：cron `log_quota.py` 自動量測、推 TG（若 > 100 MB 警示）
+- **09:05 TST**：cron `log_1..py` 自動量測、推 TG（若 > 100 MB 警示）
 - **13:45 TST**：日盤收盤、**修法 D 應該擋下 reconnect storm**
 - **13:50 TST**：cron `daily_status_ping.sh day` 推 TG 日盤日報
 - **14:00 TST**：cron `log_quota.py` 自動量測（**關鍵：應該 < 200 MB**）
