@@ -15,15 +15,15 @@
 
 ---
 
-## 7:40 — 入金（如還沒做）
+## 7:40 — 入金確認（如還沒做）
 
-打開永豐 App → 期貨 → 出入金 → 從證券帳戶或銀行帳戶轉到「**期貨保證金**」
+✅ **已完成 5/19**：入金 95,000 NTD
 
-最低建議：
-- 跑 1 口微台：**35,000-40,000 NTD**
-- 跑 1 口小台：**70,000-80,000 NTD**
+策略**只下 TMF 微台指**（.env 寫死 CONTRACT_CODE=TMF、max_contracts=3）：
+- 1 口微台保證金 ~28K
+- max 3 口 = ~84K + 11K 浮動 = 95K 配置完美
 
-**驗證**：永豐 App → 期貨 → 帳戶 → 「**可用保證金**」 ≥ 你要的金額 → ✅
+**驗證**：永豐 App → 期貨 → 帳戶 → 「**可用保證金**」≥ 90,000 → ✅
 
 ---
 
@@ -36,14 +36,12 @@ cd ~/ultra-trader-src
 # 備份 paper 版（之後若要切回 paper 用）
 cp .env .env.backup-paper
 
-# 改 TRADING_MODE
+# 改 TRADING_MODE + INITIAL_BALANCE 一次到位
 sed -i 's/^TRADING_MODE=paper/TRADING_MODE=live/' .env
+sed -i 's/^INITIAL_BALANCE=222890.0/INITIAL_BALANCE=95000.0/' .env
 
-# 改 INITIAL_BALANCE（用你實際可用保證金）
-# 用 nano 編輯、找到 INITIAL_BALANCE=222890.0 改成你的數字
-nano .env
-# 例如 60000：INITIAL_BALANCE=60000.0
-# Ctrl+O 存、Enter、Ctrl+X 離開
+# 注意：95000 是你實際匯入的金額、若銀行扣手續費實際入帳少 N 元
+# 以永豐 App 顯示的「可用保證金」為準、必要時用 nano 微調
 ```
 
 **驗證**：
@@ -53,7 +51,7 @@ grep -E "TRADING_MODE|INITIAL_BALANCE" .env
 應該看到：
 ```
 TRADING_MODE=live
-INITIAL_BALANCE=60000.0   ← 你的實際金額
+INITIAL_BALANCE=95000.0   ← 已入金額
 ```
 → ✅
 
