@@ -523,7 +523,8 @@ class TradingEngine:
                 on_lost=lambda: self.risk_manager.circuit_breaker.on_connection_lost() if self.risk_manager else None,
                 on_restored=lambda: self.risk_manager.circuit_breaker.on_connection_restored() if self.risk_manager else None,
             )
-            self.broker.start_heartbeat_monitor(tick_timeout_sec=30)
+            # 2026-05-19 修法 E：不再 hard-code 30、改用 broker.py default（讀 BROKER_TICK_TIMEOUT_SEC env、預設 120s）
+            self.broker.start_heartbeat_monitor()
 
         self._running = True
         self.state = EngineState.RUNNING
