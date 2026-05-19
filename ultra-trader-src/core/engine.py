@@ -1497,12 +1497,14 @@ class TradingEngine:
                 if pipeline:
                     pipeline._last_heartbeat_price = pipeline.aggregator.current_price
             return
-        # 2026-05-18 修法：session 開盤 ±2 min 跳過 anomaly 檢查
+        # 2026-05-18 修法：session 開盤 ±10 min 跳過 anomaly 檢查
         # 原因：日盤 08:45 / 夜盤 15:00 / ORB 21:30 開盤搶單常跳 50+ 點、5×ATR 易誤觸
+        # 5/18 21:35:16 實測撞 anomaly（距 21:30 開盤 5min 16s）、120s grace 不夠、改 600s
+        # 配合 anomaly auto-restore 60s 雙保險、整體最壞情況也只鎖 1 分鐘
         # 環境變數 ANOMALY_SESSION_GRACE_SEC=0 可關閉 grace（不建議、會撞 anomaly 風暴）
         import os as _os
         from datetime import datetime as _dt
-        grace_sec = int(_os.environ.get("ANOMALY_SESSION_GRACE_SEC", "120"))
+        grace_sec = int(_os.environ.get("ANOMALY_SESSION_GRACE_SEC", "600"))
         if grace_sec > 0:
             now_t = _dt.now().time()
             now_total = now_t.hour * 3600 + now_t.minute * 60 + now_t.second
