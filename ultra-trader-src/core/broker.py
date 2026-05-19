@@ -230,13 +230,20 @@ class ShioajiBroker(BaseBroker):
             except Exception as e:
                 logger.warning(f"登出時發生錯誤: {e}")
 
-    def start_heartbeat_monitor(self, tick_timeout_sec: int = 30):
+    def start_heartbeat_monitor(self, tick_timeout_sec: int = None):
         """啟動 tick 心跳監控 — 超過 N 秒沒收到 tick 視為斷線（使用 monotonic clock 防 NTP 跳動）
 
         2026-05-15 修法 D-1：加 dead zone 判斷、市場休市時段不偵測斷線、避免 storm。
-        交易時段（08:45-13:45 日盤 / 15:00-05:00 夜盤 / 平日）保持原 30s 敏感偵測。
-        環境變數 DISABLE_HEARTBEAT_DEAD_ZONE=true 可關閉、回到舊行為。
+        交易時段（08:45-13:45 日盤 / 15:00-05:00 夜盤 / 平日）保持敏感偵測。
+        2026-05-19 修法 E：tick_timeout default 30 → 120s。
+          原因：TMF 夜盤低量時段（19:00-21:00 / 02:00-04:00）真實 tick 間距常 30-60s、
+          30s 太敏感會誤觸 false disconnect（5/19 19:20:38 實測撞過、broker 沒真斷）。
+          120s 仍能偵測真斷線（broker 真斷通常 5+ 分鐘）、且 Solace 端會主動推 disconnect。
+        環境變數 BROKER_TICK_TIMEOUT_SEC 可調、DISABLE_HEARTBEAT_DEAD_ZONE=true 關 dead zone 跳過。
         """
+        import os as _os
+        if tick_timeout_sec is None:
+            tick_timeout_sec = int(_os.environ.get("BROKER_TICK_TIMEOUT_SEC", "120"))
         from datetime import datetime as _dt_now, time as _dt_time
 
         def _is_dead_zone():
