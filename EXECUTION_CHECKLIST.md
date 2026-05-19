@@ -657,20 +657,41 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 
 **5/18 paper trade**：0 筆（日盤單邊強空無壓縮無回調、breakout 設計不抓；夜盤待 22:15 區間判定）
 
-**5/18 Go/No-Go 條件對照**：
-- [x] quota < 500 MB ✅（57 MB、剩 443 MB buffer）
-- [x] 13:45 dead zone 無 TG spam ✅（修法 D 真兇修對）
-- [ ] 至少 1 筆 paper trade（今日 0、待 5/19 觀察）
-- [x] 05:00 dead zone 待 5/19 早上驗
-- [x] 永豐客服 + Discord 回覆 ≥ 3 題 ✅
-- [ ] 修法 C cross-session subscribe（今日無 reconnect 機會驗、明日看）
-- [ ] watchdog 自癒（08:38 grace + 08:39 真實 restart_day.sh 觸發、算半驗）
+**5/18 + 5/19 Go/No-Go 結算（5/19 21:30 結算、🚀 7/7 全過）**：
+- [x] **quota < 500 MB** ✅（5/18 = 71 MB、5/19 21:30 = 42 MB、修法 D 真兇修對）
+- [x] **13:45 dead zone 無 TG spam** ✅（5/18 + 5/19 兩次驗證）
+- [x] **至少 1 筆 paper trade** ✅ **5/19 19:20 fire B-Pullback SHORT x3、20:02 trailing 出場、PnL +402**
+- [x] **05:00 dead zone 無 spam** ✅（5/19 早 quota=0 印證）
+- [x] **永豐客服 + Discord 回覆 ≥ 3 題** ✅（sj.agent + ShioajiCSBot + victoryang）
+- [x] **修法 C cross-session subscribe** ✅ **5/19 19:20:38 broker reconnect 實戰、19:21:01「_last_tick_time 已重置」**
+- [x] **watchdog 自癒** ✅（5/15 + 5/18 + 5/19 共 5 次實戰、平均 < 1 分鐘拉起）
 
-**5/18 新發現待辦（5/20 切 live 前必修）**：
-- [ ] **anomaly threshold 太敏感**：5×ATR=52 點、夜盤開盤搶單常見、提高到 6-7×ATR 或開盤 ±2min grace（memory [[engine-price-anomaly-misnamed-connection-lost]]）
-- [ ] **TG label 分離**：`circuit_breaker.on_price_anomaly()` vs `on_connection_lost()`、避免文字誤導
-- [ ] **anomaly auto-restore**：1 分鐘內價格回穩、自動 resume active
-- [ ] **cron 08:30 → 08:35**：給永豐 5 分鐘穩定（memory [[sinopac-fetch-contracts-partial-after-reset]]）
+**5/19 第一筆 paper trade 詳情**：
+- 進場 19:20:00 [PAPER] [TMF] SELL x3、strength 0.78、B-Pullback SHORT、ema5=40128 ema20=40128 adx=31
+- 持倉 42 分鐘、broker 19:20:38 reconnect 一次（修法 D-2 reset 邏輯實戰驗證）
+- 出場 20:02:28 trailing stop @ 39981、**PnL +402 NTD ✅**
+
+**5/18 新發現 5 個待辦、5/19 修完 4 個**：
+- [x] **anomaly threshold 太敏感** → commit `e2e201a` + `5a1af65`（修法 1+2+3）
+- [x] **TG label 分離** → commit `e2e201a` 新 `on_price_anomaly()`
+- [x] **anomaly auto-restore** → commit `e2e201a` state 加 60s reset
+- [x] **broker.heartbeat 30s 太敏感** → commit `a9e5d2d` + `692bb17`（修法 E、改 120s）
+- [ ] cron 08:30 → 08:35（5/19 早再撞「找不到合約」、watchdog 自癒、5/20 後處理）
+
+**🚀 5/20 切 live 前已就位 8 條修法**（PID 603692 載入確認）：
+
+| 編號 | 修法 | commit |
+|---|---|---|
+| A | KbarPoller 預設停用 | `0892ac7` |
+| C | reconnect cooldown fetch_contracts | `b909bea` |
+| D-1 | dead-zone aware heartbeat | `1839db4` |
+| D-2 | reset _last_tick_time on reconnect | `1839db4` |
+| E | tick_timeout 30→120s | `a9e5d2d` + `692bb17` |
+| 1 | on_price_anomaly() TG label 分離 | `e2e201a` |
+| 2 | session boundary grace 600s | `e2e201a` + `5a1af65` |
+| 3 | anomaly auto-restore 60s | `e2e201a` |
+
+**5/20 早上照 `5_20_GO_LIVE_PLAYBOOK.md` 開賽**
 
 ---
 
