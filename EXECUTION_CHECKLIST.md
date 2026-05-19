@@ -763,27 +763,49 @@ user 醒來必做（5 分鐘）：
 
 ## Phase 8 Day 6 — 5/19（二）Paper 驗證日 2 + Go/No-Go 評估
 
-### 早上 8:30 cron 自動跑 → 看修法 D 第二次表現
-- [ ] 跑 `_test_kbars.py`、確認 quota < 200 MB（昨日累積 + 隔夜）
-- [ ] log 確認「[KbarPoller] 已停用」+「[Heartbeat] 監控啟動」+「[Reconnect] 跳過 fetch_contracts」（若有 reconnect 的話）
-- [ ] 09:00 跑 `api.usage()` 看 baseline、應該 < 50 MB（fresh quota 配合修法 D）
+### 5/18 夜盤事後紀錄（5/19 早 09:10 zcat log 確認）
+- [x] ORB session 21:35:00 啟動：`[ORB] New session: 2026-05-18-N`
+- [x] 22:15:00 [ORB] Range ready: **[40965, 41381] width=4.18×ATR**（合格 3.0-5.0）
+- [x] 22:15-04:00 整夜價格在區間內、**0 突破訊號、CSV 仍 header only**
+- [x] 04:00 force_close 無觸發（無持倉）
+- [x] 05:10 cron pkill ORB 正常停
+- [x] daily JSON: `daily_pnl=0 / total_trades=0`
 
-### 整日觀察點
-- [ ] 13:45 dead zone：應該**完全靜默**（無 TG「斷線/恢復」、無 fetch_contracts log）
-- [ ] 13:50 日盤日報 TG
-- [ ] 14:55 夜盤 ORB cron + 21:30 session
-- [ ] 22:00 / 04:30 log_quota cron 量測 < 350 MB
+### 5/19 早上 timeline（事後紀錄）
+- [x] **08:00 TST** quota 完全 reset（bytes=0 MB / remaining=500 MB）✅ victoryang 08:00 reset 完全確認
+- [x] **08:30 cron restart_day.sh** 起 PID（初始失敗、fetch_contracts partial → 「找不到合約」、5/18 同一個 issue）
+- [x] **watchdog 08:38+ 偵測 8888 not listen** 接手拉起新 PID
+- [x] **09:16 PID 579124** 經手動 kill + watchdog 拉起、**載入今早 commit `5a1af65` 新版**（grace 600s + on_price_anomaly + auto-restore）
+- [x] **09:16:17 init log 全綠**：Contract TMFR1 / Subscribe / KbarPoller 已停用 / Warmup 1473 bars
 
-### Go/No-Go 評估表（5/19 23:00 TST 結算）
-打勾過 5 項以上 → 5/20 可切 live、否則延後一週至 5/26：
+### 今早提交修法（5/19 09:10-09:16）
+- [x] commit `e2e201a` Fix price_anomaly: 三修法（label 分離 + grace + auto-restore）
+- [x] commit `5a1af65` Bump anomaly grace 120s → 600s（基於 5/18 21:35:16 實測撞點 5 分鐘 16 秒外推）
 
-- [ ] 5/18 + 5/19 兩日 quota 累計都 < 500 MB
-- [ ] 5/18 + 5/19 至少 **1 筆完整 paper trade**（進場 + 出場、CSV / TG / daily JSON 三路一致）
-- [ ] 5/18 + 5/19 兩次 13:45 dead zone 都無 TG spam（修法 D 真擋下）
-- [ ] 5/18 + 5/19 兩次 05:00 dead zone 都無 TG spam
-- [x] 永豐客服回覆 ≥ 3 題（2026-05-15 17:24 SJ 客服確認：超量行為 / Solace 不切 / 升等靠實單下單、memory [[sinopac-api-quota-confirmed-2026-05-15]]）
-- [ ] 修法 C 的 cross-session subscribe 觀察：若 broker 有 reconnect、subscribe 沒 mute（tick 繼續進）
-- [ ] watchdog 自癒驗證（手動 kill paper_night_orb 看 ≤ 2 分鐘內拉起 + TG 通知）
+### 今夜 21:30 ORB session 驗證重點
+- [ ] **21:20-21:40 grace 期**：log 不應有 `[ANOMALY] WARNING/ERROR`、TG 不應有 anomaly 推播 ← 修法 2 驗證
+- [ ] 若 grace 不夠擋下：TG 推「⚠️ 價格劇烈異常」而非「🚨 連線中斷」 ← 修法 1 驗證
+- [ ] 60 秒後 TG 推「✅ 價格異常已穩定、自動恢復」 ← 修法 3 驗證
+- [ ] **22:15** ORB 區間建立 / 跳過判定
+- [ ] **22:15-04:00** 等突破訊號
+- [ ] 22:00 / 04:30 log_quota cron 量測（預期 < 100 MB）
+
+### Go/No-Go 評估表（5/19 23:00 TST 結算、過 5 項 → 5/20 切 live）
+
+- [x] **5/18 quota < 500 MB**（5/18 結束 ~100-130 MB）/ 5/19 上半天 14 MB ✅
+- [ ] 5/18 + 5/19 至少 **1 筆完整 paper trade**：5/18 全日 0 trade、5/19 今夜待觀察
+- [x] **5/18 13:45 dead zone 無 TG spam**（修法 D 真兇實戰成功）✅
+- [x] **5/18 ORB session 啟動正常**（22:15 區間建立、無突破不是 bug 是市況）
+- [ ] 5/19 早 05:00 dead zone 無 spam（5/18 沒撞 storm、5/19 早 quota=0 即印證）
+- [x] **永豐客服 + Discord 三道回覆**：sj.agent + ShioajiCSBot + victoryang
+- [x] **watchdog 自癒**：5/18 09:39 + 5/19 09:16 兩次實戰、約 1 分鐘內拉起 ✅
+- [ ] 修法 C cross-session subscribe（5/18 沒 reconnect 機會驗、5/19 同樣）
+- [x] **5/19 早 quota reset 確認 08:00 TST**（bytes=0、跟 victoryang 完全吻合）✅
+
+**目前過 6/9（5/19 09:20 結算）**、主要待證：
+1. 今夜 ORB 是否進場（連續 3 日無突破、5/19 第 4 日）
+2. 今夜 anomaly 修法 1+2+3 是否生效
+3. 修法 C cross-session subscribe（要 broker 真斷一次才能驗、5 天都沒撞）
 
 ---
 
