@@ -439,7 +439,10 @@ class ShioajiBroker(BaseBroker):
 
         import shioaji as sj
 
-        @self._api.on_tick_fop_v1()
+        # 2026-05-20 修法 F (Discord 建議)：decorator → setter
+        # 原因：Shioaji 1.3.3 @on_tick_fop_v1() decorator 在 live 模式下會撞 callback table race
+        # rshioaji 1.5.x 統一改用 set_on_*_callback setter pattern、避免 race
+        # paper_night_orb.py 已用此 pattern 證明穩定（4 天無 crash）
         def on_tick(exchange, tick):
             try:
                 _now = time_module.monotonic()
@@ -487,6 +490,9 @@ class ShioajiBroker(BaseBroker):
                     self._tick_callback(t)
             except Exception as e:
                 logger.error(f"Tick 轉換錯誤: {e}")
+
+        # setter pattern (rshioaji 1.5.x 標準)
+        self._api.quote.set_on_tick_fop_v1_callback(on_tick)
 
         # 訂閱所有商品
         for code, contract in self._contracts.items():
