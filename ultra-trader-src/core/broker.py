@@ -145,8 +145,12 @@ class ShioajiBroker(BaseBroker):
                 fetch_contract=False,
             )
             # 手動 fetch contracts，容忍 Options 失敗（部分帳號 / IP 沒 Options 權限）
+            # 2026-05-20 修法 F（Discord 建議）：拿掉 contract_download=True
+            # 原因：contract_download=True 觸發 async cleanup、~30 秒後 race 撞 callback table
+            # 在 live 模式 + activate_ca 後造成 pybind11 error_already_set + std::terminate
+            # 不 force download、用 server cache、不影響合約資料正確性（每日 daily cron restart 會更新）
             try:
-                self._api.fetch_contracts(contract_download=True, contracts_timeout=30000)
+                self._api.fetch_contracts(contracts_timeout=30000)
             except Exception as fc_err:
                 logger.warning(f"[Shioaji] fetch_contracts partial: {fc_err}")
 
@@ -185,23 +189,28 @@ class ShioajiBroker(BaseBroker):
             self._contract = self._contracts.get(self._contract_code)
 
             # 註冊委託/成交回調
+            # 2026-05-20 修法 F（Discord 建議）：全 callback body 包 try/except
+            # 避免任何 Python error 升級成 pybind11 error_already_set + std::terminate
             def _order_cb(stat, msg):
-                logger.info(f"[Shioaji] order_cb: stat={stat} | {msg}")
-                # 檢查成交（deal）
-                if hasattr(msg, 'price') and hasattr(msg, 'quantity'):
-                    code = getattr(msg, 'code', '')
-                    logger.info(f"[Shioaji] DEAL: {code} | action={getattr(msg, 'action', '')} qty={msg.quantity} price={msg.price}")
-                    # Resolve contract code to instrument name
-                    instrument = self._code_to_instrument.get(code, code)
-                    self._pending_deals[instrument] = {
-                        "action": str(getattr(msg, 'action', '')),
-                        "quantity": int(msg.quantity),
-                        "price": float(msg.price),
-                    }
-                    # Set per-instrument event
-                    evt = self._deal_events.get(instrument)
-                    if evt:
-                        evt.set()
+                try:
+                    logger.info(f"[Shioaji] order_cb: stat={stat} | {msg}")
+                    # 檢查成交（deal）
+                    if hasattr(msg, 'price') and hasattr(msg, 'quantity'):
+                        code = getattr(msg, 'code', '')
+                        logger.info(f"[Shioaji] DEAL: {code} | action={getattr(msg, 'action', '')} qty={msg.quantity} price={msg.price}")
+                        # Resolve contract code to instrument name
+                        instrument = self._code_to_instrument.get(code, code)
+                        self._pending_deals[instrument] = {
+                            "action": str(getattr(msg, 'action', '')),
+                            "quantity": int(msg.quantity),
+                            "price": float(msg.price),
+                        }
+                        # Set per-instrument event
+                        evt = self._deal_events.get(instrument)
+                        if evt:
+                            evt.set()
+                except Exception as _cb_err:
+                    logger.error(f"[Shioaji] _order_cb error (swallowed to prevent C++ terminate): {_cb_err}")
 
             self._api.set_order_callback(_order_cb)
 
@@ -335,8 +344,9 @@ class ShioajiBroker(BaseBroker):
                 _should_fetch = _disable_cooldown or (_now_mono - _last_fetch) > _cooldown_sec
 
                 if _should_fetch:
+                    # 修法 F：reconnect 時同樣拿掉 contract_download=True（避免 race）
                     try:
-                        self._api.fetch_contracts(contract_download=True, contracts_timeout=30000)
+                        self._api.fetch_contracts(contracts_timeout=30000)
                         self._last_contracts_fetch_mono = _now_mono
                     except Exception as fc_err:
                         logger.warning(f"[Shioaji] fetch_contracts partial: {fc_err}")
@@ -376,18 +386,22 @@ class ShioajiBroker(BaseBroker):
                 # else: 沿用前次 cached self._contracts / self._code_to_instrument / self._contract
 
                 # 重新註冊 callback + 重新訂閱
+                # 2026-05-20 修法 F：包 try/except 避免 pybind11 error_already_set
                 def _order_cb(stat, msg):
-                    if hasattr(msg, 'price') and hasattr(msg, 'quantity'):
-                        code = getattr(msg, 'code', '')
-                        instrument = self._code_to_instrument.get(code, code)
-                        self._pending_deals[instrument] = {
-                            "action": str(getattr(msg, 'action', '')),
-                            "quantity": int(msg.quantity),
-                            "price": float(msg.price),
-                        }
-                        evt = self._deal_events.get(instrument)
-                        if evt:
-                            evt.set()
+                    try:
+                        if hasattr(msg, 'price') and hasattr(msg, 'quantity'):
+                            code = getattr(msg, 'code', '')
+                            instrument = self._code_to_instrument.get(code, code)
+                            self._pending_deals[instrument] = {
+                                "action": str(getattr(msg, 'action', '')),
+                                "quantity": int(msg.quantity),
+                                "price": float(msg.price),
+                            }
+                            evt = self._deal_events.get(instrument)
+                            if evt:
+                                evt.set()
+                    except Exception as _cb_err:
+                        logger.error(f"[Shioaji] _order_cb (reconnect) error (swallowed): {_cb_err}")
 
                 self._api.set_order_callback(_order_cb)
 
