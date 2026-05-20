@@ -1,7 +1,33 @@
-# 🔧 5/20 (二) 21:00 SDK 升級 Playbook — 切 live 二次嘗試
+# 🔧 5/20 (二) 21:00 切 live 二次嘗試 — Min-verify First、SDK upgrade Plan B
 
-> 5/20 早上切 live 撞 Shioaji 1.3.3 callback table corruption。
-> Discord 建議升 rshioaji 1.5.13。本檔即 21:00 開始照念。
+> 5/20 早上切 live 撞 callback table corruption（_engine_loop / dict / tuple 在同 slot）。
+> Discord expert 第二次回覆：paper 4 天 OK = SDK 沒事、可能我們 callback body 有 bug。
+> 建議 **先做 min-verify（noop callback）排除**、再決定要不要升 SDK。
+
+## ⚡ 21:00 Phase 1: Min-verify（10 分鐘）
+
+跑 noop callback 版 live mode、看是否還 crash：
+
+```bash
+# kill 跑中 process
+ssh ultratrader-night "pkill -f 'scripts/start.py' 2>/dev/null; pkill -f 'paper_night_orb' 2>/dev/null; sleep 3"
+
+# 上傳 min-verify script
+wsl rsync -avz -e "ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes" \
+  /mnt/c/Users/xx/Desktop/vps永豐微台指/scripts/_min_verify_live.py \
+  xx@35.221.239.245:/tmp/
+
+# 執行（會跑 5 分鐘）
+ssh ultratrader-night "cd ~/ultra-trader-src && source .venv/bin/activate && python3 /tmp/_min_verify_live.py 2>&1 | tail -20"
+```
+
+**判讀**：
+- ✅ 跑完 5 分鐘無 crash、結束印「NOOP CRASH」=> **我們 callback body 有 bug、不用升 SDK、修 broker.py**
+- ❌ 5 分鐘內 process crash + `terminate called`=> SDK 真有問題、進 Phase 2 升 SDK
+
+---
+
+## 📦 21:10 Phase 2: SDK 升級（min-verify crash 才走這條）
 
 ---
 
