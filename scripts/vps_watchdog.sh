@@ -3,7 +3,7 @@
 #
 # 守兩個 process：
 #   1. scripts/start.py（24h 跑、需檢查 8888 port 在）
-#   2. scripts/paper_night_orb.py（只在 14:55–05:10 夜盤時段檢查）
+#   2. scripts/night_orb.py（只在 14:55–05:10 夜盤時段檢查）
 #
 # 用 cron 每分鐘跑一次：
 #   * * * * * /home/xx/ultra-trader-src/scripts/vps_watchdog.sh
@@ -103,18 +103,18 @@ if [ "$HOUR" -ge 15 ] || [ "$HOUR" -le 4 ]; then
 fi
 
 if [ "$IS_NIGHT_WINDOW" -eq 1 ]; then
-  NIGHT_PID=$(pgrep -f 'paper_night_orb.py' | head -1)
+  NIGHT_PID=$(pgrep -f 'night_orb.py' | head -1)
   if [ -z "$NIGHT_PID" ]; then
-    log "✗ paper_night_orb.py NOT running in night window, restarting..."
+    log "✗ night_orb.py NOT running in night window, restarting..."
     bash "$PROJECT/scripts/restart_night.sh" >/dev/null 2>&1
     sleep 5
-    NEW_PID=$(pgrep -f 'paper_night_orb.py' | head -1)
+    NEW_PID=$(pgrep -f 'night_orb.py' | head -1)
     if [ -n "$NEW_PID" ]; then
       log "  ✓ restarted, new PID=$NEW_PID"
-      notify "🔧 [VPS Watchdog] paper_night_orb 重啟成功 PID=$NEW_PID"
+      notify "🔧 [VPS Watchdog] night_orb 重啟成功 PID=$NEW_PID"
     else
       log "  ✗ restart FAILED"
-      notify "🚨 [VPS Watchdog] paper_night_orb 重啟失敗"
+      notify "🚨 [VPS Watchdog] night_orb 重啟失敗"
     fi
   fi
 fi
