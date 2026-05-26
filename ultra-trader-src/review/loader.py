@@ -82,6 +82,13 @@ def load_daily(date: str, session: Session = "day") -> DailyStats:
     trades: list[dict] = raw.get("trades", [])
     signals: list[dict] = raw.get("paper_signals", [])
 
+    # 2026-05-23: 加 paper filter、預設不過濾、env var EXCLUDE_PAPER_TRADES=true 才開
+    # trade.reason 開頭 [PAPER] 視為 paper、過濾；[LIVE] 或無前綴視為 live、保留
+    import os as _os
+    if _os.environ.get("EXCLUDE_PAPER_TRADES", "").lower() in ("1", "true", "yes"):
+        trades = [t for t in trades if not str(t.get("reason", "")).startswith("[PAPER]")]
+        signals = [s for s in signals if not str(s.get("reason", "")).startswith("[PAPER]")]
+
     wins = [t for t in trades if (t.get("net_pnl") or t.get("pnl") or 0) > 0]
     losses = [t for t in trades if (t.get("net_pnl") or t.get("pnl") or 0) < 0]
 

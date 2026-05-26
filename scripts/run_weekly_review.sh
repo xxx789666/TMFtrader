@@ -95,6 +95,8 @@ fi
 log "[Step 2a/3] bash 預載 load_week / load_daily JSON"
 export PYTHONPATH="$LOCAL_PROJECT_DIR"
 export TMF_DATA_ROOT="${TMF_DATA_ROOT:-$HOME/vps_trader_paper/ultra-trader-src/data}"
+# 2026-05-23: 過濾 paper trades、只統計 live。trade.reason 開頭 [PAPER] 排除。
+export EXCLUDE_PAPER_TRADES=true
 
 WEEK_JSON=$(python3 -m review.tools_for_hermes load_week --week_ending="$WEEK_ENDING" --compact 2>&1)
 if [[ -z "$WEEK_JSON" ]] || echo "$WEEK_JSON" | grep -q '"error"'; then

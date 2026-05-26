@@ -38,7 +38,7 @@ if [ "$SESSION" = "day" ]; then
 else
   # 夜盤日報跑在 05:15、報的是「昨夜啟動的 session」
   HEADER="🌙 [夜盤日報] $YESTERDAY 夜盤"
-  PROC_NAME='paper_night_orb.py'
+  PROC_NAME='night_orb.py'
   REPORT_DATE="$YESTERDAY"
   REPORT_COMPACT="$YESTERDAY_COMPACT"
 fi
@@ -54,36 +54,57 @@ else
 fi
 
 # 交易紀錄
+# 注意：performance tracker 會同時寫 ${DATE}.json（session 結束時 final flush）
+# 跟 ${DATE}_live.json（每筆 trade 即時更新）。兩者可能不同步——例如夜盤 ORB
+# 寫了空版 .json 後、日盤 trade 進來只更新 _live.json。所以兩份都讀、取 trades 多的版本。
 if [ "$SESSION" = "day" ]; then
   DAY_JSON="$PROJECT/data/performance/daily/${TODAY}.json"
-  [ ! -f "$DAY_JSON" ] && DAY_JSON="$PROJECT/data/performance/daily/${TODAY}_live.json"
-  if [ -f "$DAY_JSON" ]; then
-    SUMMARY=$(python3 -c "
-import json, sys
-try:
-    d = json.load(open('$DAY_JSON'))
+  LIVE_JSON="$PROJECT/data/performance/daily/${TODAY}_live.json"
+  SUMMARY=$(python3 -c "
+import json, os
+cands = []
+for p in ['$DAY_JSON', '$LIVE_JSON']:
+    if not os.path.exists(p):
+        continue
+    try:
+        with open(p) as f:
+            d = json.load(f)
+        cands.append((len(d.get('trades', [])), os.path.getmtime(p), d))
+    except Exception:
+        pass
+if not cands:
+    print('(無交易紀錄檔)')
+else:
+    cands.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    d = cands[0][2]
     t = d.get('trades', [])
     s = d.get('paper_signals', [])
     pnl = d.get('daily_pnl', sum(x.get('net_pnl', x.get('pnl', 0)) for x in t))
     print(f'交易: {len(t)} 筆 / 訊號: {len(s)} 個')
     print(f'日 PnL: {pnl:+.0f} 元')
-except Exception as e:
-    print(f'(讀檔失敗: {e})')
 " 2>/dev/null)
-  else
-    SUMMARY="(無交易紀錄檔)"
-  fi
 else
-  NIGHT_CSV="$PROJECT/data/paper_trading/night_orb_${REPORT_COMPACT}.csv"
-  if [ -f "$NIGHT_CSV" ]; then
+  # 2026-05-21 fix：live 模式 CSV 改名為 live_night_orb_*.csv、paper 仍是 night_orb_*.csv
+  # 兩個都看、取有資料 / 較新者
+  LIVE_CSV="$PROJECT/data/paper_trading/live_night_orb_${REPORT_COMPACT}.csv"
+  PAPER_CSV="$PROJECT/data/paper_trading/night_orb_${REPORT_COMPACT}.csv"
+  NIGHT_CSV=""
+  if [ -f "$LIVE_CSV" ]; then
+    NIGHT_CSV="$LIVE_CSV"
+    MODE_LABEL="LIVE"
+  elif [ -f "$PAPER_CSV" ]; then
+    NIGHT_CSV="$PAPER_CSV"
+    MODE_LABEL="Paper"
+  fi
+  if [ -n "$NIGHT_CSV" ]; then
     TOTAL=$(wc -l < "$NIGHT_CSV")
     TRADES=$((TOTAL - 1))
     [ "$TRADES" -lt 0 ] && TRADES=0
     if [ "$TRADES" -gt 0 ]; then
       PNL=$(awk -F, 'NR>1 {if($10!="") s+=$10} END {printf "%.2fR", s}' "$NIGHT_CSV")
-      SUMMARY="交易: $TRADES 筆 / R 累積: $PNL"
+      SUMMARY="[$MODE_LABEL] 交易: $TRADES 筆 / R 累積: $PNL"
     else
-      SUMMARY="交易: 0 筆（無突破訊號、正常）"
+      SUMMARY="[$MODE_LABEL] 交易: 0 筆（無突破訊號、正常）"
     fi
   else
     SUMMARY="(CSV 不存在、夜盤可能未啟動)"
