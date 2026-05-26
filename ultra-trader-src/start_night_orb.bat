@@ -20,7 +20,7 @@ echo.
 REM 啟動夜盤 ORB（前景執行，方便監控 log）
 echo [Start] 啟動夜盤 ORB... 按 Ctrl+C 停止
 echo.
-python scripts\paper_night_orb.py --threshold 0.40
+python scripts\night_orb.py --threshold 0.40
 
 echo.
 echo [Done] 夜盤 ORB 已停止

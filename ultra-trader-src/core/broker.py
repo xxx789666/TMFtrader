@@ -127,11 +127,118 @@ class ShioajiBroker(BaseBroker):
         self._heartbeat_thread: Optional[threading.Thread] = None
         self._on_connection_lost_cb: Optional[Callable] = None
         self._on_connection_restored_cb: Optional[Callable] = None
+        # SDK 強 ref：Shioaji 1.3.3 set_*_callback 沒正確 Py_INCREF、若只 local nested function
+        # GC pressure 高時（如 data_collector 跑著）會回收掉 callback、SDK 內 ref 變野指針、
+        # 下次 invoke 撞 'dict/tuple/<method> is not callable' → pybind11 std::terminate。
+        # 把 callback function 存在 self 上、保證 instance 活著時 callback 都活著。
+        # 2026-05-20 incident root cause、修法見：connect() / _attempt_reconnect() / subscribe_tick()
+        self._sdk_order_cb_ref: Optional[Callable] = None
+        self._sdk_tick_cb_ref: Optional[Callable] = None
+        # 額外 noop callback 強 ref：Shioaji 內部對未設定的 callback slot 保留 default、
+        # 但 default 的 Python ref 沒 Py_INCREF、會被 GC 回收、之後 SDK invoke 該 slot 時
+        # 拿到野指針→ segfault 或 std::terminate。明確 set noop 拿住 ref 防 GC。
+        self._sdk_noop_refs: dict = {}
+        # event_callback real handler 強 ref（監聽 event_code 12/13 reconnect 事件）
+        # 來自官方 TROUBLESHOOTING.md、跟 broker tick heartbeat 互為第二保險
+        self._sdk_event_handler_ref: Optional[Callable] = None
 
     def set_connection_callbacks(self, on_lost: Callable = None, on_restored: Callable = None):
         """設定連線狀態回調"""
         self._on_connection_lost_cb = on_lost
         self._on_connection_restored_cb = on_restored
+
+    def _install_noop_callbacks(self):
+        """把 SDK 內部所有可能的 callback slot 都填上 noop、防 default ref 被 GC 變野指針。
+
+        2026-05-20 root cause：5/20 切 live 撞 segfault / pybind11 std::terminate、stderr 顯示
+        callback slot 內被 invoke 的 obj 是 `_engine_loop` / dict / tuple（4 args 指向
+        event-callback signature）。Shioaji 1.3.3 對未設定的 callback slot 用 internal default、
+        而那個 default Python ref 沒 Py_INCREF、GC pressure 高（data_collector 跑 background fetch）
+        時被回收、SDK invoke 拿到野指針 → 撞炸。
+
+        2026-05-22 增強：`set_event_callback` 改用 real handler、監聽 event_code 12/13
+        （reconnecting/reconnected、來自官方 TROUBLESHOOTING.md）、作為 tick heartbeat 之外
+        的第二保險。其他 slot 維持 noop。
+        """
+        if not self._api:
+            return
+        try:
+            # 通用 (*args, **kwargs)、任何 signature 都不會抓錯
+            def _noop(*args, **kwargs):
+                pass
+
+            # === 真 event handler：監聽 event_code 12/13 ===
+            # 簽章 (resp_code: int, event_code: int, info: str, event: str) 來自官方 doc
+            # 注意：callback 跑在 SDK 內部 thread、不可在此 call api.*（會撞 multi-thread race）
+            def _event_handler(resp_code, event_code, info, event):
+                try:
+                    logger.info(f"[Shioaji event] resp={resp_code} code={event_code} "
+                                f"info={str(info)[:120]} event={str(event)[:120]}")
+                    if event_code == 12:
+                        logger.warning(f"[Shioaji event] code=12 連線中斷、Reconnecting...")
+                        if self._on_connection_lost_cb:
+                            try:
+                                self._on_connection_lost_cb()
+                            except Exception as _cb_err:
+                                logger.error(f"[Shioaji event] on_lost callback error: {_cb_err}")
+                    elif event_code == 13:
+                        logger.info(f"[Shioaji event] code=13 連線恢復、Reconnected!")
+                        if self._on_connection_restored_cb:
+                            try:
+                                self._on_connection_restored_cb()
+                            except Exception as _cb_err:
+                                logger.error(f"[Shioaji event] on_restored callback error: {_cb_err}")
+                except Exception as e:
+                    logger.error(f"[Shioaji event] handler error (swallowed): {e}")
+
+            # 強 ref 防 GC（同 _order_cb / on_tick 的處理）
+            self._sdk_event_handler_ref = _event_handler
+
+            # api.quote 層所有 setter——event 用真 handler、其他用 noop
+            quote_setters_noop = [
+                # "set_event_callback" 不在 noop list、下面單獨 set real handler
+                "set_session_down_callback",
+                "set_init_callback",
+                "set_msg_callback",
+                "set_quote_callback",
+                "set_on_bidask_fop_v1_callback",
+                "set_on_bidask_stk_v1_callback",
+                "set_on_quote_fop_v1_callback",
+                "set_on_quote_stk_v1_callback",
+                "set_on_tick_stk_v1_callback",
+            ]
+            for setter in quote_setters_noop:
+                fn = getattr(self._api.quote, setter, None)
+                if callable(fn):
+                    try:
+                        fn(_noop)
+                        self._sdk_noop_refs[f"quote.{setter}"] = _noop
+                    except Exception as _e:
+                        logger.debug(f"[Shioaji] noop {setter} skipped: {_e}")
+
+            # set_event_callback 用真 handler
+            event_setter = getattr(self._api.quote, "set_event_callback", None)
+            if callable(event_setter):
+                try:
+                    event_setter(_event_handler)
+                    self._sdk_noop_refs["quote.set_event_callback"] = _event_handler
+                    logger.info("[Shioaji] event_callback 安裝（監聽 code 12/13 reconnect 事件）")
+                except Exception as _e:
+                    logger.warning(f"[Shioaji] set_event_callback failed: {_e}")
+
+            # api 頂層 set_session_down_callback（跟 quote.set_session_down_callback 是不同 slot）
+            top_setter = getattr(self._api, "set_session_down_callback", None)
+            if callable(top_setter):
+                try:
+                    top_setter(_noop)
+                    self._sdk_noop_refs["api.set_session_down_callback"] = _noop
+                except Exception as _e:
+                    logger.debug(f"[Shioaji] noop api.set_session_down_callback skipped: {_e}")
+
+            logger.info(f"[Shioaji] callbacks 安裝完成 ({len(self._sdk_noop_refs)} slots, "
+                        f"1 real event handler)")
+        except Exception as e:
+            logger.warning(f"[Shioaji] _install_noop_callbacks 失敗: {e}")
 
     def connect(self) -> bool:
         try:
@@ -149,10 +256,18 @@ class ShioajiBroker(BaseBroker):
             # 原因：contract_download=True 觸發 async cleanup、~30 秒後 race 撞 callback table
             # 在 live 模式 + activate_ca 後造成 pybind11 error_already_set + std::terminate
             # 不 force download、用 server cache、不影響合約資料正確性（每日 daily cron restart 會更新）
-            try:
-                self._api.fetch_contracts(contracts_timeout=30000)
-            except Exception as fc_err:
-                logger.warning(f"[Shioaji] fetch_contracts partial: {fc_err}")
+            # 2026-05-22 增強：fetch_contracts partial 後加 retry。永豐 08:00 quota reset 後 1-2 分鐘
+            # contract server 偶爾還沒穩、partial fail 後等 60s 重抓、避免整天 stale data（5/22 撞過）
+            for _retry in range(3):
+                try:
+                    self._api.fetch_contracts(contracts_timeout=30000)
+                    if _retry > 0:
+                        logger.info(f"[Shioaji] fetch_contracts retry #{_retry} succeeded")
+                    break
+                except Exception as fc_err:
+                    logger.warning(f"[Shioaji] fetch_contracts attempt #{_retry+1} partial: {fc_err}")
+                    if _retry < 2:
+                        time_module.sleep(60)  # 給永豐 60 秒穩定再重試
 
             if not accounts:
                 logger.error("登入失敗：沒有取得帳戶資訊")
@@ -212,7 +327,19 @@ class ShioajiBroker(BaseBroker):
                 except Exception as _cb_err:
                     logger.error(f"[Shioaji] _order_cb error (swallowed to prevent C++ terminate): {_cb_err}")
 
+            self._sdk_order_cb_ref = _order_cb  # 強 ref 防 GC（見 __init__ 註解）
             self._api.set_order_callback(_order_cb)
+
+            # 把所有 SDK callback slot 都用 noop 補滿、防 default ref 被 GC 變野指針
+            self._install_noop_callbacks()
+
+            # 2026-05-22 sanity check：若 contracts 為空（fetch_contracts 全 partial）、
+            # 不能 set _connected=True、否則 engine.start 內 subscribe_tick 會 fail、
+            # 而 _heartbeat / engine_loop 還是會跑、整天空跑 stale data
+            if not self._contracts:
+                logger.error(f"[Shioaji] 所有合約都找不到 ({list(self._contract_codes)})、連線失敗")
+                self._connected = False
+                return False
 
             self._connected = True
             return True
@@ -264,6 +391,11 @@ class ShioajiBroker(BaseBroker):
             if now.weekday() >= 5:  # Sat=5, Sun=6
                 return True
             t = now.time()
+            # 2026-05-25 修法：週一早盤前無夜盤接續（週日無盤、週日 15:00 不開夜盤），
+            # 00:00-05:00 原本不在任何 dead zone（週二~週五凌晨有前夜延續、需偵測），
+            # 但週一凌晨無市場 → 無 tick → 心跳誤判斷線 → 緊急停機/解除 storm。
+            if now.weekday() == 0 and t < _dt_time(8, 45):  # 週一 08:45 開盤前一律 dead zone
+                return True
             if _dt_time(13, 45) <= t < _dt_time(15, 0):  # 日盤→夜盤 gap
                 return True
             if _dt_time(5, 0) <= t < _dt_time(8, 45):  # 夜盤→日盤 gap
@@ -403,7 +535,11 @@ class ShioajiBroker(BaseBroker):
                     except Exception as _cb_err:
                         logger.error(f"[Shioaji] _order_cb (reconnect) error (swallowed): {_cb_err}")
 
+                self._sdk_order_cb_ref = _order_cb  # 強 ref 防 GC（見 __init__ 註解）
                 self._api.set_order_callback(_order_cb)
+
+                # 重連也補滿 noop（new api object 的所有 slot 都需要）
+                self._install_noop_callbacks()
 
                 # 重新訂閱 tick
                 if self._tick_callback:
@@ -442,7 +578,7 @@ class ShioajiBroker(BaseBroker):
         # 2026-05-20 修法 F (Discord 建議)：decorator → setter
         # 原因：Shioaji 1.3.3 @on_tick_fop_v1() decorator 在 live 模式下會撞 callback table race
         # rshioaji 1.5.x 統一改用 set_on_*_callback setter pattern、避免 race
-        # paper_night_orb.py 已用此 pattern 證明穩定（4 天無 crash）
+        # night_orb.py 已用此 pattern 證明穩定（4 天無 crash）
         def on_tick(exchange, tick):
             try:
                 _now = time_module.monotonic()
@@ -492,6 +628,7 @@ class ShioajiBroker(BaseBroker):
                 logger.error(f"Tick 轉換錯誤: {e}")
 
         # setter pattern (rshioaji 1.5.x 標準)
+        self._sdk_tick_cb_ref = on_tick  # 強 ref 防 GC（見 __init__ 註解）
         self._api.quote.set_on_tick_fop_v1_callback(on_tick)
 
         # 訂閱所有商品

@@ -460,6 +460,8 @@ class TradingEngine:
                     logger.info(f"[Warmup] {code}: {len(hist_bars)} historical bars loaded | last_price={hist_bars[-1].close}")
 
             # 同步真實持倉到引擎（僅 live 模式，paper 模式的持倉由策略信號產生）
+            # 2026-05-20 history：API key 曾缺帳務權限 → list_positions 401 → SDK 內部
+            # disconnect race → GPF。當日 18:35 換新 key（含帳務權限）verified、已恢復。
             if self.trading_mode == "live" and hasattr(self.broker, 'get_real_positions'):
                 try:
                     real_positions = self.broker.get_real_positions()
@@ -1442,6 +1444,7 @@ class TradingEngine:
                 logger.debug(f"[Heartbeat] {inst}: {price:.1f} | flat")
 
         # 每 1 分鐘做一次持倉核對（heartbeat 每 60 次空轉 = 60 秒）
+        # 2026-05-20 history：曾因 401 disabled、換 key 含帳務權限後恢復。見 engine.py:462
         if self._heartbeat_count % 60 == 0 and self.trading_mode == "live":
             self._reconcile_positions()
 

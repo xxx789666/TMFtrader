@@ -1,14 +1,24 @@
 """
-paper_night_orb.py — TMF 夜盤 ORB Paper Trading（B2 ML Filter）
+paper_night_orb.py — TMF 夜盤 ORB Trading（B2 ML Filter）
 ===============================================================
 功能：
-  - 訂閱 MXF 即時 Tick，聚合成 5 分鐘 K 棒
+  - 訂閱 TMF（微台）即時 Tick，聚合成 5 分鐘 K 棒
   - ORB 信號偵測（21:30 ~ 22:15 建立開盤區間）
   - B2 ML Filter（threshold=0.40，使用訓練時完全相同的特徵計算）
-  - Paper 記錄到 CSV（不下真實訂單）
+  - Mode：
+    * paper：只 log 到 CSV（不下真實訂單、不需要 CA）
+    * live：送真實 Market 單給永豐、log 到 live_night_orb_*.csv
+    根據 .env TRADING_MODE 自動切換、或用 --paper / --live 強制覆寫
+
+歷史備忘：
+  - 2026-05-20 加入 live 模式、原合約 MXF 改 TMF（與日盤 breakout 一致）
+  - 原檔名 paper_night_orb.py 保留（cron / watchdog 仍指此檔）
+  - paper 行為與舊版 100% 一致
 
 用法：
-  python scripts/paper_night_orb.py
+  python scripts/paper_night_orb.py              # 從 .env 讀 TRADING_MODE
+  python scripts/paper_night_orb.py --paper      # 強制 paper（覆寫 .env）
+  python scripts/paper_night_orb.py --live       # 強制 live
   python scripts/paper_night_orb.py --threshold 0.50
   python scripts/paper_night_orb.py --no-ml       # 純 Layer 1 對比記錄
 """
@@ -33,6 +43,11 @@ sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8")
 load_dotenv(ROOT / ".env")
 
+# ─── Mode flag（live / paper）─ 早 init 給後續 code 用 ───
+# 預設先讀 .env、main() 內 argparse 可覆寫
+_MODE: str = os.environ.get("TRADING_MODE", "paper").lower()
+def _is_live() -> bool: return _MODE == "live"
+
 # ─── TG 推送（沿用 core/notify.py 的 tg() 函式、失敗靜默）────
 try:
     from core.notify import tg as _tg
@@ -40,9 +55,10 @@ except Exception:
     def _tg(msg: str): pass  # 沒 core/notify 就 noop
 
 def tg_night(msg: str):
-    """夜盤專用 TG 推送、加 [Night ORB] 前綴"""
+    """夜盤專用 TG 推送、依 mode 加不同前綴"""
     try:
-        _tg(f"🌙 [Night ORB] {msg}")
+        prefix = "🌙 [Night ORB LIVE]" if _is_live() else "🌙 [Night ORB]"
+        _tg(f"{prefix} {msg}")
     except Exception:
         pass
 
@@ -292,20 +308,23 @@ class OrbMLFilter:
         return prob >= self.threshold, prob
 
 
-# ─── Paper Trade Logger ─────────────────────────────────────
+# ─── Trade Logger（live 跟 paper 分檔）─────────────────────────
 class PaperLogger:
+    """通用 trade logger、live mode 也用同一個 class、檔名加前綴區分。"""
+
     def __init__(self):
-        fname = f"night_orb_{date.today().strftime('%Y%m%d')}.csv"
+        prefix = "live_night_orb" if _is_live() else "night_orb"
+        fname = f"{prefix}_{date.today().strftime('%Y%m%d')}.csv"
         self.path = PAPER_DIR / fname
         self._write_header()
-        logger.info(f"[Paper] Log → {self.path}")
+        logger.info(f"[{'Live' if _is_live() else 'Paper'}] Log → {self.path}")
 
     def _write_header(self):
         if not self.path.exists():
             with open(self.path, "w", encoding="utf-8") as f:
                 f.write("entry_time,exit_time,direction,entry_price,exit_price,"
                         "stop_loss,ml_prob,ml_pass,exit_reason,r_multiple,"
-                        "orb_high,orb_low,orb_width_atr,session\n")
+                        "orb_high,orb_low,orb_width_atr,session,mode,quantity\n")
 
     def log(self, rec: dict):
         with open(self.path, "a", encoding="utf-8") as f:
@@ -313,10 +332,102 @@ class PaperLogger:
                 "entry_time", "exit_time", "direction", "entry_price",
                 "exit_price", "stop_loss", "ml_prob", "ml_pass",
                 "exit_reason", "r_multiple", "orb_high", "orb_low",
-                "orb_width_atr", "session"
+                "orb_width_atr", "session", "mode", "quantity"
             ]) + "\n")
         r = rec.get("r_multiple", 0)
-        logger.info(f"[Paper] CLOSED {rec['direction']} R={r:+.3f} ({rec['exit_reason']})")
+        tag = "[Live]" if rec.get("mode") == "live" else "[Paper]"
+        logger.info(f"{tag} CLOSED {rec['direction']} R={r:+.3f} ({rec['exit_reason']})")
+
+
+# ─── Live Order Manager（送真實單、追蹤成交回報）─────────────────
+class LiveOrderManager:
+    """
+    集中管理 live 模式真實單送出 + 成交追蹤。
+
+    使用：
+        mgr = LiveOrderManager(api, contract)
+        avg, qty = mgr.place_market(side="Buy", qty=1, timeout=8)
+        avg, qty = mgr.close_market(side="Sell", qty=1, timeout=8)
+
+    執行緒模型（重要）：
+      - SDK 內部 callback thread 推 deal event → set_order_callback 接收
+      - on_tick callback thread 觸發 place_market / close_market
+      - 兩 thread 共用 self._deal_evt（threading.Event）等待 fill
+      - 用 self._lock 序列化 place_order 呼叫、避免兩筆同時撞 broker
+    """
+
+    def __init__(self, api, contract):
+        self.api = api
+        self.contract = contract
+        self._lock = threading.Lock()
+        self._deal_evt = threading.Event()
+        self._last_deal: dict | None = None
+        # 強 ref 防 GC（同 broker.py 5/20 教訓、見 [[shioaji-1-3-3-live-callback-race]]）
+        self._cb_ref = self._on_order
+        api.set_order_callback(self._cb_ref)
+        logger.info("[Live] order callback registered")
+
+    def _on_order(self, stat, msg):
+        """成交回報 callback。SDK 內部 thread 呼叫、不可在此 call api.*"""
+        try:
+            logger.info(f"[Live] order_cb stat={stat} | {msg}")
+            if hasattr(msg, "price") and hasattr(msg, "quantity"):
+                self._last_deal = {
+                    "action":   str(getattr(msg, "action", "")),
+                    "quantity": int(msg.quantity),
+                    "price":    float(msg.price),
+                    "code":     str(getattr(msg, "code", "")),
+                }
+                self._deal_evt.set()
+        except Exception as e:
+            logger.error(f"[Live] order_cb error (swallowed): {e}")
+
+    def _wait_deal(self, timeout: float) -> dict | None:
+        if self._deal_evt.wait(timeout):
+            d = self._last_deal
+            return d
+        return None
+
+    def _place(self, side: str, qty: int, timeout: float) -> tuple[float, int]:
+        """送 Market order、等成交、回 (avg_price, filled_qty)。
+        失敗 / timeout 回 (0.0, 0)。"""
+        import shioaji as sj
+        with self._lock:
+            self._deal_evt.clear()
+            self._last_deal = None
+            try:
+                order = self.api.Order(
+                    action=getattr(sj.constant.Action, side),     # Buy / Sell
+                    price=0,                                       # market 不需要價
+                    quantity=qty,
+                    price_type=sj.constant.FuturesPriceType.MKT,
+                    order_type=sj.constant.OrderType.IOC,
+                    octype=sj.constant.FuturesOCType.Auto,
+                    account=self.api.futopt_account,
+                )
+                trade = self.api.place_order(self.contract, order)
+                logger.info(f"[Live] place_order sent: {side} x{qty} | trade={trade}")
+            except Exception as e:
+                logger.error(f"[Live] place_order failed: {e}")
+                return 0.0, 0
+        # 等成交（lock 已 release、不阻塞 callback）
+        deal = self._wait_deal(timeout)
+        if not deal:
+            logger.error(f"[Live] {side} 等成交 timeout({timeout}s)、嘗試查 update_status")
+            try:
+                self.api.update_status(self.api.futopt_account)
+            except Exception:
+                pass
+            return 0.0, 0
+        return deal["price"], deal["quantity"]
+
+    def place_market(self, side: str, qty: int, timeout: float = 8.0) -> tuple[float, int]:
+        """進場 market（Buy=做多、Sell=做空）"""
+        return self._place(side, qty, timeout)
+
+    def close_market(self, side: str, qty: int, timeout: float = 8.0) -> tuple[float, int]:
+        """出場 market（多單 close 用 Sell、空單 close 用 Buy）"""
+        return self._place(side, qty, timeout)
 
 
 # ─── 5-min Bar Aggregator ───────────────────────────────────
@@ -343,9 +454,12 @@ class Bar5mAggregator:
 
 # ─── Night ORB Engine ────────────────────────────────────────
 class NightORBEngine:
-    def __init__(self, ml_filter: OrbMLFilter, paper: PaperLogger):
+    def __init__(self, ml_filter: OrbMLFilter, paper: PaperLogger,
+                 order_mgr=None, sizer=None):
         self.ml = ml_filter
         self.paper = paper
+        self.order_mgr = order_mgr    # None=paper mode、LiveOrderManager=live mode
+        self.sizer = sizer            # None=paper、PositionSizer=live
         self.bars: deque = deque(maxlen=300)   # rolling 300 bars for features
 
         # session state
@@ -371,6 +485,7 @@ class NightORBEngine:
         self._orb_w_atr  = 0.0
         self._ml_prob    = 0.0
         self._session_entry = ""
+        self._quantity = 0           # 真實成交口數（live）/ 訊號口數 1（paper）
 
     def _get_session(self, ts: datetime) -> str:
         t = ts.time()
@@ -477,12 +592,21 @@ class NightORBEngine:
                 self._close(reason, exit_p, ts)
             return
 
-        # ── ORB 區間建立
+        # ── ORB 區間建立（session_done 後直接 short-circuit、避免 TG 重複 spam）
+        if self._session_done:
+            return
+
         if not self._orb_ready:
             self._orb_count += 1
             self._orb_high = max(self._orb_high, high)
             self._orb_low  = min(self._orb_low, low)
             if self._orb_count >= ORB_BARS:
+                # ATR warm-up check：bars < 14 時 _atr 回 default 1.0、width/1.0 暴量、不可信
+                if len(self.bars) < 14:
+                    logger.warning(f"[ORB] count={self._orb_count} 但 bars 只有 {len(self.bars)} 不到 14、ATR 不可信、本夜放棄")
+                    tg_night(f"區間跳過：ATR warm-up 不足（bars={len(self.bars)}）、今夜停手")
+                    self._session_done = True
+                    return
                 orb_w = self._orb_high - self._orb_low
                 orb_w_atr = orb_w / atr if atr > 0 else 0.0
                 if MIN_ORB_WIDTH_ATR <= orb_w_atr <= MAX_ORB_WIDTH_ATR:
@@ -495,9 +619,6 @@ class NightORBEngine:
                     logger.info(f"[ORB] Range skipped: width={orb_w_atr:.2f}×ATR "
                                 f"(need {MIN_ORB_WIDTH_ATR}-{MAX_ORB_WIDTH_ATR})")
                     tg_night(f"區間跳過 width={orb_w_atr:.2f}×ATR 不在 {MIN_ORB_WIDTH_ATR}-{MAX_ORB_WIDTH_ATR} 範圍、今夜停手")
-            return
-
-        if self._session_done:
             return
 
         # ── 突破偵測（需 > 22:15）
@@ -543,9 +664,44 @@ class NightORBEngine:
 
         # ── 進場
         sl = price - SL_ATR * atr * direction
+        enter_dir = 'LONG' if direction == 1 else 'SHORT'
+
+        # 算口數（live: PositionSizer 公式、paper: 固定 1）
+        stop_dist = abs(price - sl)
+        if self.sizer is not None:
+            qty = self.sizer.calculate(
+                account_balance=float(os.environ.get("INITIAL_BALANCE", "95000")),
+                stop_distance=stop_dist,
+                point_value=10.0,   # TMF
+            )
+            if qty <= 0:
+                logger.warning(f"[Live] PositionSizer 算出 qty=0、跳過進場")
+                tg_night(f"⚠️ 訊號跳過 qty=0（風險過大）")
+                self._session_done = True
+                return
+        else:
+            qty = 1
+
+        # Live 模式：先送真實單、等成交、用真實成交價當 entry_price
+        actual_price = price
+        actual_qty = qty
+        if self.order_mgr is not None:
+            side = "Buy" if direction == 1 else "Sell"
+            logger.info(f"[Live] sending market {side} x{qty}...")
+            avg, filled = self.order_mgr.place_market(side, qty, timeout=8.0)
+            if filled <= 0 or avg <= 0:
+                logger.error(f"[Live] 進場失敗（filled={filled}、avg={avg}）、放棄此訊號")
+                tg_night(f"🚫 進場失敗 {enter_dir} 未成交、放棄")
+                self._session_done = True
+                return
+            actual_price = avg
+            actual_qty = filled
+            # 真實成交價 ≠ 訊號價、重算 SL
+            sl = actual_price - SL_ATR * atr * direction
+
         self._in_trade    = True
         self._direction   = direction
-        self._entry_price = price
+        self._entry_price = actual_price
         self._stop_price  = sl
         self._atr_entry   = atr
         self._trail_stop  = sl
@@ -558,28 +714,49 @@ class NightORBEngine:
         self._ml_prob     = ml_prob
         self._session_entry = sess
         self._session_done = True
+        self._quantity = actual_qty
 
-        enter_dir = 'LONG' if direction==1 else 'SHORT'
-        logger.info(f"[Trade] ENTER {enter_dir} "
-                    f"@ {price:.0f}  SL={sl:.0f}  ATR={atr:.1f}")
-        tg_night(f"📥 進場 {enter_dir} @ {price:.0f}  SL={sl:.0f}  ATR={atr:.1f}  ML={ml_prob:.2f}")
+        mode_tag = "LIVE" if self.order_mgr else "PAPER"
+        logger.info(f"[Trade] ENTER {enter_dir} x{actual_qty} "
+                    f"@ {actual_price:.0f}  SL={sl:.0f}  ATR={atr:.1f} ({mode_tag})")
+        tg_night(f"📥 進場 {enter_dir} x{actual_qty} @ {actual_price:.0f}  "
+                 f"SL={sl:.0f}  ATR={atr:.1f}  ML={ml_prob:.2f}")
         # 取得跨策略持倉鎖
         position_lock.acquire(
             owner="orb", side=enter_dir.lower(),
-            entry_price=float(price), instrument="MXF", quantity=1,
-            mode="paper", reason=f"ORB B2 ML prob={ml_prob:.3f}",
+            entry_price=float(actual_price), instrument="TMF", quantity=actual_qty,
+            mode=("live" if self.order_mgr else "paper"),
+            reason=f"ORB B2 ML prob={ml_prob:.3f}",
         )
 
     def _close(self, reason: str, price: float, ts: datetime):
-        pnl = (price - self._entry_price) * self._direction
+        # Live 模式：先送真實平倉單、用真實成交價算 PnL
+        actual_exit = price
+        if self.order_mgr is not None and self._quantity > 0:
+            # 平倉方向：原 LONG → Sell 平倉、原 SHORT → Buy 平倉
+            close_side = "Sell" if self._direction == 1 else "Buy"
+            logger.info(f"[Live] sending close market {close_side} x{self._quantity} ({reason})")
+            avg, filled = self.order_mgr.close_market(close_side, self._quantity, timeout=8.0)
+            if filled > 0 and avg > 0:
+                actual_exit = avg
+            else:
+                logger.error(f"[Live] 平倉失敗（filled={filled}、avg={avg}）、"
+                             f"sticky！log 用 signal price={price}、必須手動 App 平倉")
+                tg_night(f"🚨 平倉失敗 {reason} @ {price:.0f} 未成交、"
+                         f"持倉口數 {self._quantity}、立即手動 App 平倉！")
+                # 不 release lock、避免下一個訊號又進場、必須人工介入
+                return
+
+        pnl = (actual_exit - self._entry_price) * self._direction
         risk = abs(self._entry_price - self._stop_price)
         r_mult = pnl / risk if risk > 0 else 0.0
+        mode_str = "live" if self.order_mgr else "paper"
         rec = {
             "entry_time":   self._entry_time,
             "exit_time":    ts,
             "direction":    "LONG" if self._direction == 1 else "SHORT",
             "entry_price":  round(self._entry_price, 1),
-            "exit_price":   round(price, 1),
+            "exit_price":   round(actual_exit, 1),
             "stop_loss":    round(self._stop_price, 1),
             "ml_prob":      round(self._ml_prob, 4),
             "ml_pass":      True,
@@ -589,12 +766,15 @@ class NightORBEngine:
             "orb_low":      round(self._orb_low_e, 1),
             "orb_width_atr":round(self._orb_w_atr, 3),
             "session":      self._session_entry,
+            "mode":         mode_str,
+            "quantity":     self._quantity or 1,
         }
         self.paper.log(rec)
         self._in_trade = False
+        self._quantity = 0
         # TG 推送出場
         emoji = "🎯" if r_mult > 0 else "🛑"
-        tg_night(f"{emoji} 出場 {rec['direction']} @ {price:.0f} "
+        tg_night(f"{emoji} 出場 {rec['direction']} @ {actual_exit:.0f} "
                  f"進場 {self._entry_price:.0f} | R={r_mult:+.2f} | 原因: {reason}")
         # 釋放跨策略持倉鎖
         position_lock.release("orb")
@@ -622,32 +802,103 @@ def _force_close_guard(engine: "NightORBEngine", api, contract, stop_event: thre
 
 # ─── Main ────────────────────────────────────────────────────
 def main():
+    global _MODE
     parser = argparse.ArgumentParser()
     parser.add_argument("--threshold", type=float, default=0.40)
     parser.add_argument("--no-ml", action="store_true")
+    parser.add_argument("--live", action="store_true", help="強制 live 模式（覆寫 .env）")
+    parser.add_argument("--paper", action="store_true", help="強制 paper 模式（覆寫 .env）")
     args = parser.parse_args()
 
+    # Argparse 覆寫 .env
+    if args.live:
+        _MODE = "live"
+    elif args.paper:
+        _MODE = "paper"
+    mode_label = "LIVE" if _is_live() else "Paper"
+
     logger.info("=" * 55)
-    logger.info("  TMF 夜盤 ORB Paper Trading — B2 ML Filter")
+    logger.info(f"  TMF 夜盤 ORB {mode_label} Trading — B2 ML Filter")
     logger.info(f"  ML: {'disabled' if args.no_ml else f'enabled (threshold={args.threshold})'}")
+    logger.info(f"  Mode: {_MODE}")
     logger.info("=" * 55)
 
     ml = OrbMLFilter(threshold=args.threshold, enabled=not args.no_ml)
     paper = PaperLogger()
-    engine = NightORBEngine(ml, paper)
-    agg = Bar5mAggregator(engine.on_bar)
 
     # ── Shioaji 登入
+    # 2026-05-22 修法：login(fetch_contract=False) + 手動 fetch_contracts with retry
+    # 對應 broker.py 同樣修法、見 [[sinopac_fetch_contracts_partial_after_reset]]
+    # 永豐 quota reset 後偶爾 contract server partial fail、過去 5/13 / 5/18 / 5/22 都撞過
     import shioaji as sj
     api = sj.Shioaji(simulation=False)
     api.login(
         api_key=os.environ["SHIOAJI_API_KEY"],
         secret_key=os.environ["SHIOAJI_SECRET_KEY"],
         receive_window=300000,
+        fetch_contract=False,
     )
     logger.info("[Login] Shioaji OK")
 
-    contract = api.Contracts.Futures.MXF.MXFR1
+    # 手動 fetch_contracts + retry（最多 3 次、間隔 60s 給永豐 server 穩定時間）
+    for _retry in range(3):
+        try:
+            api.fetch_contracts(contracts_timeout=30000)
+            if _retry > 0:
+                logger.info(f"[Shioaji] fetch_contracts retry #{_retry} succeeded")
+            break
+        except Exception as fc_err:
+            logger.warning(f"[Shioaji] fetch_contracts attempt #{_retry+1} partial: {fc_err}")
+            if _retry < 2:
+                time.sleep(60)
+
+    # Sanity check：確認 TMF contract 真的可用
+    try:
+        _test_contract = api.Contracts.Futures.TMF.TMFR1
+        if _test_contract is None or not getattr(_test_contract, "code", ""):
+            logger.error("[Shioaji] TMFR1 contract 未載入完整、放棄啟動")
+            tg_night("🚨 啟動失敗：TMF 合約未載入完整、夜盤 ORB 無法運作")
+            sys.exit(1)
+    except Exception as e:
+        logger.error(f"[Shioaji] TMF contract 取得失敗: {e}")
+        tg_night(f"🚨 啟動失敗：TMF 合約取得失敗 {e}")
+        sys.exit(1)
+
+    # ── Live 模式必須 activate_ca + 確認 futopt_account.signed
+    order_mgr = None
+    sizer = None
+    if _is_live():
+        ca_path = os.environ.get("SHIOAJI_CA_PATH", "")
+        ca_pw = os.environ.get("SHIOAJI_CA_PASSWORD", "")
+        person_id = os.environ.get("SHIOAJI_PERSON_ID", "")
+        if not ca_path:
+            logger.error("[Live] SHIOAJI_CA_PATH 未設定、無法 activate_ca、放棄 live mode")
+            sys.exit(1)
+        api.activate_ca(ca_path=ca_path, ca_passwd=ca_pw, person_id=person_id)
+        logger.info("[Live] CA activated")
+        if not api.futopt_account or not getattr(api.futopt_account, "signed", False):
+            logger.error("[Live] futopt_account.signed=False、API 同意書未簽、放棄 live mode")
+            sys.exit(1)
+        logger.info(f"[Live] futopt_account signed: {api.futopt_account.account_id}")
+
+        # PositionSizer：跟日盤共用 RISK_PROFILE
+        from risk.position_sizing import PositionSizer
+        profile = os.environ.get("RISK_PROFILE", "balanced")
+        sizer = PositionSizer(profile)
+        logger.info(f"[Live] PositionSizer profile={profile} "
+                    f"max_contracts={sizer.preset.max_contracts}")
+
+    # ── 合約 TMF（微台、與日盤 breakout 一致、5/20 從 MXF 改）
+    contract = api.Contracts.Futures.TMF.TMFR1
+    logger.info(f"[Contract] {contract.code} ({contract.name})")
+
+    # ── Live 模式：起 LiveOrderManager
+    if _is_live():
+        order_mgr = LiveOrderManager(api, contract)
+
+    # ── Engine 帶 order_mgr + sizer（paper 模式為 None）
+    engine = NightORBEngine(ml, paper, order_mgr=order_mgr, sizer=sizer)
+    agg = Bar5mAggregator(engine.on_bar)
 
     # ── Tick heartbeat 狀態（monotonic clock 防 NTP 跳動）
     _hb_state = {"last": None, "disconnected": False}
@@ -705,8 +956,8 @@ def main():
     )
     hb_thread.start()
 
-    logger.info(f"[Subscribe] MXF tick feed active. Waiting for bars...")
-    logger.info(f"[Paper] Log: {paper.path}")
+    logger.info(f"[Subscribe] {contract.code} tick feed active. Waiting for bars...")
+    logger.info(f"[{'Live' if _is_live() else 'Paper'}] Log: {paper.path}")
     logger.info("Press Ctrl+C to stop.\n")
 
     try:

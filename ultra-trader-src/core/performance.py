@@ -189,12 +189,21 @@ class PerformanceTracker:
         3. 更新 cumulative.json
         4. 若週五 -> 生成 weekly
         5. 若月底 -> 生成 monthly
-        """
-        today = datetime.now().strftime("%Y-%m-%d")
 
-        daily = self._build_daily_summary(today, ending_balance)
+        2026-05-21 fix：結算日期用 self._today（in-memory 對應的那天）、不是 wall clock now。
+        避免跨日 process restart 時、把昨日的 today_trades 寫進今日 .json。
+        若 self._today 為空（new process、無 trade）、fallback 用 wall clock。
+        """
+        today_wall = datetime.now().strftime("%Y-%m-%d")
+        settle_date = self._today if self._today else today_wall
+
+        daily = self._build_daily_summary(settle_date, ending_balance)
         self._save_daily(daily)
         self._update_cumulative(daily)
+        # 結算完、reset in-memory state、避免下一輪 stop/start 又寫同份
+        self.today_trades = []
+        self.paper_signals = []
+        self._today = today_wall
 
         # 週五 → 生成 weekly
         today_date = datetime.now().date()
@@ -206,13 +215,13 @@ class PerformanceTracker:
         if tomorrow.month != today_date.month:
             self._generate_monthly(today_date)
 
-        logger.info(f"[Performance] 日結完成: {today} | PnL: {daily.daily_pnl:+.0f} | "
+        logger.info(f"[Performance] 日結完成: {settle_date} | PnL: {daily.daily_pnl:+.0f} | "
                     f"交易: {daily.total_trades} 筆 | 勝率: {daily.win_rate:.1f}%")
 
         self._add_activity(
             "session_end",
-            f"日結 {today} | PnL: {daily.daily_pnl:+.0f} | 勝率: {daily.win_rate:.1f}%",
-            {"date": today, "pnl": daily.daily_pnl}
+            f"日結 {settle_date} | PnL: {daily.daily_pnl:+.0f} | 勝率: {daily.win_rate:.1f}%",
+            {"date": settle_date, "pnl": daily.daily_pnl}
         )
 
     def get_daily_summary(self, date_str: str = None) -> dict:
@@ -391,19 +400,35 @@ class PerformanceTracker:
             logger.warning(f"[Performance] 恢復 _live.json 失敗: {e}")
 
     def _save_incremental(self):
-        """每筆交易即時存檔（防止意外斷線丟失）"""
+        """每筆交易即時存檔（防止意外斷線丟失）。
+
+        兩份檔同時更新：
+          - {today}_live.json：trades + paper_signals 即時 snapshot（重啟恢復用）
+          - {today}.json     ：完整 DailyPerformance（含統計、給日報/週報讀）
+
+        過去只有 _live.json 即時寫、.json 等 on_session_end 才寫一次、
+        導致 daily_status_ping 跑在收盤前讀到空殼 .json（見 2026-05-20 incident）。
+        現在每筆 trade/signal 後兩份都更新、永遠同步。
+        """
         try:
             today = datetime.now().strftime("%Y-%m-%d")
-            path = self.data_dir / "daily" / f"{today}_live{self._suffix}.json"
-            data = {
+            live_path = self.data_dir / "daily" / f"{today}_live{self._suffix}.json"
+            live_data = {
                 "date": today,
                 "trading_mode": self.trading_mode,
                 "trades": self.today_trades,
                 "paper_signals": self.paper_signals,
                 "updated_at": datetime.now().isoformat(),
             }
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2, default=str)
+            with open(live_path, "w", encoding="utf-8") as f:
+                json.dump(live_data, f, ensure_ascii=False, indent=2, default=str)
+
+            # 同步更新 .json 完整版：用 starting_balance + 累積 pnl 推 ending_balance
+            ending_balance = self.starting_balance + sum(
+                t.get("net_pnl", t.get("pnl", 0)) for t in self.today_trades
+            )
+            daily = self._build_daily_summary(today, ending_balance)
+            self._save_daily(daily)
         except Exception as e:
             logger.warning(f"[Performance] incremental save failed: {e}")
 

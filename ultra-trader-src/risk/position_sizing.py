@@ -74,6 +74,7 @@ RISK_PRESETS = {
         name="tmf_3x",
         label="3x TMF",
         risk_per_trade=0.04,        # 4%，與 balanced 同，讓公式算出 3 口
+        # 2026-05-21 入金 125K（30K 已到帳）、恢復原 max=3 / max_daily_loss=9000
         max_contracts=3,            # 允許最多 3 口微台指
         max_daily_trades=15,
         max_daily_loss=9000,        # 3 口 × 3 筆停損緩衝
