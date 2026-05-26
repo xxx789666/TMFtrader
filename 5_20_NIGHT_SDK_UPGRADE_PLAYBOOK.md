@@ -1,4 +1,35 @@
-# 🔧 5/20 (二) 21:00 切 live 二次嘗試 — Min-verify First、SDK upgrade Plan B
+# 🔧 [CANCELLED] 5/20 21:00 SDK upgrade playbook — 整套作廢
+
+## ⛔ 為什麼整套 playbook 不執行了
+
+**1. rshioaji 1.5.13 不存在**
+- 5/20 下午查 sinotrade.github.io/release/ 確認 shioaji 1.3.3 是最新版（2026-04-08）
+- 1.4.x / 1.5.x 從未發佈
+- Discord expert 第 1 次回覆「升 1.5.13」是 hallucination、第 2 次自己推翻
+
+**2. SDK 1.3.3 沒事、真兇是 list_positions 401**
+- min-verify (noop callback) 跑 5 分鐘穩 ✅
+- 12-round setter bisect 全 SURVIVED ✅
+- 真兇定位：`api.list_positions()` 撞 401（API key 沒簽帳務查詢權限）
+  → SDK 內部 401 handler 起 thread disconnect session
+  → main thread 用舊 session pointer = use-after-free GPF at ip:0x580ec2
+- 5/20 18:26 patch（disable engine.py 內 reconcile + init real_positions）後 live process 10+ 分鐘全程穩定
+
+**3. 真正的修法（已 deploy）**
+- `core/engine.py:463` + `core/engine.py:1445` 兩處 `if False and ...` 暫時 disable `get_real_positions()` 呼叫
+- 等永豐 API 管理頁面簽好帳務查詢權限後、再 enable list_positions（且要改成單 thread 呼叫）
+
+**4. 完整 incident timeline 見**
+- `5_20_GO_LIVE_PLAYBOOK.md` 結尾的「事後紀錄」section
+- memory: [[shioaji-1-3-3-live-callback-race]]（檔名雖叫 race、內容已修正：真因是 401）
+
+---
+
+> 以下保留原 playbook 內容作歷史紀錄、**勿執行**。
+
+---
+
+# 原 playbook（已作廢）
 
 > 5/20 早上切 live 撞 callback table corruption（_engine_loop / dict / tuple 在同 slot）。
 > Discord expert 第二次回覆：paper 4 天 OK = SDK 沒事、可能我們 callback body 有 bug。

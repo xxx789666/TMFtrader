@@ -737,10 +737,17 @@ user 醒來必做（5 分鐘）：
 
 ### 🔴 5/20 切 live 前必修待解問題清單（總覽）
 
-**P0 阻塞切 live**
-- [ ] kbars API 是否真會在 quota reset 後恢復（隨時測 `_test_kbars.py`）
-- [ ] paper 500MB/日 對雙策略不夠 → 修法 A 已 commit、明天 08:30 後驗效
-- [ ] 日盤 breakout 80-bar warm-up 仍依賴 kbars → 短期靠 quota 恢復、長期靠修法 B 或提早 cron
+**P0 阻塞切 live** ✅ 5/20 已解（disable list_positions、live process 跑著）
+- [x] kbars API 是否真會在 quota reset 後恢復 — 5/20 已驗 ✅
+- [x] paper 500MB/日 對雙策略不夠 → 修法 A 已驗效 ✅
+- [x] 日盤 breakout 80-bar warm-up 仍依賴 kbars — 5/20 quota 恢復、80 bars warmup 成功 ✅
+- [x] **5/20 live mode pybind11::error_already_set + GPF crash** — 18:25 已修（disable list_positions、見 Phase 9.7）✅
+
+**P0 永久解（5/21+ 待做、不阻塞 live 運作）**
+- [ ] **永豐 API 管理頁面確認帳務查詢權限**（解 401 source）
+- [ ] 解 401 後 enable `get_real_positions()` 兩處（engine.py:463 + engine.py:1445）、改成單 thread 呼叫
+- [ ] audit broker.py 所有 `self._api.*` 呼叫的 thread origin、修掉所有 multi-thread invoke
+- [ ] 移除 broker `_attempt_reconnect` 內起 daemon thread 的 pattern
 
 **P1 等永豐客服回覆**
 - [ ] quota reset 時區（TST vs UTC vs 滾動 24h）
@@ -924,6 +931,62 @@ ssh ultratrader-night "crontab -l | sed 's/^\(30 0 .* restart_day\)/# \1/;s/^\(5
 # D. 永豐 App 手動平倉（最終保險、24h 都可用）
 #    用手機 App 直接平掉所有期貨持倉、不依賴 VPS / 程式
 ```
+
+---
+
+### 🔥 9.7 事後實際結果 (2026-05-20 晚補)
+
+按 9.1 改 `.env` 後 08:33 起 live process → **每 60-90 秒就 die**（process 起跑 14 個循環、quota spam 70→144 MB）
+
+**死前 stderr / journal**：
+- `terminate called after throwing an instance of 'pybind11::error_already_set'` × 3 隨機 type
+  - `_engine_loop() takes 1 positional argument but 5 were given`
+  - `'dict' object is not callable`
+  - `'tuple' object is not callable`
+- kernel `traps: python3.12 general protection fault ip:0x580ec2`（固定地址、segfault at 0xa / 0x1）
+
+**下午 root cause hunt（17:00-18:25）**：
+1. **min-verify (noop callback)** 跑 5 分鐘穩 → 排除 SDK 本身
+2. **12-round setter bisect**（累加註冊 13 個 callback setter、每 round 120s）→ 全 SURVIVED、quota 漲 0.2 MB
+3. **真兇定位**：`broker.py:802 get_real_positions` → `api.list_positions(account)` 撞 **401 "Token doesn't have permission"**
+   - 永豐 API key **沒簽帳務查詢權限**
+   - shioaji 1.3.3 SDK 內部 401 handler 起 thread disconnect session
+   - main thread / SDK callback thread 用舊 session pointer = use-after-free GPF
+   - 第一次撞：engine.py:465 init 階段（main thread）
+   - 第二次撞：engine.py:1445 `_heartbeat` 第 60 秒呼叫 `_reconcile_positions`（在 `_engine_loop` daemon thread）→ 對應 60-90s die timing
+4. **paper 模式為何不死**：`if trading_mode == "live"` 跳過 list_positions
+5. **rshioaji 1.5.13 不存在**：sinotrade.github.io/release/ 確認 1.3.3 是 latest、Discord expert 第 1 次「升 1.5.13」是 hallucination
+
+**修法（18:25 deploy）**：
+```python
+# core/engine.py:463
+if False and self.trading_mode == "live" and hasattr(self.broker, 'get_real_positions'):
+    real_positions = self.broker.get_real_positions()
+
+# core/engine.py:1445
+if False and self._heartbeat_count % 60 == 0 and self.trading_mode == "live":
+    self._reconcile_positions()
+```
+
+**驗證（18:26 切 live）**：
+- ✅ PID 635823 跑 10+ 分鐘穩定（之前最長 90 秒）
+- ✅ 10 個 heartbeat 連續正常、TMF 40600 → 40616
+- ✅ Quota 漲幅 0.2 MB / 10 分鐘（正常）
+- ✅ 無新 terminate / GPF 訊息
+- ✅ Discord expert 第 4 次回覆預測完全對上（list_positions 401 → SDK disconnect race → main thread dangling pointer GPF）
+
+**P0 待解（永久解的 prerequisite）**：
+- [ ] **永豐 API 管理頁面確認 API key 帳務查詢權限**（解 401 source）
+- [ ] 解 401 後 enable list_positions、但要改成單 thread 呼叫
+- [ ] audit `broker.py` 內所有 `self._api.*` 呼叫的 thread origin（place_order / get_account_info / margin / kbars 等）、確保不從 callback thread 或多 thread 同時 invoke
+- [ ] 移除 broker 內 `_attempt_reconnect` 起 daemon thread 的 pattern（同樣 multi-thread api.* 風險）
+
+**短期影響**：
+- 不能自動 reconcile 持倉、若人工在 App 開倉 / 平倉、engine state 不會跟著更新
+- 暫時靠人工監看永豐 App 持倉
+- 真實單成交回報走 `_order_cb`（SDK 主動推、不需要 list_positions）、不受影響
+
+完整 incident 記錄見 memory：[[shioaji-1-3-3-live-callback-race]]
 
 ---
 

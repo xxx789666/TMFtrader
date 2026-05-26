@@ -4,6 +4,34 @@
 
 ---
 
+## ⚠️ 事後實際結果（5/20 晚補）
+
+5/20 早上 08:33 按計劃切 live → process **每 60-90 秒就 die**（pybind11 std::terminate / kernel GPF 交替）。
+下午 17:30 開始 deep debugging、跑完 12-round setter bisect（全 SURVIVED）後定位到真兇：
+
+**Root cause**：
+- `api.list_positions()` 撞 401（API key 帳務查詢權限沒簽好）
+- shioaji 1.3.3 SDK 內部 401 handler 起 thread disconnect session
+- main thread / SDK callback thread 用舊 session pointer = use-after-free GPF at ip:0x580ec2
+- paper 模式因 `if trading_mode == "live"` 跳過 list_positions、所以 4 天穩定
+
+**修法（已 deploy 18:25 TST）**：
+- `core/engine.py:463` 跟 `core/engine.py:1445` 兩處 `if False and ...` 暫時 disable `get_real_positions()` 呼叫
+- 18:26 重啟 live、跑 10+ 分鐘全程穩定 ✅
+
+**長期 TODO**：
+- [ ] 永豐 API 管理頁面確認帳務查詢權限是否打勾（解 401 source）
+- [ ] 解 401 後重 enable list_positions、但要改成單 thread 呼叫（callback handler 內不 invoke api.*）
+- [ ] 確認沒有別處從非 main thread 呼叫 `api.*`（broker 內 place_order / get_account_info / margin / kbars 都需 audit）
+
+完整 incident 跟 fix 過程見 memory: [[shioaji-1-3-3-live-callback-race]]
+
+---
+
+> 以下為原計劃內容、留作參考。下一次切 live 直接照新狀態走（live 已穩、不需要重切）。
+
+---
+
 ## 7:30 起床、先準備
 
 - [ ] 永豐 App 已開、密碼能登入

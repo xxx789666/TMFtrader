@@ -47,3 +47,6 @@ venv/
 .idea/
 *.swp
 .DS_Store
+vps api.txt
+vps_api.txt
+vps*.txt
