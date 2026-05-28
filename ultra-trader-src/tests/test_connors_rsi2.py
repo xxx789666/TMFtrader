@@ -318,3 +318,20 @@ def test_engine_smoke_long_short():
     sides = {t["side"] for t in res.trades}
     assert "long" in sides or "short" in sides   # 至少一邊有
     # 若只有單側、紀錄這個 observation（report 時呈現）
+
+
+# ── Task 6 (P3): optimizer smoke test ─────────────────────────────────────
+def test_optimize_run_one_smoke():
+    """Task 6 smoke: _run_one direct call (no multiproc)"""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip("data 未準備")
+    from scripts.optimize_connors_rsi2 import _run_one
+    df = pd.read_parquet(p).head(2000).reset_index(drop=True)
+    res = _run_one(
+        {"rsi_period": 2, "rsi_low": 10, "sl_atr": 2.0, "max_bars": 18, "cooldown": 3},
+        df, split_idx=1000, allow_short=False,
+    )
+    assert "wf_score" in res and "test_n" in res
