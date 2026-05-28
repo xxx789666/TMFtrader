@@ -139,3 +139,95 @@ def test_entry_stop_below_close_on_deep_deviation():
     sig = strat.on_kbar(_kbar(ts, 80), _make_snap(80, 20, 2, ts))   # 深 fade
     assert sig is not None and sig.direction == SignalDirection.BUY
     assert sig.stop_loss < 80, f"Stop {sig.stop_loss} must be below entry 80 (long), else instant stop-out"
+
+
+# ── P2c exit logic helpers + tests ──────────────────────────────────────────
+
+def _pos(side, entry, stop, tp, bars):
+    from core.position import PositionManager
+    from core.instrument_config import INSTRUMENT_SPECS
+    pm = PositionManager(instruments=["TMF"], configs={"TMF": INSTRUMENT_SPECS["TMF"]},
+                         initial_balance=200_000)
+    pm.open_position("TMF", side, price=entry, quantity=1,
+                     stop_loss=stop, take_profit=tp, timestamp=None)
+    p = pm.positions["TMF"]
+    p.bars_since_entry = bars
+    return p
+
+
+def test_exit_force_close_at_1325():
+    from strategy.vwap_fade import VwapFadeStrategy
+    from strategy.base import SignalDirection
+    from core.position import Side
+    from datetime import datetime
+    strat = VwapFadeStrategy()
+    strat._vwap.update(datetime(2024, 1, 2, 9, 0), 100, 100, 100, 100)
+    snap = _make_snap(100, 20, 5, datetime(2024, 1, 2, 13, 25))
+    sig = strat.check_exit(_pos(Side.LONG, 95, 90, 101, 5), snap)
+    assert sig is not None and sig.direction == SignalDirection.CLOSE and "盤末" in sig.reason
+
+
+def test_exit_stop_loss_long():
+    from strategy.vwap_fade import VwapFadeStrategy
+    from strategy.base import SignalDirection
+    from core.position import Side
+    from datetime import datetime
+    strat = VwapFadeStrategy()
+    strat._vwap.update(datetime(2024, 1, 2, 9, 0), 100, 100, 100, 100)
+    # long entry 95, stop 90; price 89 <= stop -> triggers
+    snap = _make_snap(89, 20, 5, datetime(2024, 1, 2, 10, 0))
+    sig = strat.check_exit(_pos(Side.LONG, 95, 90, 101, 5), snap)
+    assert sig is not None and sig.direction == SignalDirection.CLOSE and "停損" in sig.reason
+
+
+def test_exit_vwap_profit_target_long():
+    from strategy.vwap_fade import VwapFadeStrategy
+    from strategy.base import SignalDirection
+    from core.position import Side
+    from datetime import datetime
+    strat = VwapFadeStrategy()
+    # Feed bars so VWAP stabilises near 100
+    for m in range(0, 25, 5):
+        ts = datetime(2024, 1, 2, 9, m)
+        strat.on_kbar(_kbar(ts, 100), _make_snap(100, 20, 2, ts))
+    # long entry 95; price 100 >= vwap -> profit target
+    snap = _make_snap(100, 20, 2, datetime(2024, 1, 2, 10, 0))
+    sig = strat.check_exit(_pos(Side.LONG, 95, 90, 100, 3), snap)
+    assert sig is not None and "VWAP" in sig.reason
+
+
+def test_exit_time_stop():
+    from strategy.vwap_fade import VwapFadeStrategy
+    from strategy.base import SignalDirection
+    from core.position import Side
+    from datetime import datetime
+    strat = VwapFadeStrategy(max_bars=24)
+    strat._vwap.update(datetime(2024, 1, 2, 9, 0), 100, 100, 100, 100)
+    # 25 bars held > max_bars 24; price at 95 doesn't breach stop(90) or reach vwap(~100)
+    snap = _make_snap(95, 20, 5, datetime(2024, 1, 2, 11, 0))
+    sig = strat.check_exit(_pos(Side.LONG, 95, 90, 100, 25), snap)
+    assert sig is not None and "時間停損" in sig.reason
+
+
+def test_cooldown_blocks_reentry_after_stop():
+    """Cooldown wiring: after a stop-loss exit _cooldown_until_bar is set correctly.
+
+    check_exit calls update_close_proxy internally, which increments session_bar by 1
+    before setting _cooldown_until_bar = session_bar + cooldown.  So the expected value
+    is (bar_before_stop + 1) + cooldown.
+    """
+    from strategy.vwap_fade import VwapFadeStrategy
+    from core.position import Side
+    from datetime import datetime
+    strat = VwapFadeStrategy(cooldown=3, min_warmup=1, adx_max=99)
+    # Build VWAP state
+    for i in range(5):
+        ts = datetime(2024, 1, 2, 9, i * 5)
+        strat.on_kbar(_kbar(ts, 100), _make_snap(100, 20, 2, ts))
+    bar_before_stop = strat._vwap.session_bar
+    # SHORT entry 100, stop 102 (above entry, correct for short);
+    # price 103 >= 102 -> stop triggered
+    snap = _make_snap(103, 20, 2, datetime(2024, 1, 2, 9, 30))
+    strat.check_exit(_pos(Side.SHORT, 100, 102, 90, 1), snap)
+    # update_close_proxy inside check_exit increments session_bar by 1 before cooldown is set
+    assert strat._cooldown_until_bar == bar_before_stop + 1 + 3

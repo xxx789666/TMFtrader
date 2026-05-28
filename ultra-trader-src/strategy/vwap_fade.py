@@ -19,7 +19,7 @@ from typing import Optional
 # ── Task P2b/P2c 進場/出場邏輯所需 import ────────────────────────────────────
 from strategy.base import BaseStrategy, Signal, SignalDirection
 from core.market_data import KBar, MarketSnapshot
-# from core.position import Position, Side  # 保留供 P2c 使用
+from core.position import Position, Side
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -244,3 +244,79 @@ class VwapFadeStrategy(BaseStrategy):
             ),
             source=self.name,
         )
+
+    # ── Task P2c: 出場邏輯 ──────────────────────────────────────────────────
+
+    def check_exit(self, position: "Position", snapshot: "MarketSnapshot") -> Optional[Signal]:
+        """每根 bar 持倉期間呼叫；回傳出場 Signal 或 None。
+
+        決策順序：
+          1. 盤末強平（snapshot.timestamp >= force_close）
+          2. 凍結停損（同時設冷卻）
+          3. 移動 VWAP 停利
+          4. 時間停損（bars_since_entry > max_bars）
+        """
+        if position.is_flat:
+            return None
+
+        ts = snapshot.timestamp          # 真實 bar 時間（不可用 self._current_bar_time）
+        price = snapshot.price
+        self._vwap.update_close_proxy(ts, price, snapshot.volume)
+        is_long = (position.side == Side.LONG)
+
+        def close_sig(reason: str) -> Signal:
+            return Signal(
+                direction=SignalDirection.CLOSE,
+                strength=1.0,
+                stop_loss=0,
+                take_profit=0,
+                reason=reason,
+                source=self.name,
+            )
+
+        # 1) 盤末強平
+        if ts.time() >= self._force_close:
+            return close_sig(f"盤末強平 @ {price:.0f}")
+
+        # 2) 凍結停損（觸發時同時寫入冷卻）
+        if position.stop_loss > 0:
+            if is_long and price <= position.stop_loss:
+                self._cooldown_until_bar = self._vwap.session_bar + self.cooldown
+                return close_sig(f"停損 @ {price:.0f}")
+            if (not is_long) and price >= position.stop_loss:
+                self._cooldown_until_bar = self._vwap.session_bar + self.cooldown
+                return close_sig(f"停損 @ {price:.0f}")
+
+        # 3) 移動 VWAP 停利
+        vwap = self._vwap.vwap
+        if vwap > 0:
+            if is_long and price >= vwap:
+                return close_sig(f"回到VWAP停利 @ {price:.0f}")
+            if (not is_long) and price <= vwap:
+                return close_sig(f"回到VWAP停利 @ {price:.0f}")
+
+        # 4) 時間停損
+        if position.bars_since_entry > self.max_bars:
+            return close_sig(f"時間停損 {position.bars_since_entry}根")
+
+        return None
+
+    def get_parameters(self) -> dict:
+        """回傳可調整的策略參數（供 Dashboard 顯示）。"""
+        return {
+            "k": self.k,
+            "k2": self.k2,
+            "adx_max": self.adx_max,
+            "max_bars": self.max_bars,
+            "max_trades": self.max_trades,
+        }
+
+    def reset(self):
+        """重置策略狀態（新交易日）；保留 sigma_window 與 use_volume 設定。"""
+        self._vwap = _SessionVwap(
+            sigma_window=self._vwap.sigma_window,
+            use_volume=self._vwap.use_volume,
+        )
+        self._trades_today = 0
+        self._cooldown_until_bar = -1
+        self._day = None
