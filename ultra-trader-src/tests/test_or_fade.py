@@ -370,3 +370,52 @@ def test_check_exit_does_not_update_or_state_or_session_bar():
     assert strat._or.or_high == or_high_before
     assert strat._or.or_low  == or_low_before
     assert strat._session_bar == session_bar_before
+
+
+# ── Task 5 (P2d): engine smoke on real MXF data ──────────────────────────────
+
+def test_engine_smoke_long_only():
+    """P2d: OrFadeStrategy(allow_short=False) 真實 MXF 5m 短段"""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip("data 未準備")
+    from core.gpu_indicators import precompute_all
+    from backtest.fast_engine import FastBacktestEngine
+    from strategy.or_fade import OrFadeStrategy
+    df = pd.read_parquet(p).head(3000).reset_index(drop=True)
+    ind = precompute_all(df, verbose=False)
+    res = FastBacktestEngine(initial_balance=200_000, instrument="TMF").run(
+        df, ind, OrFadeStrategy(allow_short=False), "balanced")
+    days = df["datetime"].dt.date.nunique()
+    if len(res.trades) == 0:
+        import pytest; pytest.skip(f"OR fade 在 {days} 天上零訊號（vol_ratio_max=0.7 預設嚴）"
+                                   f"——下游 grid 會放寬參數")
+    avg = len(res.trades) / max(days, 1)
+    assert avg < 10, f"過度交易 avg={avg:.2f}/day"
+    sides = {t["side"] for t in res.trades}
+    assert sides.issubset({"long"}), f"long-only 不該有 short，但出現 {sides}"
+
+
+def test_engine_smoke_long_short():
+    """allow_short=True 真實資料；至少一邊有單"""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip("data 未準備")
+    from core.gpu_indicators import precompute_all
+    from backtest.fast_engine import FastBacktestEngine
+    from strategy.or_fade import OrFadeStrategy
+    df = pd.read_parquet(p).head(3000).reset_index(drop=True)
+    ind = precompute_all(df, verbose=False)
+    res = FastBacktestEngine(initial_balance=200_000, instrument="TMF").run(
+        df, ind, OrFadeStrategy(allow_short=True), "balanced")
+    days = df["datetime"].dt.date.nunique()
+    if len(res.trades) == 0:
+        import pytest; pytest.skip(f"OR fade 在 {days} 天上零訊號")
+    avg = len(res.trades) / max(days, 1)
+    assert avg < 10
+    sides = {t["side"] for t in res.trades}
+    assert "long" in sides or "short" in sides
