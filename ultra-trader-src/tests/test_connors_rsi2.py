@@ -89,3 +89,95 @@ def test_rsi_state_does_NOT_reset_on_call():
     assert high_rsi > 80.0
     # 沒有 reset() method
     assert not hasattr(s, "reset"), "_RsiState 不應有 reset() — 跨日連續是設計"
+
+
+# ── Shared helpers (also used by Tasks 4, 5) ────────────────────────────────
+def _make_snap(price, adx, atr, ts):
+    from core.market_data import MarketSnapshot
+    s = MarketSnapshot()
+    s.price = price; s.adx = adx; s.atr = atr; s.timestamp = ts; s.volume = 100
+    return s
+
+
+def _kbar(ts, p, vol=100):
+    from core.market_data import KBar
+    return KBar(ts, p, p+1, p-1, p, vol)
+
+
+# ── Task 3 entry tests ──────────────────────────────────────────────────────
+def test_entry_long_on_low_rsi():
+    """RSI(2) 跌破閾值 → BUY，stop 在進場價下方"""
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy(rsi_low=10, sl_atr=2.0, allow_short=False)
+    prices = [100, 100, 99, 98, 97, 96, 95, 94, 93, 92, 91]
+    for i, p in enumerate(prices):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        strat.on_kbar(_kbar(ts, p), _make_snap(p, 20, 2, ts))
+    assert strat._trades_today > 0
+
+
+def test_short_blocked_when_allow_short_false():
+    """allow_short=False → RSI 高也不做空"""
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy(rsi_high=90, allow_short=False)
+    for i, p in enumerate([100, 100, 101, 102, 103, 104, 105, 106, 107, 108]):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        strat.on_kbar(_kbar(ts, p), _make_snap(p, 20, 2, ts))
+    assert strat._trades_today == 0
+
+
+def test_short_fires_when_allow_short_true():
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from strategy.base import SignalDirection
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy(rsi_high=90, allow_short=True)
+    sig = None
+    for i, p in enumerate([100, 100, 101, 102, 103, 104, 105, 106, 107, 108]):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        s = strat.on_kbar(_kbar(ts, p), _make_snap(p, 20, 2, ts))
+        if s is not None:
+            sig = s
+    assert sig is not None and sig.direction == SignalDirection.SELL
+    assert sig.stop_loss > 108   # 空單 stop 在進場價之上
+
+
+def test_entry_window_filter_blocks_before_open():
+    """entry_window=09:00-13:00 → 08:40~08:55 即使 RSI 觸發也不進場"""
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy(rsi_low=50, entry_window=("09:00", "13:00"))
+    for i, p in enumerate([100, 99, 98, 97]):
+        ts = datetime(2024, 1, 2, 8, 40 + i*5)
+        strat.on_kbar(_kbar(ts, p), _make_snap(p, 20, 2, ts))
+    assert strat._trades_today == 0, "entry_window 守衛失效：盤前不該有交易"
+
+
+def test_max_trades_per_day_caps():
+    """單日 _trades_today >= max_trades 後不再進新場"""
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy(rsi_low=99, max_trades=2)
+    for i in range(30):
+        # 簡化時間：起點 9:00、5 分一根、保持時間單調遞增
+        ts = datetime(2024, 1, 2, 9 + (i*5)//60, (i*5) % 60)
+        strat.on_kbar(_kbar(ts, 100 - i*0.1), _make_snap(100, 20, 2, ts))
+    assert strat._trades_today == 2
+
+
+def test_daily_reset_clears_trades_count_but_not_rsi():
+    """跨日：_trades_today 歸 0、_session_bar 歸 1、_RsiState 持續累積（_prev_close 帶入新日的價）"""
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy(rsi_low=99, max_trades=10)
+    for i in range(5):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        strat.on_kbar(_kbar(ts, 100 - i), _make_snap(100, 20, 2, ts))
+    ts2 = datetime(2024, 1, 3, 9, 0)
+    strat.on_kbar(_kbar(ts2, 95), _make_snap(95, 20, 2, ts2))
+    assert strat._trades_today <= 1
+    assert strat._session_bar == 1
+    # RSI 不重置：_prev_close 已被更新為新日的價（95）、_count 沒歸零
+    assert strat._rsi._prev_close == 95.0
+    assert strat._rsi._count >= 2
