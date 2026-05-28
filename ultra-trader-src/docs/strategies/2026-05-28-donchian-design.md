@@ -60,6 +60,10 @@ class _DonchianState(entry_n, exit_k):
 
 **含/不含當前 bar 的細節是 implementation 釘死的關鍵**：entry 用過去 N 根（不含當前 → 避免自我比較永遠 false breakout）；exit 用最近 K 根（含當前 → trailing 即時觸發）。TDD 必須覆蓋這個區別。
 
+**`on_kbar` 的呼叫順序必須是**：`_donchian.update(...)` → 守衛（warmup/window/cap/cooldown） → 進場判定。`-entry_n-1:-1` slice 取最近 N 根「之前」的 bars，剛 append 的當前 bar 落在 `-1` 位置會被排除——這正是 lookahead-bias 防線。TDD 必有一條 case：「append 一根新高 → 立即查 entry_n_high 不應包含這根的 high」。
+
+**`exit_k_high/low` partial-deque caveat**：若策略剛開市、deque 還沒滿 K 根、slice `_highs[-exit_k:]` 會回少於 K 根的結果。實務上不是問題——exit 只在持倉時呼叫、而持倉必先過 entry warmup（≥ entry_n+1 根 ≥ exit_k 一般情況），所以 exit_k 其實也已暖完。若 `exit_k > entry_n` 的極端 grid 組合可能不滿足，但 PARAM_GRID 設計上不會這樣（K < N 常識）。
+
 ### 3.3 進場（`on_kbar`，flat、entry_window 內、warmup 已過）
 
 ```
@@ -115,6 +119,8 @@ if warmup and in entry_window:
 | 30 | 11:15 | 45 | 9 |
 
 N=30 進場 bars 少、樣本可能不足，gate 評估時要注意。
+
+**最小樣本門檻**：grid 結果若某 combo 的 `test_n < 100`（OOS 不到百筆），不參與 Top-10 排名（避免 N=30 在 9 bars/day 上偶遇好運過 gate）。實作在 wf_score 計算時加 sample-size penalty 或直接 filter。
 
 ---
 
