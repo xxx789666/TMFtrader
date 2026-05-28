@@ -181,3 +181,93 @@ def test_daily_reset_clears_trades_count_but_not_rsi():
     # RSI 不重置：_prev_close 已被更新為新日的價（95）、_count 沒歸零
     assert strat._rsi._prev_close == 95.0
     assert strat._rsi._count >= 2
+
+
+# ── Shared helper (also used by Task 5 if needed) ──────────────────────────
+def _pos(side, entry, stop, bars):
+    """用 PositionManager 建真實 Position（dataclass 無 instrument 欄位）"""
+    from core.position import PositionManager
+    from core.instrument_config import INSTRUMENT_SPECS
+    pm = PositionManager(instruments=["TMF"], configs={"TMF": INSTRUMENT_SPECS["TMF"]},
+                         initial_balance=200_000)
+    pm.open_position("TMF", side, price=entry, quantity=1,
+                     stop_loss=stop, take_profit=0, timestamp=None)
+    p = pm.positions["TMF"]
+    p.bars_since_entry = bars
+    return p
+
+
+# ── Task 4 exit tests ──────────────────────────────────────────────────────
+def test_exit_force_close_at_1325():
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from strategy.base import SignalDirection
+    from core.position import Side
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy()
+    snap = _make_snap(100, 20, 2, datetime(2024, 1, 2, 13, 25))
+    sig = strat.check_exit(_pos(Side.LONG, 95, 90, 5), snap)
+    assert sig is not None and sig.direction == SignalDirection.CLOSE and "盤末" in sig.reason
+
+
+def test_exit_atr_stop_long_sets_cooldown():
+    """多單 price 跌破 stop_loss → CLOSE + cooldown_until_bar 設定"""
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from core.position import Side
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy(cooldown=3)
+    for i in range(5):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        strat.on_kbar(_kbar(ts, 100), _make_snap(100, 20, 2, ts))
+    bar_at_stop = strat._session_bar   # 5
+    snap = _make_snap(89, 20, 2, datetime(2024, 1, 2, 10, 0))
+    sig = strat.check_exit(_pos(Side.LONG, 95, 90, 3), snap)
+    assert sig is not None and "停損" in sig.reason
+    assert strat._cooldown_until_bar == bar_at_stop + 3   # cooldown=3 → block 後續 3 根
+
+
+def test_exit_atr_stop_short_sets_cooldown():
+    """空單 price 漲破 stop_loss → CLOSE + cooldown"""
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from core.position import Side
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy(cooldown=3, allow_short=True)
+    for i in range(5):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        strat.on_kbar(_kbar(ts, 100), _make_snap(100, 20, 2, ts))
+    bar_at_stop = strat._session_bar
+    snap = _make_snap(103, 20, 2, datetime(2024, 1, 2, 10, 0))
+    sig = strat.check_exit(_pos(Side.SHORT, 100, 102, 3), snap)
+    assert sig is not None and "停損" in sig.reason
+    assert strat._cooldown_until_bar == bar_at_stop + 3
+
+
+def test_exit_rsi_mid_long():
+    """多單 RSI 回 >= 50 → 停利"""
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from core.position import Side
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy()
+    for i, p in enumerate([100, 100, 101, 102, 103, 104, 105]):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        strat.on_kbar(_kbar(ts, p), _make_snap(p, 20, 2, ts))
+    assert strat._rsi.rsi > 50
+    snap = _make_snap(105, 20, 2, datetime(2024, 1, 2, 10, 0))
+    sig = strat.check_exit(_pos(Side.LONG, 100, 95, 3), snap)
+    assert sig is not None and "RSI" in sig.reason
+
+
+def test_exit_time_stop():
+    """time stop 觸發；先讓 RSI < 50（避開 RSI 出場分支）"""
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    from core.position import Side
+    from datetime import datetime
+    strat = ConnorsRsi2Strategy(max_bars=24)
+    for i, p in enumerate([100, 99, 98, 97, 96]):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        strat.on_kbar(_kbar(ts, p), _make_snap(p, 20, 2, ts))
+    assert strat._rsi.rsi < 50
+    snap = _make_snap(95, 20, 2, datetime(2024, 1, 2, 11, 0))
+    # 注意 check_exit 內 _rsi.update(95) 會再餵一根；RSI 視之為小漲（從 96 -> 95，其實是跌）
+    # 多單 stop=90，當前價 95 > 90 不觸停損；bars=25 > max_bars=24
+    sig = strat.check_exit(_pos(Side.LONG, 95, 90, 25), snap)
+    assert sig is not None and "時間停損" in sig.reason

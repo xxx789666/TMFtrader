@@ -140,3 +140,54 @@ class ConnorsRsi2Strategy(BaseStrategy):
             reason=f"connors_rsi2 {direction.value} rsi={rsi:.1f}",
             source=self.name,
         )
+
+    def check_exit(self, position, snapshot) -> Optional[Signal]:
+        if position.is_flat:
+            return None
+        ts = snapshot.timestamp          # 真實 bar 時間
+        price = snapshot.price
+        self._rsi.update(price)          # 持倉期間維持 RSI（close-proxy）
+        # 注意：_session_bar 在 check_exit **不**增量（只 on_kbar flat bar 才算）
+        is_long = (position.side == Side.LONG)
+
+        def close_sig(reason):
+            return Signal(direction=SignalDirection.CLOSE, strength=1.0,
+                          stop_loss=0, take_profit=0, reason=reason, source=self.name)
+
+        # 1) 盤末強平
+        if ts.time() >= self._force_close:
+            return close_sig(f"盤末強平 @ {price:.0f}")
+        # 2) ATR 凍結停損 + cooldown 接線
+        if position.stop_loss > 0:
+            if is_long and price <= position.stop_loss:
+                self._cooldown_until_bar = self._session_bar + self.cooldown
+                return close_sig(f"停損 @ {price:.0f}")
+            if (not is_long) and price >= position.stop_loss:
+                self._cooldown_until_bar = self._session_bar + self.cooldown
+                return close_sig(f"停損 @ {price:.0f}")
+        # 3) RSI 回中
+        rsi = self._rsi.rsi
+        if is_long and rsi >= 50:
+            return close_sig(f"RSI回中停利 rsi={rsi:.1f}")
+        if (not is_long) and rsi <= 50:
+            return close_sig(f"RSI回中停利 rsi={rsi:.1f}")
+        # 4) 時間停損
+        if position.bars_since_entry > self.max_bars:
+            return close_sig(f"時間停損 {position.bars_since_entry}根")
+        return None
+
+    def get_parameters(self):
+        return {
+            "rsi_period": self.rsi_period, "rsi_low": self.rsi_low, "rsi_high": self.rsi_high,
+            "sl_atr": self.sl_atr, "max_bars": self.max_bars,
+            "max_trades": self.max_trades, "cooldown": self.cooldown,
+            "allow_short": self.allow_short,
+        }
+
+    def reset(self):
+        # 引擎不會跨日呼叫此方法（vwap_fade plan §1 表確認），這裡只供手動測試/重啟用
+        self._rsi = _RsiState(period=self.rsi_period)
+        self._trades_today = 0
+        self._cooldown_until_bar = -1
+        self._session_bar = 0
+        self._day = None
