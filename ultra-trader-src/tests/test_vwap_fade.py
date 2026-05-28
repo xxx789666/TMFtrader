@@ -41,3 +41,18 @@ def test_cost_accounting():
     assert trade.commission == 50.0, f"Expected commission=50.0, got {trade.commission}"
     # 淨利 = 100 - 50 = 50（成本確實有扣）
     assert trade.net_pnl == 50.0, f"Expected net_pnl=50.0, got {trade.net_pnl}"
+
+
+def test_session_resample():
+    """
+    P1: 驗證日盤時段過濾 + 5m resample 純函式
+    """
+    import pandas as pd
+    from scripts.prepare_vwap_data import resample_day_session
+    idx = pd.date_range("2024-01-02 08:40", "2024-01-02 13:50", freq="1min")
+    df = pd.DataFrame({"datetime": idx, "open": 1.0, "high": 2.0, "low": 0.5, "close": 1.5, "volume": 1})
+    out = resample_day_session(df, freq="5min")
+    assert out["datetime"].dt.time.min().strftime("%H:%M") == "08:45"
+    assert out["datetime"].dt.time.max().strftime("%H:%M") <= "13:45"
+    assert (out["high"] == 2.0).all() and (out["low"] == 0.5).all()
+    assert out["volume"].iloc[0] == 5
