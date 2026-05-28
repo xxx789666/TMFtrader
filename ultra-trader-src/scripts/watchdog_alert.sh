@@ -75,6 +75,11 @@ if [ $HHMM -ge 1454 ] && [ $HHMM -le 1458 ]; then
   night_expected=0
   wlog "夜盤重啟窗、跳過 night_orb 檢查"
 fi
+# grace：cron 05:10 TST 殺 night_orb（10 21 * * 0-4 UTC）→ watchdog 同分鐘跑會誤報、給 ±2 分緩衝
+if [ $HHMM -ge 508 ] && [ $HHMM -le 512 ]; then
+  night_expected=0
+  wlog "夜盤 05:10 收盤窗、跳過 night_orb 檢查"
+fi
 if [ $night_expected -eq 1 ]; then
   if pgrep -f 'night_orb.py' >/dev/null; then
     wlog "night_orb.py OK"
