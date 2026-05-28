@@ -431,3 +431,43 @@ def test_engine_smoke_long_short():
     assert avg < 10
     sides = {t["side"] for t in res.trades}
     assert "long" in sides or "short" in sides
+
+
+# ── Task 6 (P3): optimize_donchian smoke tests ────────────────────────────
+
+def test_optimize_run_one_smoke():
+    """Task 6 smoke: _run_one direct call"""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip("data 未準備")
+    from scripts.optimize_donchian import _run_one
+    df = pd.read_parquet(p).head(2000).reset_index(drop=True)
+    res = _run_one(
+        {"entry_n": 20, "exit_k": 10, "sl_atr": 2.0, "max_bars": 48, "cooldown": 3},
+        df, split_idx=1000, allow_short=False,
+    )
+    assert "wf_score" in res and "test_n" in res
+
+
+def test_optimize_run_one_applies_sample_size_penalty():
+    """test_n < 100 -> wf_score = -50 (penalty)"""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip("data 未準備")
+    from scripts.optimize_donchian import _run_one
+    df = pd.read_parquet(p).head(2000).reset_index(drop=True)
+    # entry_n=30 + small slice -> few trades expected
+    res = _run_one(
+        {"entry_n": 30, "exit_k": 15, "sl_atr": 2.5, "max_bars": 24, "cooldown": 5},
+        df, split_idx=1000, allow_short=False,
+    )
+    # If test_n < 100 -> wf_score should be -50 (or -99 if even fewer)
+    if res["test_n"] < 5:
+        assert res["wf_score"] == -99.0
+    elif res["test_n"] < 100:
+        assert res["wf_score"] == -50.0
+    # else: genuine score, skip the assertion
