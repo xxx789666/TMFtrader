@@ -9,10 +9,9 @@ from datetime import datetime, time
 from typing import Optional
 import math
 
-# Task P2b/P2c 進出場邏輯所需 import（待後續任務取消註解）
-# from strategy.base import BaseStrategy, Signal, SignalDirection
-# from core.market_data import KBar, MarketSnapshot
-# from core.position import Position, Side
+from strategy.base import BaseStrategy, Signal, SignalDirection
+from core.market_data import KBar, MarketSnapshot
+from core.position import Position, Side
 
 
 class _DonchianState:
@@ -83,3 +82,92 @@ class _DonchianState:
 
 
 # -- DonchianStrategy 由 Task P2b/P2c 新增於此 ────────────────────────────────
+
+class DonchianStrategy(BaseStrategy):
+    def __init__(
+        self,
+        entry_n: int = 20,
+        exit_k: int = 10,
+        sl_atr: float = 2.0,
+        max_bars: int = 48,
+        cooldown: int = 3,
+        max_trades: int = 5,
+        entry_window_end: str = "12:00",
+        force_close: str = "13:25",
+        allow_short: bool = False,
+        point_value: float = 10.0,
+    ):
+        self.entry_n = entry_n
+        self.exit_k = exit_k
+        self.sl_atr = sl_atr
+        self.max_bars = max_bars
+        self.cooldown = cooldown
+        self.max_trades = max_trades
+        self.allow_short = allow_short
+        self.point_value = point_value
+
+        # _ew_start 動態 = 08:45 + entry_n*5min
+        ew_start_min = 8 * 60 + 45 + entry_n * 5
+        self._ew_start = time(ew_start_min // 60, ew_start_min % 60)
+        self._ew_end = time.fromisoformat(entry_window_end)
+        self._force_close = time.fromisoformat(force_close)
+
+        self._donchian = _DonchianState(entry_n=entry_n, exit_k=exit_k)
+        self._trades_today = 0
+        self._cooldown_until_bar = -1
+        self._session_bar = 0
+        self._day = None
+
+    @property
+    def name(self) -> str:
+        return "donchian"
+
+    def _maybe_daily_reset(self, dt: datetime) -> None:
+        d = dt.date()
+        if d != self._day:
+            self._day = d
+            self._trades_today = 0
+            self._cooldown_until_bar = -1
+            self._session_bar = 0
+            # _donchian 由 update() 內 _maybe_reset 自動清空
+
+    def on_kbar(self, kbar, snapshot):
+        ts = kbar.datetime
+        # ── 鐵律順序：reset → update → session_bar → guards → entry ──────
+        self._maybe_daily_reset(ts)
+        self._donchian.update(ts, kbar.high, kbar.low)
+        self._session_bar += 1
+
+        # 守衛
+        if not self._donchian.warmup_ready:
+            return None
+        if not (self._ew_start <= ts.time() < self._ew_end):
+            return None
+        if self._trades_today >= self.max_trades:
+            return None
+        if self._session_bar <= self._cooldown_until_bar:
+            return None
+
+        # 進場（entry_n_high/low 不含當前 bar）
+        atr = max(snapshot.atr, 1.0)
+        close = kbar.close
+        if close > self._donchian.entry_n_high:
+            stop = close - self.sl_atr * atr
+            return self._signal(SignalDirection.BUY, close, stop)
+        if self.allow_short and close < self._donchian.entry_n_low:
+            stop = close + self.sl_atr * atr
+            return self._signal(SignalDirection.SELL, close, stop)
+        return None
+
+    def _signal(self, direction, price, stop):
+        self._trades_today += 1
+        return Signal(
+            direction=direction, strength=1.0,
+            stop_loss=round(stop, 1), take_profit=0,
+            reason=f"donchian {direction.value} N={self.entry_n}",
+            source=self.name,
+        )
+
+    def check_exit(self, position, snapshot):
+        # Task 4 — not implemented yet
+        return None

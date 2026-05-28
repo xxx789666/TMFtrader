@@ -124,3 +124,144 @@ def test_donchian_invalid_params():
         _DonchianState(entry_n=0, exit_k=2)
     with pytest.raises(ValueError):
         _DonchianState(entry_n=2, exit_k=0)
+
+
+# ── Shared helpers (used by Tasks 4, 5) ────────────────────────────────────
+def _make_snap(price, adx, atr, ts):
+    from core.market_data import MarketSnapshot
+    s = MarketSnapshot()
+    s.price = price; s.adx = adx; s.atr = atr; s.timestamp = ts; s.volume = 100
+    return s
+
+
+def _kbar(ts, o=None, h=None, l=None, c=None, vol=100):
+    """O/H/L/C 可指定；Donchian 對 high/low 敏感"""
+    from core.market_data import KBar
+    if c is None: c = 100.0
+    if o is None: o = c
+    if h is None: h = c + 1
+    if l is None: l = c - 1
+    return KBar(ts, o, h, l, c, vol)
+
+
+# ── Task 3 entry tests ─────────────────────────────────────────────────────
+def test_entry_window_dynamic_start():
+    """entry_n=N → _ew_start = 08:45 + N*5min"""
+    from strategy.donchian import DonchianStrategy
+    from datetime import time
+    assert DonchianStrategy(entry_n=10)._ew_start == time(9, 35)
+    assert DonchianStrategy(entry_n=20)._ew_start == time(10, 25)
+    assert DonchianStrategy(entry_n=30)._ew_start == time(11, 15)
+
+
+def test_entry_blocked_until_warmup():
+    """warmup 未達 (len <= entry_n) → 不進場"""
+    from strategy.donchian import DonchianStrategy
+    from datetime import datetime
+    strat = DonchianStrategy(entry_n=3, allow_short=False)
+    for i, p in enumerate([100, 101, 102]):
+        ts = datetime(2024, 1, 2, 9, 0 + i*5)
+        strat.on_kbar(_kbar(ts, c=p, h=p, l=p-1), _make_snap(p, 30, 2, ts))
+    assert strat._trades_today == 0
+
+
+def test_entry_long_on_breakout_above_n_bar_high():
+    """收 N+1 根之後 close > prior-N-bar high → BUY"""
+    from strategy.donchian import DonchianStrategy
+    from strategy.base import SignalDirection
+    from datetime import datetime
+    strat = DonchianStrategy(entry_n=3, exit_k=2, sl_atr=2.0, allow_short=False)
+    # entry_n=3 → _ew_start = 09:00
+    prices = [100, 102, 105, 103]
+    for i, p in enumerate(prices):
+        ts = datetime(2024, 1, 2, 9, 0 + i*5)
+        strat.on_kbar(_kbar(ts, c=p, h=p, l=p-1), _make_snap(p, 30, 2, ts))
+    # deque highs = [100,102,105,103]
+    # entry_n_high = max of bars[-4:-1] = max(100,102,105) = 105
+    # 下一根 close=107 > 105 → BUY
+    ts = datetime(2024, 1, 2, 9, 20)
+    sig = strat.on_kbar(_kbar(ts, c=107, h=107, l=106), _make_snap(107, 30, 2, ts))
+    assert sig is not None and sig.direction == SignalDirection.BUY
+    assert sig.stop_loss < 107
+
+
+def test_no_entry_when_close_inside_range():
+    """close 在 N-bar range 內 → 不進場"""
+    from strategy.donchian import DonchianStrategy
+    from datetime import datetime
+    strat = DonchianStrategy(entry_n=3, allow_short=True)
+    for i, p in enumerate([100, 102, 105, 103]):
+        ts = datetime(2024, 1, 2, 9, 0 + i*5)
+        strat.on_kbar(_kbar(ts, c=p, h=p, l=p-1), _make_snap(p, 30, 2, ts))
+    # close=104 介於 lows ~99 與 highs ~105 之間
+    ts = datetime(2024, 1, 2, 9, 20)
+    sig = strat.on_kbar(_kbar(ts, c=104, h=104, l=103), _make_snap(104, 30, 2, ts))
+    assert sig is None
+
+
+def test_short_blocked_when_allow_short_false():
+    """allow_short=False → close < N-bar low 也不進場"""
+    from strategy.donchian import DonchianStrategy
+    from datetime import datetime
+    strat = DonchianStrategy(entry_n=3, allow_short=False)
+    for i, p in enumerate([100, 102, 105, 103]):
+        ts = datetime(2024, 1, 2, 9, 0 + i*5)
+        strat.on_kbar(_kbar(ts, c=p, h=p, l=p-1), _make_snap(p, 30, 2, ts))
+    ts = datetime(2024, 1, 2, 9, 20)
+    sig = strat.on_kbar(_kbar(ts, c=95, h=95, l=94), _make_snap(95, 30, 2, ts))
+    assert sig is None
+
+
+def test_short_fires_when_allow_short_true():
+    from strategy.donchian import DonchianStrategy
+    from strategy.base import SignalDirection
+    from datetime import datetime
+    strat = DonchianStrategy(entry_n=3, sl_atr=2.0, allow_short=True)
+    for i, p in enumerate([100, 102, 105, 103]):
+        ts = datetime(2024, 1, 2, 9, 0 + i*5)
+        strat.on_kbar(_kbar(ts, c=p, h=p, l=p-1), _make_snap(p, 30, 2, ts))
+    # entry_n_low = min of bars[-4:-1] lows = min(99, 101, 104) = 99
+    ts = datetime(2024, 1, 2, 9, 20)
+    sig = strat.on_kbar(_kbar(ts, c=98, h=98, l=97), _make_snap(98, 30, 2, ts))
+    assert sig is not None and sig.direction == SignalDirection.SELL
+    assert sig.stop_loss > 98
+
+
+def test_entry_window_blocks_pre_open():
+    """entry_n=3 → _ew_start=09:00；08:35~08:55 不該進場"""
+    from strategy.donchian import DonchianStrategy
+    from datetime import datetime
+    strat = DonchianStrategy(entry_n=3, allow_short=False)
+    for i, p in enumerate([100, 102, 105, 103, 107]):
+        ts = datetime(2024, 1, 2, 8, 35 + i*5)
+        strat.on_kbar(_kbar(ts, c=p, h=p, l=p-1), _make_snap(p, 30, 2, ts))
+    assert strat._trades_today == 0
+
+
+def test_max_trades_per_day_caps():
+    """單日 _trades_today >= max_trades 後不再進新場"""
+    from strategy.donchian import DonchianStrategy
+    from datetime import datetime, timedelta
+    strat = DonchianStrategy(entry_n=2, max_trades=2, allow_short=False)
+    # ascending close 每根都會破前 N 高；用 timedelta 避免分鐘溢位
+    base = datetime(2024, 1, 2, 9, 0)
+    for i in range(20):
+        ts = base + timedelta(minutes=i * 5)
+        p = 100 + i * 2
+        strat.on_kbar(_kbar(ts, c=p, h=p, l=p-1), _make_snap(p, 30, 2, ts))
+    assert strat._trades_today == 2
+
+
+def test_daily_reset_clears_state():
+    """跨日：_trades_today=0、_session_bar=1（第一根後）；_donchian 自己 reset"""
+    from strategy.donchian import DonchianStrategy
+    from datetime import datetime
+    strat = DonchianStrategy(entry_n=2, allow_short=False)
+    for i, p in enumerate([100, 102, 105]):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        strat.on_kbar(_kbar(ts, c=p, h=p, l=p-1), _make_snap(p, 30, 2, ts))
+    ts2 = datetime(2024, 1, 3, 8, 45)
+    strat.on_kbar(_kbar(ts2, c=200, h=200, l=199), _make_snap(200, 30, 2, ts2))
+    assert strat._trades_today == 0
+    assert strat._session_bar == 1
+    assert strat._donchian.warmup_ready is False
