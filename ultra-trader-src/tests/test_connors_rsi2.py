@@ -49,3 +49,43 @@ def test_cost_accounting_high_price_tax_scales():
     expected_comm = 36 + (expected_entry_tax + expected_exit_tax)
     assert trade.commission == float(expected_comm), \
         f"@45k commission: expected {expected_comm}, got {trade.commission}"
+
+
+def test_rsi_warmup_returns_50():
+    """暖身期（update 數 < period）回中性 50.0"""
+    from strategy.connors_rsi2 import _RsiState
+    s = _RsiState(period=2)
+    assert s.rsi == 50.0      # 還沒 update
+    s.update(100.0)
+    assert s.rsi == 50.0      # 才 1 個 update，不足 period
+
+
+def test_rsi_full_gain_approaches_100():
+    """連續上漲 → RSI 趨向 100"""
+    from strategy.connors_rsi2 import _RsiState
+    s = _RsiState(period=2)
+    for p in [100, 101, 102, 103, 104, 105]:
+        s.update(float(p))
+    assert s.rsi > 95.0
+
+
+def test_rsi_full_loss_approaches_0():
+    """連續下跌 → RSI 趨向 0"""
+    from strategy.connors_rsi2 import _RsiState
+    s = _RsiState(period=2)
+    for p in [100, 99, 98, 97, 96, 95]:
+        s.update(float(p))
+    assert s.rsi < 5.0
+
+
+def test_rsi_state_does_NOT_reset_on_call():
+    """_RsiState 本身無 reset/換日邏輯 — 連續 Wilder smoothing。
+    換日 reset 是策略層 (_trades_today / _cooldown / _session_bar) 才做。"""
+    from strategy.connors_rsi2 import _RsiState
+    s = _RsiState(period=2)
+    for p in [100, 101, 102, 103, 104]:
+        s.update(float(p))
+    high_rsi = s.rsi
+    assert high_rsi > 80.0
+    # 沒有 reset() method
+    assert not hasattr(s, "reset"), "_RsiState 不應有 reset() — 跨日連續是設計"
