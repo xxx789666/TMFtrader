@@ -206,3 +206,60 @@ class OrFadeStrategy(BaseStrategy):
             reason=f"or_fade {direction.value} or_mid={tp}",
             source=self.name,
         )
+
+    def check_exit(self, position, snapshot) -> Optional[Signal]:
+        if position.is_flat:
+            return None
+        ts = snapshot.timestamp                # 真實 bar 時間（不讀 self._current_bar_time）
+        price = snapshot.price
+        # 注意：check_exit 不 update _or（OR-mid 鎖後固定）、不增量 _session_bar
+        is_long = (position.side == Side.LONG)
+
+        def close_sig(reason: str) -> Signal:
+            return Signal(direction=SignalDirection.CLOSE, strength=1.0,
+                          stop_loss=0, take_profit=0, reason=reason, source=self.name)
+
+        # 1) 盤末強平（不設 cooldown，當日已到尾聲）
+        if ts.time() >= self._force_close:
+            return close_sig(f"盤末強平 @ {price:.0f}")
+
+        # 2) ATR 凍結停損 + cooldown
+        if position.stop_loss > 0:
+            if is_long and price <= position.stop_loss:
+                self._cooldown_until_bar = self._session_bar + self.cooldown
+                return close_sig(f"停損 @ {price:.0f}")
+            if (not is_long) and price >= position.stop_loss:
+                self._cooldown_until_bar = self._session_bar + self.cooldown
+                return close_sig(f"停損 @ {price:.0f}")
+
+        # 3) OR-mid 停利（OR-mid 鎖後固定，不再更新）
+        if self._or.locked:
+            mid = self._or.or_mid
+            if is_long and price >= mid:
+                return close_sig(f"回到OR-mid停利 @ {price:.0f}")
+            if (not is_long) and price <= mid:
+                return close_sig(f"回到OR-mid停利 @ {price:.0f}")
+
+        # 4) 時間停損
+        if position.bars_since_entry > self.max_bars:
+            return close_sig(f"時間停損 {position.bars_since_entry}根")
+
+        return None
+
+    def get_parameters(self) -> dict:
+        return {
+            "or_bars": self.or_bars, "vol_ratio_max": self.vol_ratio_max,
+            "wait_bars": self.wait_bars, "sl_atr": self.sl_atr,
+            "max_bars": self.max_bars, "cooldown": self.cooldown,
+            "max_trades": self.max_trades, "allow_short": self.allow_short,
+        }
+
+    def reset(self) -> None:
+        """引擎不會跨日呼叫；供手動測試/重啟用"""
+        self._or = _OrSession(or_bars=self.or_bars)
+        self._trades_today = 0
+        self._cooldown_until_bar = -1
+        self._session_bar = 0
+        self._day = None
+        self._pending_long = None
+        self._pending_short = None

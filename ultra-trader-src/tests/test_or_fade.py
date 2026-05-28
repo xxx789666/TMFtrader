@@ -264,3 +264,109 @@ def test_entry_window_dynamic_start():
     assert strat2._ew_start == time(9, 0)
     strat3 = OrFadeStrategy(or_bars=12)
     assert strat3._ew_start == time(9, 45)
+
+
+# ── Task 4 (P2c): check_exit + stop cooldown wiring ─────────────────────────
+
+def _pos(side, entry, stop, bars):
+    from core.position import PositionManager
+    from core.instrument_config import INSTRUMENT_SPECS
+    pm = PositionManager(instruments=["TMF"], configs={"TMF": INSTRUMENT_SPECS["TMF"]},
+                         initial_balance=200_000)
+    pm.open_position("TMF", side, price=entry, quantity=1,
+                     stop_loss=stop, take_profit=0, timestamp=None)
+    p = pm.positions["TMF"]
+    p.bars_since_entry = bars
+    return p
+
+
+def _strat_with_locked_or(or_high=105, or_low=95, allow_short=False, cooldown=3, max_bars=18):
+    """Helper：建一個 OR 已鎖（mid=(or_high+or_low)/2）的 strat"""
+    from strategy.or_fade import OrFadeStrategy
+    from datetime import datetime
+    strat = OrFadeStrategy(or_bars=2, vol_ratio_max=0.9, allow_short=allow_short,
+                           cooldown=cooldown, max_bars=max_bars)
+    strat.on_kbar(_kbar(datetime(2024,1,2,8,45), c=100, h=or_high, l=or_low),
+                  _make_snap(100, 20, 2, datetime(2024,1,2,8,45), vol_ratio=1.0))
+    strat.on_kbar(_kbar(datetime(2024,1,2,8,50), c=100, h=or_high, l=or_low),
+                  _make_snap(100, 20, 2, datetime(2024,1,2,8,50), vol_ratio=1.0))
+    assert strat._or.locked and strat._or.or_mid == (or_high + or_low) / 2
+    return strat
+
+
+def test_exit_force_close_no_cooldown():
+    """13:25 強平 → CLOSE，cooldown_until_bar 不變"""
+    from strategy.base import SignalDirection
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_locked_or()
+    cd_before = strat._cooldown_until_bar
+    snap = _make_snap(100, 20, 2, datetime(2024,1,2,13,25), vol_ratio=1.0)
+    sig = strat.check_exit(_pos(Side.LONG, 96, 92, 5), snap)
+    assert sig is not None and sig.direction == SignalDirection.CLOSE and "盤末" in sig.reason
+    assert strat._cooldown_until_bar == cd_before
+
+
+def test_exit_atr_stop_long_sets_cooldown():
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_locked_or(cooldown=3)
+    bar_at_stop = strat._session_bar
+    snap = _make_snap(89, 20, 2, datetime(2024,1,2,10,0), vol_ratio=1.0)
+    sig = strat.check_exit(_pos(Side.LONG, 95, 90, 3), snap)
+    assert sig is not None and "停損" in sig.reason
+    assert strat._cooldown_until_bar == bar_at_stop + 3
+
+
+def test_exit_atr_stop_short_sets_cooldown():
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_locked_or(cooldown=3)
+    bar_at_stop = strat._session_bar
+    snap = _make_snap(103, 20, 2, datetime(2024,1,2,10,0), vol_ratio=1.0)
+    sig = strat.check_exit(_pos(Side.SHORT, 100, 102, 3), snap)
+    assert sig is not None and "停損" in sig.reason
+    assert strat._cooldown_until_bar == bar_at_stop + 3
+
+
+def test_exit_or_mid_profit_target_long():
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_locked_or(or_high=105, or_low=95)   # mid=100
+    snap = _make_snap(100, 20, 2, datetime(2024,1,2,10,0), vol_ratio=1.0)
+    sig = strat.check_exit(_pos(Side.LONG, 96, 90, 3), snap)
+    assert sig is not None and "OR-mid" in sig.reason
+
+
+def test_exit_or_mid_profit_target_short():
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_locked_or(or_high=105, or_low=95, allow_short=True)
+    snap = _make_snap(100, 20, 2, datetime(2024,1,2,10,0), vol_ratio=1.0)
+    sig = strat.check_exit(_pos(Side.SHORT, 104, 110, 3), snap)
+    assert sig is not None and "OR-mid" in sig.reason
+
+
+def test_exit_time_stop():
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_locked_or(or_high=105, or_low=95, max_bars=18)
+    # entry 96, price 97 (未到 mid=100 也未到 stop=90), bars=19
+    snap = _make_snap(97, 20, 2, datetime(2024,1,2,11,0), vol_ratio=1.0)
+    sig = strat.check_exit(_pos(Side.LONG, 96, 90, 19), snap)
+    assert sig is not None and "時間停損" in sig.reason
+
+
+def test_check_exit_does_not_update_or_state_or_session_bar():
+    """invariant：check_exit 不寫 _or、不增量 _session_bar"""
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_locked_or()
+    or_high_before = strat._or.or_high
+    or_low_before  = strat._or.or_low
+    session_bar_before = strat._session_bar
+    snap = _make_snap(99, 20, 2, datetime(2024,1,2,10,0), vol_ratio=1.0)
+    strat.check_exit(_pos(Side.LONG, 96, 90, 3), snap)
+    assert strat._or.or_high == or_high_before
+    assert strat._or.or_low  == or_low_before
+    assert strat._session_bar == session_bar_before
