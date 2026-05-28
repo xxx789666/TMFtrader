@@ -419,3 +419,22 @@ def test_engine_smoke_long_short():
     assert avg < 10
     sides = {t["side"] for t in res.trades}
     assert "long" in sides or "short" in sides
+
+
+# ── Task 6 (P3): optimize_or_fade smoke ─────────────────────────────────────
+
+def test_optimize_run_one_smoke():
+    """Task 6 smoke: _run_one direct call (no multiproc)"""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip("data 未準備")
+    from scripts.optimize_or_fade import _run_one
+    df = pd.read_parquet(p).head(2000).reset_index(drop=True)
+    res = _run_one(
+        {"or_bars": 6, "vol_ratio_max": 0.7, "wait_bars": 0,
+         "sl_atr": 2.0, "max_bars": 18, "cooldown": 3},
+        df, split_idx=1000, allow_short=False,
+    )
+    assert "wf_score" in res and "test_n" in res
