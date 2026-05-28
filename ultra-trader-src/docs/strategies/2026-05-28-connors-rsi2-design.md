@@ -34,6 +34,8 @@
 ### 3.1 RSI(2) 自維護
 新 helper `_RsiState(period=2)`：Wilder smoothed avg gain/loss，公開 `update(close)` 與 property `rsi`。**在 `on_kbar` 與 `check_exit` 兩處都呼叫 `update`**（同 vwap_fade `_SessionVwap` 的 close-proxy 套路），避免持倉期間 RSI stale。`precompute_all` 不擴（snap.rsi 是 14 期，不夠用；不動 core 保持回測=live 同碼風險最低）。
 
+**跨日不 reset**：Wilder EMA 連續累積（這與 vwap_fade 的 `_SessionVwap` 每日 reset 相反——Connors 經典 RSI(2) 是連續指標，跨日重設會破壞其 Wilder smoothing 半衰期）。換日的清零工作只發生在策略的 over-trade 計數 (`_trades_today`, `_cooldown_until_bar`)，不動 RSI 狀態。
+
 ### 3.2 進場（僅 `entry_window` 內、`flat` 才呼叫）
 ```
 if rsi2 <= rsi_low:                         BUY,  stop = close - sl_atr·atr
@@ -41,6 +43,7 @@ if allow_short and rsi2 >= rsi_high:        SELL, stop = close + sl_atr·atr
 ```
 - **無 ADX / EMA200 regime filter**（吸取 vwap_fade 4-3 Gate 無法評估的教訓——任何 regime filter 同時當部署過濾器與驗證篩選器都會讓 Gate 失效；純 RSI 信號讓 4-3 Gate 全 testable）
 - 停損凍結於進場（給 PositionSizer 算口數；保 long stop < entry / short stop > entry 不變式）
+- `Signal.take_profit = 0`（出場 100% 由 `check_exit` 驅動；無自然 TP 目標，留 0 表示「未設定，靠出場規則決定」）
 - `max_trades`/日 + `cooldown` 守衛
 
 ### 3.3 出場（`check_exit` 每根呼叫；first-fires-wins）
@@ -70,10 +73,10 @@ if allow_short and rsi2 >= rsi_high:        SELL, stop = close + sl_atr·atr
 | `sl_atr` | 2.0 | [1.5, 2.0, 2.5] | ATR 停損倍數（期貨 5m 必要） |
 | `max_bars` | 24 | [12, 18, 24] | 時間停損上限根數 |
 | `cooldown` | 3 | [3, 5] | 停損後冷卻 K 棒數 |
-| `max_trades` | 6 | 固定 | 單日上限 |
-| `entry_window` | 09:00–13:00 | 固定 | 避開開盤前 15 分與盤末 |
-| `force_close` | 13:25 | 固定 | 不留倉 |
-| `allow_short` | per-run | False / True 各跑一輪 | 不進 grid |
+| `max_trades` | 6 | 固定（v1 不調） | 單日上限；若 Gate 過再考慮列入 v2 grid |
+| `entry_window` | 09:00–13:00 | 固定（v1 不調） | 避開開盤前 15 分與盤末 |
+| `force_close` | 13:25 | 固定（v1 不調） | 不留倉 |
+| `allow_short` | per-run | False / True 各跑一輪 | 不進 grid（避免 long/short 混在同一 grid 產生 cherry-pick 偏見） |
 
 - **long-only grid**：2·3·3·3·2 = **108 combos** / 商品
 - **long+short grid**：2·3·3·3·3·2 = **324 combos** / 商品（多 `rsi_high` 一維）
@@ -156,6 +159,8 @@ if allow_short and rsi2 >= rsi_high:        SELL, stop = close + sl_atr·atr
 ---
 
 ## 11. 開發紀律提醒（取自 vwap_fade 經驗）
+
+**已驗證的引擎事實全部繼承**自 `2026-05-28-vwap-fade-backtest-plan.md` §1 表（`FastBacktestEngine.run` 簽名、出場 100% 由 `check_exit` 驅動、`snapshot.timestamp/adx/atr` 可用且 snapshot 無 high/low/open、引擎跨日不呼叫 `strategy.reset()`、成本動態稅模型、`_calc_metrics` 重用、並行骨架、`MeanReversionStrategy` 範本）——寫實作計畫時直接引用該表，不重覆。本節只列本策略**新增**的紀律提醒：
 
 1. **進場 stop 必在進場價的保護側**（vwap_fade Task 4 抓到的 bug）：long stop < entry、short stop > entry。深訊號時若 σ-band 越界要 fallback（這策略只用 ATR stop，天然安全）。
 2. **`snapshot.timestamp` 為時間源**（不可用 `self._current_bar_time`，會 stale）。
