@@ -13,13 +13,13 @@ VWAP Fade 策略（日內 VWAP 帶狀均值回歸）
 
 import math
 from collections import deque
-from datetime import datetime
+from datetime import datetime, time
 from typing import Optional
 
-# ── Task P2b/P2c 進場/出場邏輯所需 import（待後續任務新增）──────────────────
-# from strategy.base import BaseStrategy, Signal, SignalDirection
-# from core.market_data import KBar, MarketSnapshot
-# from core.position import Position, Side
+# ── Task P2b/P2c 進場/出場邏輯所需 import ────────────────────────────────────
+from strategy.base import BaseStrategy, Signal, SignalDirection
+from core.market_data import KBar, MarketSnapshot
+# from core.position import Position, Side  # 保留供 P2c 使用
 # ────────────────────────────────────────────────────────────────────────────
 
 
@@ -108,4 +108,133 @@ class _SessionVwap:
         )
 
 
-# ── VwapFadeStrategy 將由 Task P2b/P2c 新增於此 ──────────────────────────────
+# ── VwapFadeStrategy（Task P2b：進場邏輯 on_kbar）────────────────────────────
+
+class VwapFadeStrategy(BaseStrategy):
+    """日內 VWAP 帶狀均值回歸策略（進場邏輯）。
+
+    進場條件（同時成立）：
+      1. 預熱足夠（session_bar >= min_warmup）
+      2. 時間在 entry_window 內
+      3. 當日交易次數 < max_trades
+      4. 不在 cooldown 期
+      5. ADX <= adx_max（非強趨勢）
+      6. sigma > 0（有足夠偏離資訊）
+      7. close <= vwap - k*sigma（多單）或 close >= vwap + k*sigma（空單）
+
+    出場邏輯（stop/TP/force_close）由 Task P2c 實作。
+    """
+
+    def __init__(
+        self,
+        k: float = 2.0,
+        k2: float = 3.0,
+        sigma_window: int = 20,
+        adx_max: float = 35.0,
+        sl_atr: float = 2.0,
+        max_bars: int = 24,
+        max_trades: int = 6,
+        cooldown: int = 3,
+        min_warmup: int = 3,
+        entry_window: tuple = ("09:00", "13:00"),
+        force_close: str = "13:25",
+        use_volume: bool = True,
+        point_value: float = 10.0,
+    ):
+        self.k = k
+        self.k2 = k2
+        self.adx_max = adx_max
+        self.sl_atr = sl_atr
+        self.max_bars = max_bars
+        self.max_trades = max_trades
+        self.cooldown = cooldown
+        self.min_warmup = min_warmup
+        self.point_value = point_value
+        self._ew_start = time.fromisoformat(entry_window[0])
+        self._ew_end = time.fromisoformat(entry_window[1])
+        self._force_close = time.fromisoformat(force_close)
+        self._vwap = _SessionVwap(sigma_window=sigma_window, use_volume=use_volume)
+        self._trades_today = 0
+        self._cooldown_until_bar = -1
+        self._day = None
+        self._last_adx = 0.0
+
+    @property
+    def name(self) -> str:
+        return "vwap_fade"
+
+    def _maybe_daily_reset(self, dt: datetime) -> None:
+        """換日時重置交易計數與 cooldown 狀態。"""
+        if dt.date() != self._day:
+            self._day = dt.date()
+            self._trades_today = 0
+            self._cooldown_until_bar = -1
+
+    def on_kbar(self, kbar: KBar, snapshot: MarketSnapshot) -> Optional[Signal]:
+        """每根 K 棒收盤時呼叫；符合條件時回傳進場 Signal，否則回傳 None。"""
+        ts = kbar.datetime
+        self._maybe_daily_reset(ts)
+        self._vwap.update(ts, kbar.high, kbar.low, kbar.close, kbar.volume)
+        self._last_adx = snapshot.adx
+
+        # ── 進場過濾器 ──────────────────────────────────────────────────────
+        if self._vwap.session_bar < self.min_warmup:
+            return None
+        if not (self._ew_start <= ts.time() < self._ew_end):
+            return None
+        if self._trades_today >= self.max_trades:
+            return None
+        if self._vwap.session_bar <= self._cooldown_until_bar:
+            return None
+        if snapshot.adx > self.adx_max:
+            return None
+
+        sigma = self._vwap.sigma
+        if sigma <= 0:
+            return None
+
+        vwap = self._vwap.vwap
+        close = kbar.close
+        atr = max(snapshot.atr, 1.0)
+        upper = vwap + self.k * sigma
+        lower = vwap - self.k * sigma
+
+        # ── 多單：收盤跌破下軌 ─────────────────────────────────────────────
+        if close <= lower:
+            sl_band = vwap - self.k2 * sigma
+            sl_atrp = close - self.sl_atr * atr
+            stop = max(sl_band, sl_atrp)   # 取較緊（離進場近）
+            return self._signal(SignalDirection.BUY, close, stop, vwap, sigma)
+
+        # ── 空單：收盤突破上軌 ─────────────────────────────────────────────
+        if close >= upper:
+            sl_band = vwap + self.k2 * sigma
+            sl_atrp = close + self.sl_atr * atr
+            stop = min(sl_band, sl_atrp)   # 取較緊（離進場近）
+            return self._signal(SignalDirection.SELL, close, stop, vwap, sigma)
+
+        return None
+
+    def _signal(
+        self,
+        direction: SignalDirection,
+        price: float,
+        stop: float,
+        vwap: float,
+        sigma: float,
+    ) -> Signal:
+        """建構並回傳 Signal；同時遞增當日交易計數（entry-side 過交易保護）。"""
+        self._trades_today += 1   # REFINEMENT P2b: 在此遞增，確保 max_trades guard 有效
+        return Signal(
+            direction=direction,
+            strength=1.0,
+            stop_loss=round(stop, 1),
+            take_profit=round(vwap, 1),
+            reason=(
+                f"vwap_fade {direction.value} "
+                f"dev={price - vwap:+.1f} "
+                f"sigma={sigma:.2f} "
+                f"adx={self._last_adx:.0f}"
+            ),
+            source=self.name,
+        )

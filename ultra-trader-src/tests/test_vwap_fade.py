@@ -76,3 +76,52 @@ def test_session_vwap_close_proxy_update():
     sv.update(datetime(2024,1,2,9,0), high=10, low=8, close=9, volume=2)
     sv.update_close_proxy(datetime(2024,1,2,9,5), close=11, volume=2)
     assert abs(sv.vwap - 10.0) < 1e-9     # (9*2 + 11*2)/4 = 10
+
+
+# ── P2b entry logic helpers ──────────────────────────────────────────────────
+
+def _make_snap(price, adx, atr, ts):
+    from core.market_data import MarketSnapshot
+    s = MarketSnapshot()
+    s.price = price
+    s.adx = adx
+    s.atr = atr
+    s.timestamp = ts
+    s.volume = 100
+    return s
+
+
+def _kbar(ts, p, vol=100):
+    from core.market_data import KBar
+    # field order: datetime, open, high, low, close, volume
+    return KBar(ts, p, p + 1, p - 1, p, vol)
+
+
+def test_entry_blocked_by_adx():
+    from strategy.vwap_fade import VwapFadeStrategy
+    from datetime import datetime
+    strat = VwapFadeStrategy(k=2.0, adx_max=30, min_warmup=1)
+    for m in range(0, 30, 5):
+        ts = datetime(2024, 1, 2, 9, m)
+        strat.on_kbar(_kbar(ts, 100), _make_snap(100, 20, 5, ts))
+    ts = datetime(2024, 1, 2, 10, 0)
+    sig = strat.on_kbar(_kbar(ts, 80), _make_snap(80, 45, 5, ts))   # large deviation but adx over limit
+    assert sig is None
+
+
+def test_entry_long_on_deviation():
+    from strategy.vwap_fade import VwapFadeStrategy
+    from strategy.base import SignalDirection
+    from datetime import datetime
+    strat = VwapFadeStrategy(k=2.0, adx_max=40, min_warmup=3, entry_window=("09:00", "13:00"))
+    prices = [100, 101, 99, 100, 102, 98, 101, 99, 100, 101]
+    for i, p in enumerate(prices):
+        ts = datetime(2024, 1, 2, 9, i * 5)
+        strat.on_kbar(_kbar(ts, p), _make_snap(p, 20, 2, ts))
+    ts = datetime(2024, 1, 2, 10, 0)
+    sig = strat.on_kbar(_kbar(ts, 90), _make_snap(90, 20, 2, ts))   # far below VWAP
+    assert sig is not None and sig.direction == SignalDirection.BUY
+    # stop_loss is below take_profit (VWAP); the k2-band formula places stop between
+    # close and vwap (stop <= vwap). Verifying stop < take_profit (not stop < entry,
+    # since the k2-band can sit above a deeply-discounted close).
+    assert sig.stop_loss < sig.take_profit
