@@ -51,8 +51,8 @@ if  kbar.low ≤ _or_low and vol_ratio ≤ vol_ratio_max:
         BUY @ close,  stop = close - sl_atr·atr
     elif wait_bars == 1:
         記錄 pending_long = {touch_bar_low}；
-        下一根若 kbar.high < touch_bar_low（更精確：本根未再創新低、low > pending.touch_bar_low）
-        則 BUY @ close
+        下一根若 low > pending.touch_bar_low（未再創新低、視為拒絕下緣）→ BUY @ close
+        否則（low ≤ pending.touch_bar_low，繼續探底）→ 丟棄 pending_long、不進場
 
 # 空單（觸上緣 fade down，allow_short=True 才開）
 if  allow_short and kbar.high ≥ _or_high and vol_ratio ≤ vol_ratio_max:
@@ -62,11 +62,19 @@ if  allow_short and kbar.high ≥ _or_high and vol_ratio ≤ vol_ratio_max:
 - **無 ADX / EMA200 regime filter**（學 connors_rsi2 教訓，讓 4-3 Gate testable）。隱性 regime filter = `vol_ratio`：趨勢日 OR 突破伴隨放量、不會觸發
 - 停損凍結於進場（給 PositionSizer 算口數，long stop < entry、short stop > entry——ATR stop 天生安全）
 - `Signal.take_profit = round(_or_mid, 1)`（資訊用；實際出場由 check_exit 比對 price 與 _or_mid）
-- 進場成功時 `_trades_today += 1`、若 wait=1 清空 pending state
+- 進場成功時 `_trades_today += 1`、若 wait=1 清空對應方向的 pending state
 - `max_trades` / `cooldown` 守衛同 connors_rsi2
 
+**pending state 生命週期細節**：
+- `pending_long` / `pending_short` 為各自獨立的可選 state（可同時存在不互斥；但實務上同一 5m bar 同時觸上下緣機率極低）
+- 只活 1 根 K：在「下一根」評估後**必然**清空——無論進場成功或確認失敗
+- 換日（`_maybe_daily_reset`）時也清空（不跨日保留）
+- 進場成功時清空對應方向的 pending（避免重複觸發）
+
+**ATR stop 與 OR-mid 的關係**：若 `sl_atr · atr` 足夠大，ATR stop 可能落在比 OR-mid 還遠的位置（風險 > 報酬目標）。v1 **不做 clamp**——接受這種情況，由 grid 自然調 `sl_atr` 找風險/報酬合理的組合。
+
 ### 3.3 出場（`check_exit` 每根；first-fires-wins）
-1. **盤末強平**：`snapshot.timestamp.time() >= force_close`
+1. **盤末強平**：`snapshot.timestamp.time() >= force_close` —— **不設 cooldown**（當日已結束、無意義）
 2. **ATR 凍結停損**：`long: price ≤ position.stop_loss` / `short: price ≥ position.stop_loss` → 設 `cooldown_until_bar = _session_bar + cooldown`
 3. **回到 OR-mid 停利**：`long: price ≥ _or_mid` / `short: price ≤ _or_mid`
 4. **時間停損**：`position.bars_since_entry > max_bars`
@@ -93,10 +101,12 @@ if  allow_short and kbar.high ≥ _or_high and vol_ratio ≤ vol_ratio_max:
 | `force_close` | "13:25" | 固定 | |
 | `allow_short` | per-run | False / True 各跑一輪 | 不進 grid |
 
-**grid 大小**：3·3·2·3·3·2 = **324 combos** / 變體 / 商品。
-allow_short 切多空邏輯但 grid 維度相同。兩商品 × 兩變體 = **4 runs**，預估 **30–40 分**。
+**grid 大小**：3·3·2·3·3·2 = **324 combos** / 變體 / 商品（= 6 個 grid'd 參數的乘積；`max_trades` / `entry_window_end` / `force_close` / `allow_short` 不在 grid 內）。
+兩商品 × 兩變體 = **4 runs**，預估 **30–40 分**。
 
 `entry_window_end="12:00"` 給 `max_bars=24` 留滿 2hr 緩衝到 13:25 force_close（最後一筆進場 12:00 持滿 24 根 = 14:00 已 > 13:25，所以 13:25 force_close 必定先觸發）。
+
+**`or_bars=12` 的次數差異**：entry_window 動態 start = 08:45 + or_bars×5min。`or_bars=12` 時 entry 從 09:45 才開始，只剩 09:45–12:00 = 2hr15min（27 根）可進場，明顯短於 `or_bars=3`（09:00 起 3hr = 36 根）。Gate 評估時要注意 `or_bars=12` 的樣本數可能偏少、wf_score 受隨機波動影響較大。
 
 ---
 
