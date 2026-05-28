@@ -236,6 +236,29 @@ def test_cooldown_blocks_reentry_after_stop():
 # ── P2d: FastBacktestEngine 整合冒煙測試 ────────────────────────────────────
 
 
+def test_grid_smoke_runs_tiny():
+    """Task 7 (P3) smoke: 2-combo grid via _run_one on real MXF data (no multiprocessing)."""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest
+        pytest.skip("data missing — run prepare_vwap_data.py first")
+
+    from scripts.optimize_vwap_fade import _run_one
+
+    df = pd.read_parquet(p).head(2000).reset_index(drop=True)
+
+    for params in [
+        {"k": 2.0, "k2": 3.0, "sigma_window": 20, "adx_max": 30, "max_bars": 24},
+        {"k": 1.5, "k2": 2.5, "sigma_window": 40, "adx_max": 25, "max_bars": 18},
+    ]:
+        res = _run_one(params, df, split_idx=1000)
+        assert "wf_score" in res, f"missing wf_score in result: {res}"
+        assert "test_n" in res,   f"missing test_n in result: {res}"
+        assert isinstance(res["wf_score"], float), f"wf_score not float: {res}"
+
+
 def test_engine_smoke_runs():
     """P2d: vwap_fade in FastBacktestEngine on real MXF 5m data — smoke check."""
     import pandas as pd
