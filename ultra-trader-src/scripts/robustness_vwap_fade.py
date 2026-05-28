@@ -87,7 +87,51 @@ def perturb_and_run(best_params: dict, df, split_idx: int,
     return results
 
 # ── P4-3 Regime 切分 ──────────────────────────────────────────────────
-# <Task 10 will append here>
+
+def split_by_regime(trades, bars_adx_df,
+                    trend_thr: float = 25.0,
+                    range_thr: float = 20.0) -> dict:
+    """
+    Split trade pnls by ADX regime AT ENTRY TIME.
+
+    Args:
+      trades:        list[dict] with keys 'entry_time' (isoformat str or Timestamp)
+                                       and 'pnl' (float)
+      bars_adx_df:   DataFrame with at least columns 'datetime' and 'adx'
+                     (caller responsibility — typically df.assign(adx=indicators['adx']))
+      trend_thr:     ADX > this  → trend day  (default 25)
+      range_thr:     ADX < this  → range day  (default 20)
+                     (trend_thr > range_thr; the in-between band is 'neutral')
+
+    Returns:
+      {"trend":   [pnl, ...],   # trades entered when ADX > trend_thr
+       "range":   [pnl, ...],   # trades entered when ADX < range_thr
+       "neutral": [pnl, ...]}   # in-between band
+
+    Trades whose entry_time has no exact match in bars_adx_df['datetime']
+    are skipped (with no error). For 5m bars entered on bar timestamps,
+    exact match is the normal case.
+    """
+    import pandas as pd
+    if trend_thr <= range_thr:
+        raise ValueError(f"trend_thr ({trend_thr}) must be > range_thr ({range_thr})")
+    bars = bars_adx_df.copy()
+    bars["datetime"] = pd.to_datetime(bars["datetime"])
+    adx_by_dt = bars.set_index("datetime")["adx"]
+    out = {"trend": [], "range": [], "neutral": []}
+    for t in trades:
+        ts = pd.to_datetime(t["entry_time"])
+        if ts not in adx_by_dt.index:
+            continue
+        adx = float(adx_by_dt.loc[ts])
+        pnl = float(t["pnl"])
+        if adx > trend_thr:
+            out["trend"].append(pnl)
+        elif adx < range_thr:
+            out["range"].append(pnl)
+        else:
+            out["neutral"].append(pnl)
+    return out
 
 # ── P5 OOS + Gate 匯總 ────────────────────────────────────────────────
 # <Task 11 will append here>

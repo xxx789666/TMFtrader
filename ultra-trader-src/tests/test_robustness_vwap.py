@@ -33,7 +33,63 @@ def test_monte_carlo_negative_expectancy_flags():
     assert net_p5 < 0
 
 
-# <Task 10 will append regime split tests here>
+# ── Task 10: P4-3 Regime split tests ────────────────────────────────
+
+def test_split_by_regime_basic():
+    """Trend trade goes to trend bucket; range trade to range bucket."""
+    import pandas as pd
+    from scripts.robustness_vwap_fade import split_by_regime
+    bars = pd.DataFrame({
+        "datetime": pd.to_datetime(["2024-01-02 09:00", "2024-01-02 09:05"]),
+        "adx": [15.0, 30.0],
+    })
+    trades = [
+        {"entry_time": "2024-01-02T09:00:00", "pnl": 100.0},   # adx=15 -> range
+        {"entry_time": "2024-01-02T09:05:00", "pnl": -50.0},   # adx=30 -> trend
+    ]
+    out = split_by_regime(trades, bars)
+    assert out["range"] == [100.0]
+    assert out["trend"] == [-50.0]
+    assert out["neutral"] == []
+
+
+def test_split_by_regime_neutral_band():
+    """ADX in [range_thr, trend_thr] goes to neutral."""
+    import pandas as pd
+    from scripts.robustness_vwap_fade import split_by_regime
+    bars = pd.DataFrame({
+        "datetime": pd.to_datetime(["2024-01-02 09:00"]),
+        "adx": [22.0],   # 20 <= 22 <= 25
+    })
+    trades = [{"entry_time": "2024-01-02T09:00:00", "pnl": 77.0}]
+    out = split_by_regime(trades, bars)
+    assert out["neutral"] == [77.0]
+    assert out["trend"] == [] and out["range"] == []
+
+
+def test_split_by_regime_missing_entry_time_skipped():
+    """Trade whose entry_time is not in bars is silently skipped (defensive)."""
+    import pandas as pd
+    from scripts.robustness_vwap_fade import split_by_regime
+    bars = pd.DataFrame({
+        "datetime": pd.to_datetime(["2024-01-02 09:00"]),
+        "adx": [15.0],
+    })
+    trades = [
+        {"entry_time": "2024-01-02T09:00:00", "pnl": 100.0},
+        {"entry_time": "2024-01-02T10:00:00", "pnl": 999.0},   # absent from bars
+    ]
+    out = split_by_regime(trades, bars)
+    assert out["range"] == [100.0]   # 999 silently dropped
+
+
+def test_split_by_regime_invalid_thresholds():
+    """trend_thr <= range_thr -> ValueError (guards against accidental swap)."""
+    import pandas as pd, pytest
+    from scripts.robustness_vwap_fade import split_by_regime
+    bars = pd.DataFrame({"datetime": pd.to_datetime(["2024-01-02 09:00"]), "adx": [20.0]})
+    with pytest.raises(ValueError):
+        split_by_regime([], bars, trend_thr=15, range_thr=25)
 
 
 # ── Task 9: P4-2 parameter perturbation tests ────────────────────────
