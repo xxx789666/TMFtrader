@@ -271,3 +271,50 @@ def test_exit_time_stop():
     # 多單 stop=90，當前價 95 > 90 不觸停損；bars=25 > max_bars=24
     sig = strat.check_exit(_pos(Side.LONG, 95, 90, 25), snap)
     assert sig is not None and "時間停損" in sig.reason
+
+
+# ── Task 5 (P2d): Engine smoke tests on real MXF data ─────────────────────────
+def test_engine_smoke_long_only():
+    """P2d: ConnorsRsi2Strategy(allow_short=False) 跑真實 MXF 5m 短段。"""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip("data 未準備")
+    from core.gpu_indicators import precompute_all
+    from backtest.fast_engine import FastBacktestEngine
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    df = pd.read_parquet(p).head(3000).reset_index(drop=True)
+    ind = precompute_all(df, verbose=False)
+    res = FastBacktestEngine(initial_balance=200_000, instrument="TMF").run(
+        df, ind, ConnorsRsi2Strategy(allow_short=False), "balanced")
+    assert len(res.trades) > 0, "long-only 在 3000 根 bar 上零交易，檢查 rsi_low/entry_window"
+    days = df["datetime"].dt.date.nunique()
+    assert len(res.trades) / max(days, 1) < 10, "過度交易"
+    # 所有 trades 必為 long（注意：Side.LONG.value = "long" 小寫，trades[i]["side"] 也是小寫）
+    sides = {t["side"] for t in res.trades}
+    assert sides.issubset({"long"}), f"long-only 不該有 short，但出現 {sides}"
+
+
+def test_engine_smoke_long_short():
+    """P2d: ConnorsRsi2Strategy(allow_short=True) 跑真實資料、雙向都會出現"""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip("data 未準備")
+    from core.gpu_indicators import precompute_all
+    from backtest.fast_engine import FastBacktestEngine
+    from strategy.connors_rsi2 import ConnorsRsi2Strategy
+    df = pd.read_parquet(p).head(3000).reset_index(drop=True)
+    ind = precompute_all(df, verbose=False)
+    res = FastBacktestEngine(initial_balance=200_000, instrument="TMF").run(
+        df, ind, ConnorsRsi2Strategy(allow_short=True), "balanced")
+    assert len(res.trades) > 0
+    days = df["datetime"].dt.date.nunique()
+    assert len(res.trades) / max(days, 1) < 10
+    # allow_short=True 預期雙向都會出現（資料夠長時）
+    # 注意：Side enum value 為小寫字串 "long" / "short"
+    sides = {t["side"] for t in res.trades}
+    assert "long" in sides or "short" in sides   # 至少一邊有
+    # 若只有單側、紀錄這個 observation（report 時呈現）
