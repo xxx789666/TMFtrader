@@ -13,14 +13,18 @@ from core.instrument_config import INSTRUMENT_SPECS
 
 def test_cost_accounting():
     """
-    驗證來回成本計算正確性。
+    驗證來回成本計算正確性（動態稅模型，commit a95ae44 起）。
 
-    TMF 規格：point_value=10, commission=18, tax=7
+    TMF 規格：point_value=10, commission=18/邊, tax_rate_pct=0.00002
     進場 22000，平倉 22010（+10 點），1 口
 
-    毛利 = 10 點 × 10 元 × 1 口 = 100
-    來回成本 = (18 手續費 + 7 稅) × 2 邊 × 1 口 = 50
-    淨利 = 100 - 50 = 50
+    毛利       = 10 點 × 10 元 × 1 口 = 100
+    fee_comm   = 18 × 2 邊 × 1 口 = 36
+    entry_tax  = ceil(22000 × 10 × 0.00002) = ceil(4.4) = 5
+    exit_tax   = ceil(22010 × 10 × 0.00002) = ceil(4.402) = 5
+    fee_tax    = (5 + 5) × 1 = 10
+    commission = 36 + 10 = 46
+    net_pnl    = 100 - 46 = 54
     """
     spec = INSTRUMENT_SPECS["TMF"]
     pm = PositionManager(
@@ -37,10 +41,10 @@ def test_cost_accounting():
 
     # 毛利 = 10 點 × 10 元 × 1 口 = 100
     assert trade.pnl == 100.0, f"Expected pnl=100.0, got {trade.pnl}"
-    # 來回成本 = (18 手續費 + 7 稅) × 2 邊 × 1 口 = 50
-    assert trade.commission == 50.0, f"Expected commission=50.0, got {trade.commission}"
-    # 淨利 = 100 - 50 = 50（成本確實有扣）
-    assert trade.net_pnl == 50.0, f"Expected net_pnl=50.0, got {trade.net_pnl}"
+    # 來回成本 = 36 fee_comm + 10 fee_tax = 46（動態稅模型）
+    assert trade.commission == 46.0, f"Expected commission=46.0, got {trade.commission}"
+    # 淨利 = 100 - 46 = 54
+    assert trade.net_pnl == 54.0, f"Expected net_pnl=54.0, got {trade.net_pnl}"
 
 
 def test_session_resample():
