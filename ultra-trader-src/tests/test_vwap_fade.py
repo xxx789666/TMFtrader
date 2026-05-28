@@ -231,3 +231,32 @@ def test_cooldown_blocks_reentry_after_stop():
     strat.check_exit(_pos(Side.SHORT, 100, 102, 90, 1), snap)
     # update_close_proxy inside check_exit increments session_bar by 1 before cooldown is set
     assert strat._cooldown_until_bar == bar_before_stop + 1 + 3
+
+
+# ── P2d: FastBacktestEngine 整合冒煙測試 ────────────────────────────────────
+
+
+def test_engine_smoke_runs():
+    """P2d: vwap_fade in FastBacktestEngine on real MXF 5m data — smoke check."""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip(f"資料未準備：{p}（先跑 prepare_vwap_data.py）")
+    from core.gpu_indicators import precompute_all
+    from backtest.fast_engine import FastBacktestEngine
+    from strategy.vwap_fade import VwapFadeStrategy
+
+    df = pd.read_parquet(p).head(3000).reset_index(drop=True)
+    indicators = precompute_all(df, verbose=False)
+    engine = FastBacktestEngine(initial_balance=200_000, instrument="TMF")
+    result = engine.run(df, indicators, VwapFadeStrategy(), "balanced")
+
+    # 1) 必須有交易（補進場機會是本策略目的）
+    assert len(result.trades) > 0, "vwap_fade 在 3000 根 bar 上零交易，檢查 k/min_warmup/entry_window"
+    # 2) 不過度交易（max_trades 把關有生效）
+    days = df["datetime"].dt.date.nunique()
+    avg_per_day = len(result.trades) / max(days, 1)
+    assert avg_per_day < 10, f"平均 {avg_per_day:.1f} 筆/日 過高，max_trades 守衛沒生效"
+    # 3) 健康性：最終餘額為有限數
+    assert result.final_balance > 0 and result.final_balance < 10 * 200_000
