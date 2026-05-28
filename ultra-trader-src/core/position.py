@@ -4,6 +4,7 @@ UltraTrader 部位管理
 """
 
 import json
+import math
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -219,20 +220,28 @@ class PositionManager:
             config = self._get_config(instrument)
             point_value = config.point_value if config else 10.0
             commission_rate = config.commission if config else 18.0
-            tax_rate = config.tax if config else 7.0
+            # 期交所股價指數類期貨交易稅率 = 2/100,000；元以下無條件進位 per side per lot（對齊永豐結算）
+            tax_rate_pct = getattr(config, "tax_rate_pct", 0.00002) if config else 0.00002
 
             # 決定本次平倉口數
             close_qty = quantity if (0 < quantity < pos.quantity) else pos.quantity
             is_full_close = (close_qty >= pos.quantity)
 
-            # 計算損益
+            # 計算損益（毛利）
             if pos.side == Side.LONG:
                 pnl_points = (price - pos.entry_price) * close_qty
             else:
                 pnl_points = (pos.entry_price - price) * close_qty
 
             pnl = pnl_points * point_value
-            commission = (commission_rate + tax_rate) * 2 * close_qty
+            # 扣項 = 手續費(雙邊、固定/口/邊) + 期貨交易稅(雙邊、合約價值×稅率、元以下進位)
+            # 2026-05-28 修法：舊版用固定 tax=7/口/邊；指數 ~45k 時實際 ≈ 9/口/邊（差 8 元/2口來回），
+            # 改為按合約價值動態算（永豐 11:39 那筆 +6420→實際 +6412 即此差距，見 [[live-pnl-tax-fix]]）。
+            fee_commission = commission_rate * 2 * close_qty
+            entry_tax_per_lot = math.ceil(pos.entry_price * point_value * tax_rate_pct)
+            exit_tax_per_lot  = math.ceil(price * point_value * tax_rate_pct)
+            fee_tax = (entry_tax_per_lot + exit_tax_per_lot) * close_qty
+            commission = fee_commission + fee_tax  # 欄位名沿用 "commission"=全部扣項；net_pnl = pnl - commission
 
             # MFE / MAE（以本次平倉口數為基礎）
             if pos.side == Side.LONG:

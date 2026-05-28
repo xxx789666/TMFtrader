@@ -14,10 +14,14 @@ class InstrumentSpec:
     point_value: float       # 每點價值（元/點）
     margin: float            # 原始保證金
     maintenance_margin: float  # 維持保證金
-    commission: float        # 單邊手續費
-    tax: float               # 單邊期交稅
-    strategy_type: str       # 使用的策略類型
-    default_initial_price: float  # MockBroker 模擬用的初始價格
+    commission: float        # 單邊手續費（元/口/邊、永豐 TMF 預設 18）
+    # 期貨交易稅率（合約價值 × 此比率、雙邊各課、元以下進位）。
+    # 期交所股價指數類期貨 = 2/100,000 = 0.00002。
+    # 舊欄位 `tax` 為固定金額/口/邊、已棄用（指數高漲時會低估、見 [[live-pnl-tax-fix-2026-05-28]]）。
+    tax_rate_pct: float = 0.00002
+    tax: float = 0.0         # DEPRECATED：保留欄位給舊資料相容、新計算改用 tax_rate_pct
+    strategy_type: str = ""  # 使用的策略類型
+    default_initial_price: float = 0.0  # MockBroker 模擬用的初始價格
     shioaji_code: str = ""   # Shioaji 合約代碼（空字串=與 code 相同；TMFN→MXF）
 
 

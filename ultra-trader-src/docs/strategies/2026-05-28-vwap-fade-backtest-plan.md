@@ -22,8 +22,8 @@
 | `snapshot.timestamp` = 引擎傳入的真實 bar 時間；`snapshot.adx/atr/price/volume/rsi/bb_*` 都有 | `core/gpu_indicators.py:670`、`670-702` | `check_exit` 讀 **`snapshot.timestamp`**（不是 `self._current_bar_time`）；regime 用 `snapshot.adx` |
 | `snapshot` 沒有 high/low/open（只有 close=price） | `core/gpu_indicators.py:669` | `check_exit` 算 typical 只能用 close 近似 |
 | 引擎跨日**不呼叫 `strategy.reset()`**（只重置 risk_manager） | `backtest/fast_engine.py:114-125` | 換日重置必須在 `on_kbar` 內自己用 bar 日期判斷 |
-| 成本已進 `net_pnl`：`commission = (commission_rate + tax_rate) * 2 * qty`，`net_pnl = pnl - commission` | `core/position.py:235,94` | 手續費+稅已含；滑價另在引擎價格層（`fast_engine:161,193`） |
-| TMF spec：point_value=10、commission=18、tax=7（皆單邊） | `core/instrument_config.py:26` | 來回成本=(18+7)×2=50 TWD/口=5 點 |
+| 成本已進 `net_pnl`：`fee_commission = commission_rate × 2 × qty`；`fee_tax = ceil(price × point_value × tax_rate_pct) × 2邊 × qty`；`net_pnl = pnl - (fee_commission + fee_tax)` | `core/position.py:222-238,94` | 2026-05-28 修：稅由固定 7/口/邊 改為按合約價值動態算（指數 ~45k 時實際 ~9/口/邊）；滑價另在引擎價格層（`fast_engine:161,193`） |
+| TMF spec：point_value=10、commission=18 /口/邊、tax_rate_pct=0.00002（=2/100,000） | `core/instrument_config.py:25` | 來回成本 @45k ≈ 18×2+9×2 = 54 TWD/口=5.4 點（指數越高、稅越高） |
 | `_calc_metrics(result)` 已算 PF/WR/ret/DD/Sharpe | `scripts/optimize_strategy.py:86` | 直接 import 重用，勿重寫 |
 | 並行骨架：precompute_all → shared_memory → ProcessPoolExecutor，worker 內建策略 | `scripts/optimize_strategy.py:124-216` | P3 grid 照抄，換策略工廠 + PARAM_GRID |
 | `MeanReversionStrategy` 是最接近的範本（BB+RSI，SL/TP 存 position、time-stop 用 `bars_since_entry`） | `strategy/mean_reversion.py` | 抄它的 check_exit 結構 |
