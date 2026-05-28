@@ -24,6 +24,7 @@ paper_night_orb.py — TMF 夜盤 ORB Trading（B2 ML Filter）
 """
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -74,6 +75,19 @@ except Exception:
         @staticmethod
         def release(o): pass
     position_lock = _NoLock()
+
+# ─── 商品規格（手續費、稅率、點值）─ 與日盤同源、見 [[live-pnl-tax-fix]]
+try:
+    from core.instrument_config import get_spec as _get_spec
+    _TMF_SPEC = _get_spec("TMF")
+    _COMMISSION_RATE = _TMF_SPEC.commission        # 18 NTD/口/邊
+    _TAX_RATE_PCT    = _TMF_SPEC.tax_rate_pct      # 0.00002 (2/100,000)
+    _POINT_VALUE     = _TMF_SPEC.point_value       # 10 NTD/point
+except Exception:
+    # fallback：找不到 spec 時用 TMF 預設值
+    _COMMISSION_RATE = 18.0
+    _TAX_RATE_PCT    = 0.00002
+    _POINT_VALUE     = 10.0
 
 # ─── 路徑設定 ───────────────────────────────────────────────
 MODEL_PATH    = ROOT / "deployed_strategies" / "tmf_orb_night" / "orb_filter_b2.pkl"
@@ -324,7 +338,8 @@ class PaperLogger:
             with open(self.path, "w", encoding="utf-8") as f:
                 f.write("entry_time,exit_time,direction,entry_price,exit_price,"
                         "stop_loss,ml_prob,ml_pass,exit_reason,r_multiple,"
-                        "orb_high,orb_low,orb_width_atr,session,mode,quantity\n")
+                        "orb_high,orb_low,orb_width_atr,session,mode,quantity,"
+                        "pnl,commission,fee_tax,net_pnl\n")
 
     def log(self, rec: dict):
         with open(self.path, "a", encoding="utf-8") as f:
@@ -332,11 +347,18 @@ class PaperLogger:
                 "entry_time", "exit_time", "direction", "entry_price",
                 "exit_price", "stop_loss", "ml_prob", "ml_pass",
                 "exit_reason", "r_multiple", "orb_high", "orb_low",
-                "orb_width_atr", "session", "mode", "quantity"
+                "orb_width_atr", "session", "mode", "quantity",
+                "pnl", "commission", "fee_tax", "net_pnl",
             ]) + "\n")
         r = rec.get("r_multiple", 0)
+        net = rec.get("net_pnl", 0)
+        fee = rec.get("commission", 0)
+        tax = rec.get("fee_tax", 0)
         tag = "[Live]" if rec.get("mode") == "live" else "[Paper]"
-        logger.info(f"{tag} CLOSED {rec['direction']} R={r:+.3f} ({rec['exit_reason']})")
+        logger.info(
+            f"{tag} CLOSED {rec['direction']} R={r:+.3f} net={net:+.0f}元 "
+            f"(手 {fee:.0f}+稅 {tax:.0f}) ({rec['exit_reason']})"
+        )
 
 
 # ─── Live Order Manager（送真實單、追蹤成交回報）─────────────────
@@ -747,10 +769,20 @@ class NightORBEngine:
                 # 不 release lock、避免下一個訊號又進場、必須人工介入
                 return
 
-        pnl = (actual_exit - self._entry_price) * self._direction
+        pnl = (actual_exit - self._entry_price) * self._direction   # 每口、點數(含方向)
         risk = abs(self._entry_price - self._stop_price)
         r_mult = pnl / risk if risk > 0 else 0.0
         mode_str = "live" if self.order_mgr else "paper"
+
+        # ── NTD 淨損益(含手續費 + 期貨交易稅) — 與日盤同邏輯、見 [[live-pnl-tax-fix]]
+        qty = self._quantity or 1
+        gross_pnl_ntd  = pnl * _POINT_VALUE * qty                    # 毛(NTD)
+        fee_commission = _COMMISSION_RATE * 2 * qty                  # 手續費:雙邊固定/口/邊
+        entry_tax_per_lot = math.ceil(self._entry_price * _POINT_VALUE * _TAX_RATE_PCT)
+        exit_tax_per_lot  = math.ceil(actual_exit       * _POINT_VALUE * _TAX_RATE_PCT)
+        fee_tax = (entry_tax_per_lot + exit_tax_per_lot) * qty       # 期貨稅:元以下進位/口/邊
+        net_pnl_ntd = gross_pnl_ntd - fee_commission - fee_tax
+
         rec = {
             "entry_time":   self._entry_time,
             "exit_time":    ts,
@@ -767,15 +799,22 @@ class NightORBEngine:
             "orb_width_atr":round(self._orb_w_atr, 3),
             "session":      self._session_entry,
             "mode":         mode_str,
-            "quantity":     self._quantity or 1,
+            "quantity":     qty,
+            "pnl":          round(gross_pnl_ntd, 0),
+            "commission":   fee_commission,
+            "fee_tax":      fee_tax,
+            "net_pnl":      round(net_pnl_ntd, 0),
         }
         self.paper.log(rec)
         self._in_trade = False
         self._quantity = 0
-        # TG 推送出場
-        emoji = "🎯" if r_mult > 0 else "🛑"
-        tg_night(f"{emoji} 出場 {rec['direction']} @ {actual_exit:.0f} "
-                 f"進場 {self._entry_price:.0f} | R={r_mult:+.2f} | 原因: {reason}")
+        # TG 推送出場(含淨損益分解)
+        emoji = "🎯" if net_pnl_ntd > 0 else "🛑"
+        tg_night(
+            f"{emoji} 出場 {rec['direction']} @ {actual_exit:.0f} 進場 {self._entry_price:.0f}\n"
+            f"淨損益 {net_pnl_ntd:+,.0f} 元 (毛 {gross_pnl_ntd:+,.0f} − 手 {fee_commission:.0f} − 稅 {fee_tax:.0f})\n"
+            f"R={r_mult:+.2f} | 原因: {reason}"
+        )
         # 釋放跨策略持倉鎖
         position_lock.release("orb")
 
