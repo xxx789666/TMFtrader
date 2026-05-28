@@ -56,3 +56,23 @@ def test_session_resample():
     assert out["datetime"].dt.time.max().strftime("%H:%M") <= "13:45"
     assert (out["high"] == 2.0).all() and (out["low"] == 0.5).all()
     assert out["volume"].iloc[0] == 5
+
+
+def test_session_vwap_cumulative_and_reset():
+    from strategy.vwap_fade import _SessionVwap
+    from datetime import datetime
+    sv = _SessionVwap(sigma_window=20, use_volume=True)
+    sv.update(datetime(2024,1,2,9,0), high=10, low=8, close=9, volume=2)   # typical=9
+    sv.update(datetime(2024,1,2,9,5), high=12, low=10, close=11, volume=2) # typical=11
+    assert abs(sv.vwap - 10.0) < 1e-9     # (9*2 + 11*2)/4 = 10
+    sv.update(datetime(2024,1,3,9,0), high=20, low=20, close=20, volume=1) # day reset
+    assert abs(sv.vwap - 20.0) < 1e-9
+
+
+def test_session_vwap_close_proxy_update():
+    from strategy.vwap_fade import _SessionVwap
+    from datetime import datetime
+    sv = _SessionVwap(sigma_window=20, use_volume=True)
+    sv.update(datetime(2024,1,2,9,0), high=10, low=8, close=9, volume=2)
+    sv.update_close_proxy(datetime(2024,1,2,9,5), close=11, volume=2)
+    assert abs(sv.vwap - 10.0) < 1e-9     # (9*2 + 11*2)/4 = 10
