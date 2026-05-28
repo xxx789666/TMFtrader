@@ -8,10 +8,10 @@ from datetime import datetime, time
 from typing import Optional
 import math
 
-# Task P2b/P2c 進出場邏輯所需 import（待後續任務取消註解）
-# from strategy.base import BaseStrategy, Signal, SignalDirection
-# from core.market_data import KBar, MarketSnapshot
-# from core.position import Position, Side
+# Task P2b/P2c 進出場邏輯所需 import
+from strategy.base import BaseStrategy, Signal, SignalDirection
+from core.market_data import KBar, MarketSnapshot
+from core.position import Position, Side
 
 
 class _OrSession:
@@ -76,4 +76,133 @@ class _OrSession:
         return (self._high + self._low) / 2.0
 
 
-# ── OrFadeStrategy 由 Task P2b/P2c 新增於此 ───────────────────────────────────
+# ── OrFadeStrategy ───────────────────────────────────────────────────────────
+
+class OrFadeStrategy(BaseStrategy):
+    def __init__(
+        self,
+        or_bars: int = 6,
+        vol_ratio_max: float = 0.7,
+        wait_bars: int = 0,
+        sl_atr: float = 2.0,
+        max_bars: int = 18,
+        cooldown: int = 3,
+        max_trades: int = 6,
+        entry_window_end: str = "12:00",
+        force_close: str = "13:25",
+        allow_short: bool = False,
+        point_value: float = 10.0,
+    ):
+        if wait_bars not in (0, 1):
+            raise ValueError(f"wait_bars must be 0 or 1, got {wait_bars}")
+        self.or_bars = or_bars
+        self.vol_ratio_max = vol_ratio_max
+        self.wait_bars = wait_bars
+        self.sl_atr = sl_atr
+        self.max_bars = max_bars
+        self.cooldown = cooldown
+        self.max_trades = max_trades
+        self.allow_short = allow_short
+        self.point_value = point_value
+
+        # _ew_start 動態 = 08:45 + or_bars*5min
+        ew_start_min = 8 * 60 + 45 + or_bars * 5
+        self._ew_start = time(ew_start_min // 60, ew_start_min % 60)
+        self._ew_end = time.fromisoformat(entry_window_end)
+        self._force_close = time.fromisoformat(force_close)
+
+        self._or = _OrSession(or_bars=or_bars)
+        self._trades_today = 0
+        self._cooldown_until_bar = -1
+        self._session_bar = 0
+        self._day = None
+        self._pending_long: Optional[dict] = None
+        self._pending_short: Optional[dict] = None
+
+    @property
+    def name(self) -> str:
+        return "or_fade"
+
+    def _maybe_daily_reset(self, dt: datetime) -> None:
+        d = dt.date()
+        if d != self._day:
+            self._day = d
+            self._trades_today = 0
+            self._cooldown_until_bar = -1
+            self._session_bar = 0
+            self._pending_long = None
+            self._pending_short = None
+            # _or has its own _maybe_reset on update — no need to call here
+
+    def on_kbar(self, kbar: KBar, snapshot: MarketSnapshot) -> Optional[Signal]:
+        ts = kbar.datetime
+        self._maybe_daily_reset(ts)
+        self._or.update(ts, kbar.high, kbar.low)
+        self._session_bar += 1
+
+        # 守衛
+        if not self._or.locked:
+            return None
+        if not (self._ew_start <= ts.time() < self._ew_end):
+            return None
+        if self._trades_today >= self.max_trades:
+            if self.wait_bars == 1:
+                self._pending_long = None
+                self._pending_short = None
+            return None
+        if self._session_bar <= self._cooldown_until_bar:
+            if self.wait_bars == 1:
+                self._pending_long = None
+                self._pending_short = None
+            return None
+
+        atr = max(snapshot.atr, 1.0)
+        close = kbar.close
+
+        # wait_bars=1：先處理 pending（前一根記下的）
+        if self.wait_bars == 1:
+            pending_long = self._pending_long
+            pending_short = self._pending_short
+            self._pending_long = None
+            self._pending_short = None
+            if pending_long is not None:
+                if kbar.low > pending_long["touch_low"]:
+                    stop = close - self.sl_atr * atr
+                    return self._signal(SignalDirection.BUY, close, stop)
+            if pending_short is not None:
+                if kbar.high < pending_short["touch_high"]:
+                    stop = close + self.sl_atr * atr
+                    return self._signal(SignalDirection.SELL, close, stop)
+
+        # 新觸邊偵測（vol_ratio 過濾）
+        vol_ratio = snapshot.volume_ratio
+        if vol_ratio > self.vol_ratio_max:
+            return None
+
+        if kbar.low <= self._or.or_low:
+            if self.wait_bars == 0:
+                stop = close - self.sl_atr * atr
+                return self._signal(SignalDirection.BUY, close, stop)
+            else:
+                self._pending_long = {"touch_low": kbar.low}
+                return None
+
+        if self.allow_short and kbar.high >= self._or.or_high:
+            if self.wait_bars == 0:
+                stop = close + self.sl_atr * atr
+                return self._signal(SignalDirection.SELL, close, stop)
+            else:
+                self._pending_short = {"touch_high": kbar.high}
+                return None
+
+        return None
+
+    def _signal(self, direction: SignalDirection, price: float, stop: float) -> Signal:
+        self._trades_today += 1
+        tp = round(self._or.or_mid, 1) if self._or.locked else 0
+        return Signal(
+            direction=direction, strength=1.0,
+            stop_loss=round(stop, 1), take_profit=tp,
+            reason=f"or_fade {direction.value} or_mid={tp}",
+            source=self.name,
+        )
