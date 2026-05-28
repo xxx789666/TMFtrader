@@ -33,5 +33,40 @@ def test_monte_carlo_negative_expectancy_flags():
     assert net_p5 < 0
 
 
-# <Task 9 will append parameter perturbation tests here>
 # <Task 10 will append regime split tests here>
+
+
+# ── Task 9: P4-2 parameter perturbation tests ────────────────────────
+
+def test_stability_low_variance_is_stable():
+    from scripts.robustness_vwap_fade import stability
+    assert stability([100, 102, 98, 101, 99]) < 0.3        # 穩
+
+
+def test_stability_high_variance_unstable():
+    from scripts.robustness_vwap_fade import stability
+    assert stability([100, 10, 200, -50, 300]) > 0.5       # 不穩
+
+
+def test_stability_zero_mean_returns_inf():
+    """Edge: 均值 0 應回 inf (避免 divide-by-zero NaN)。"""
+    import math
+    from scripts.robustness_vwap_fade import stability
+    assert math.isinf(stability([5, -5, 10, -10]))
+
+
+def test_perturb_and_run_returns_dim_dict():
+    """Real-data integration: per-dim runs over a tiny slice; check shape, not values."""
+    import pandas as pd
+    from pathlib import Path
+    p = Path("data/vwap_fade/MXF_day_5m.parquet")
+    if not p.exists():
+        import pytest; pytest.skip("data missing")
+    from scripts.robustness_vwap_fade import perturb_and_run
+    df = pd.read_parquet(p).head(2000).reset_index(drop=True)
+    best = {"k": 2.0, "k2": 3.0, "sigma_window": 20, "adx_max": 30, "max_bars": 24}
+    out = perturb_and_run(best, df, split_idx=1000, factors=(0.9, 1.0, 1.1))
+    # All 5 numeric dims present; each list length == len(factors)
+    assert set(out.keys()) == set(best.keys())
+    for dim, runs in out.items():
+        assert len(runs) == 3, f"{dim}: expected 3 runs, got {len(runs)}"
