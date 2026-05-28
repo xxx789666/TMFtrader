@@ -27,6 +27,7 @@
 | 8 | **最小樣本門檻** | grid 結果若 `test_n < 100` → wf_score = -50.0（重 penalty）避免 N=30 偶遇好運過 gate |
 | 9 | **Type B FAIL 判定** | `\|r\|` ≥ 0.6 vs BreakoutTrend → 視為「換包裝」、Gate 全過也不部署 |
 | 10 | **絕對路徑** | 所有 git / Write 從 repo root 用絕對路徑（cwd 在 ultra-trader-src/ + 相對路徑 + unicode `永豐微台指` 會撞 INDEX 雙條目 bug） |
+| 11 | **daily PnL keying 用 exit_time（不是 entry_time）** | 父 or_fade orchestrator step5 用 `entry_time`、但引擎的 `res_b.daily_pnl` 是用 `exit_time.strftime("%Y-%m-%d")` 當 key（`fast_engine.py:175`）。Donchian step5 改用 `exit_time` 才能對齊；否則跨日 close 的 trade 兩邊算進不同 bucket、corr 失真 |
 
 ---
 
@@ -171,14 +172,11 @@ def test_donchian_warmup_after_n_plus_1_bars():
     assert s.warmup_ready is False   # 3 bars, 不夠
     s.update(datetime(2024, 1, 2, 9, 15), 9, 5)   # 第 4 根
     assert s.warmup_ready is True
-    # entry_n_high = max of first 3 bars' highs = max(10,11,12) = 12（第 4 根 high=9 不算）
+    # deque 已 append 4 根、maxlen=max(3,2)+1=4，deque = [(10,8),(11,7),(12,6),(9,5)]
+    # entry_n_high = max of bars[-4:-1] 的 high = max(10,11,12) = 12（第 4 根 high=9 不算）
+    # entry_n_low  = min of bars[-4:-1] 的 low  = min(8,7,6)  = 6（第 4 根 low=5 不算）
     assert s.entry_n_high == 12
-    assert s.entry_n_low  == 5    # 修正：應為 6？看下測試判定
-    # 修正：min of first 3 bars' lows = min(8,7,6) = 6（第 4 根 low=5 不算）
-    # 但 deque 已 append 4 根、且 maxlen=max(3,2)+1=4，所以 deque 是 [(10,8),(11,7),(12,6),(9,5)]
-    # entry_n_low = min of bars[-4:-1] = min of [(10,8),(11,7),(12,6)] 的 low = min(8,7,6) = 6
-    # 所以正確 assertion 是：
-    # assert s.entry_n_low == 6
+    assert s.entry_n_low  == 6
 
 
 def test_donchian_entry_EXCLUDES_current_bar():
@@ -245,7 +243,7 @@ def test_donchian_invalid_params():
         _DonchianState(entry_n=2, exit_k=0)
 ```
 
-> **修正測試 `test_donchian_warmup_after_n_plus_1_bars` 內的 `entry_n_low` assertion**：寫成 `assert s.entry_n_low == 6`（不是 5）。剛打字的 placeholder 註解標示了正確值。
+_(註解已在 code block 內統一、無 placeholder fix-up 步驟)_
 
 - [ ] **Step 2: Run** — `python -m pytest tests/test_donchian.py -k donchian -v`，Expected: FAIL（module not found）
 
@@ -343,7 +341,7 @@ class _DonchianState:
 # ── DonchianStrategy 由 Task P2b/P2c 新增於此 ────────────────────────────────
 ```
 
-- [ ] **Step 4: Run** — `python -m pytest tests/test_donchian.py -k donchian -v` → 6 PASS（如果 test 內 placeholder 註解導致語法錯，修為單純的 assert s.entry_n_low == 6）
+- [ ] **Step 4: Run** — `python -m pytest tests/test_donchian.py -k donchian -v` → 6 PASS
 
 完整 file: `python -m pytest tests/test_donchian.py -v` → 8 PASS（2 P0 + 6 donchian）
 
@@ -651,7 +649,11 @@ def _pos(side, entry, stop, bars):
 
 
 def _strat_with_warmed_donchian(entry_n=3, exit_k=2, allow_short=False, cooldown=3, max_bars=48):
-    """灌 entry_n+1 根、讓 warmup 過，回 strat。"""
+    """灌 entry_n+1 根、讓 warmup 過、回 strat。
+
+    注意：warmup 過程中、若 close 突破 prior-N-bar high、會自然觸發 entry signal。
+    回來的 strat 可能 `_trades_today >= 1`。Task 4 exit tests 不檢查 _trades_today、不影響。
+    `_session_bar == entry_n+1` 是穩定的（每 on_kbar 增量、無 check_exit 干擾）。"""
     from strategy.donchian import DonchianStrategy
     from datetime import datetime
     strat = DonchianStrategy(entry_n=entry_n, exit_k=exit_k, allow_short=allow_short,
@@ -1093,7 +1095,8 @@ else:
 - [ ] **Step 4: Commit from repo root**
   ```bash
   cd "C:/Users/xx/Desktop/vps永豐微台指" && \
-  # 確認 .gitignore 不擋 data/donchian/*.md；若擋用 git add -f
+  # .gitignore 預檢過：data/donchian/*.md 不在 ignore（or_fade report 順利進 commit 42abc23 同 path pattern），無需 -f
+  # CSV/JSON 也不在 ignore、但靠明示 git add 特定檔避免誤入（**勿用 git add -A**）
   git add ultra-trader-src/scripts/run_donchian_experiments.py \
           ultra-trader-src/data/donchian/robustness_report_*.md && \
   git commit -m "feat(donchian): P4+P5 OOS experiments + gate summary report"
