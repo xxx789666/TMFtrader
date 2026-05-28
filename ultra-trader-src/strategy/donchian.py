@@ -169,5 +169,53 @@ class DonchianStrategy(BaseStrategy):
         )
 
     def check_exit(self, position, snapshot):
-        # Task 4 — not implemented yet
+        if position.is_flat:
+            return None
+        ts = snapshot.timestamp                # 真實 bar 時間
+        price = snapshot.price
+        # 注意：不 update _donchian（state 已由 on_kbar update 完）、不 increment _session_bar
+        is_long = (position.side == Side.LONG)
+
+        def close_sig(reason):
+            return Signal(direction=SignalDirection.CLOSE, strength=1.0,
+                          stop_loss=0, take_profit=0, reason=reason, source=self.name)
+
+        # 1) 盤末強平（不設 cooldown）
+        if ts.time() >= self._force_close:
+            return close_sig(f"盤末強平 @ {price:.0f}")
+        # 2) ATR 凍結停損 + cooldown
+        if position.stop_loss > 0:
+            if is_long and price <= position.stop_loss:
+                self._cooldown_until_bar = self._session_bar + self.cooldown
+                return close_sig(f"停損 @ {price:.0f}")
+            if (not is_long) and price >= position.stop_loss:
+                self._cooldown_until_bar = self._session_bar + self.cooldown
+                return close_sig(f"停損 @ {price:.0f}")
+        # 3) Donchian K-bar trailing exit
+        if is_long:
+            ek_low = self._donchian.exit_k_low
+            if not math.isnan(ek_low) and price < ek_low:
+                return close_sig(f"Donchian K-low trail @ {price:.0f}")
+        else:
+            ek_high = self._donchian.exit_k_high
+            if not math.isnan(ek_high) and price > ek_high:
+                return close_sig(f"Donchian K-high trail @ {price:.0f}")
+        # 4) 時間停損
+        if position.bars_since_entry > self.max_bars:
+            return close_sig(f"時間停損 {position.bars_since_entry}根")
         return None
+
+    def get_parameters(self):
+        return {
+            "entry_n": self.entry_n, "exit_k": self.exit_k, "sl_atr": self.sl_atr,
+            "max_bars": self.max_bars, "cooldown": self.cooldown,
+            "max_trades": self.max_trades, "allow_short": self.allow_short,
+        }
+
+    def reset(self):
+        """引擎不會跨日呼叫；供手動測試/重啟用"""
+        self._donchian = _DonchianState(entry_n=self.entry_n, exit_k=self.exit_k)
+        self._trades_today = 0
+        self._cooldown_until_bar = -1
+        self._session_bar = 0
+        self._day = None

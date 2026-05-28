@@ -265,3 +265,120 @@ def test_daily_reset_clears_state():
     assert strat._trades_today == 0
     assert strat._session_bar == 1
     assert strat._donchian.warmup_ready is False
+
+
+# ── Task 4 exit tests (P2c) ────────────────────────────────────────────────
+
+def _pos(side, entry, stop, bars):
+    from core.position import PositionManager
+    from core.instrument_config import INSTRUMENT_SPECS
+    pm = PositionManager(instruments=["TMF"], configs={"TMF": INSTRUMENT_SPECS["TMF"]},
+                         initial_balance=200_000)
+    pm.open_position("TMF", side, price=entry, quantity=1,
+                     stop_loss=stop, take_profit=0, timestamp=None)
+    p = pm.positions["TMF"]
+    p.bars_since_entry = bars
+    return p
+
+
+def _strat_with_warmed_donchian(entry_n=3, exit_k=2, allow_short=False, cooldown=3, max_bars=48):
+    """灌 entry_n+1 根、讓 warmup 過、回 strat。
+    註：warmup 過程中、若 close 突破 prior-N-bar high 會自然觸發 entry signal。
+    `_trades_today` 可能 >= 1。Task 4 exit tests 不檢查 _trades_today、不影響。
+    `_session_bar == entry_n+1` 穩定（check_exit 不增量）。"""
+    from strategy.donchian import DonchianStrategy
+    from datetime import datetime
+    strat = DonchianStrategy(entry_n=entry_n, exit_k=exit_k, allow_short=allow_short,
+                             cooldown=cooldown, max_bars=max_bars)
+    for i in range(entry_n + 1):
+        ts = datetime(2024, 1, 2, 9, i*5)
+        p = 100 + i * 2
+        strat.on_kbar(_kbar(ts, c=p, h=p+1, l=p-1), _make_snap(p, 30, 2, ts))
+    assert strat._donchian.warmup_ready
+    return strat
+
+
+def test_exit_force_close_no_cooldown():
+    from strategy.base import SignalDirection
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_warmed_donchian()
+    cd_before = strat._cooldown_until_bar
+    snap = _make_snap(105, 30, 2, datetime(2024, 1, 2, 13, 25))
+    sig = strat.check_exit(_pos(Side.LONG, 104, 100, 5), snap)
+    assert sig is not None and sig.direction == SignalDirection.CLOSE and "盤末" in sig.reason
+    assert strat._cooldown_until_bar == cd_before   # NOT set on force_close
+
+
+def test_exit_atr_stop_long_sets_cooldown():
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_warmed_donchian(cooldown=3)
+    bar_at_stop = strat._session_bar
+    snap = _make_snap(99, 30, 2, datetime(2024, 1, 2, 10, 0))
+    sig = strat.check_exit(_pos(Side.LONG, 104, 100, 3), snap)
+    assert sig is not None and "停損" in sig.reason
+    assert strat._cooldown_until_bar == bar_at_stop + 3
+
+
+def test_exit_atr_stop_short_sets_cooldown():
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_warmed_donchian(cooldown=3, allow_short=True)
+    bar_at_stop = strat._session_bar
+    snap = _make_snap(112, 30, 2, datetime(2024, 1, 2, 10, 0))
+    sig = strat.check_exit(_pos(Side.SHORT, 105, 110, 3), snap)
+    assert sig is not None and "停損" in sig.reason
+    assert strat._cooldown_until_bar == bar_at_stop + 3
+
+
+def test_exit_donchian_k_low_trailing_long():
+    """多單 price < exit_k_low → trailing 觸發"""
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_warmed_donchian(exit_k=2)
+    # entry_n=3 → 灌 4 根 (i=0..3)，p=100,102,104,106，l=p-1 → lows=[99,101,103,105]
+    # exit_k=2 → exit_k_low = min(103, 105) = 103
+    # price=102 < 103 → Donchian trailing 觸發
+    snap = _make_snap(102, 30, 2, datetime(2024, 1, 2, 10, 0))
+    sig = strat.check_exit(_pos(Side.LONG, 100, 90, 3), snap)
+    assert sig is not None and "Donchian" in sig.reason
+
+
+def test_exit_donchian_k_high_trailing_short():
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_warmed_donchian(exit_k=2, allow_short=True)
+    # entry_n=3 → 灌 4 根，h=p+1 → highs=[101,103,105,107]
+    # exit_k=2 → exit_k_high = max(105, 107) = 107
+    # price=108 > 107 → Donchian trailing 觸發
+    snap = _make_snap(108, 30, 2, datetime(2024, 1, 2, 10, 0))
+    sig = strat.check_exit(_pos(Side.SHORT, 100, 110, 3), snap)
+    assert sig is not None and "Donchian" in sig.reason
+
+
+def test_exit_time_stop():
+    """time stop 觸發、避 trailing 與 stop"""
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_warmed_donchian(exit_k=2, max_bars=18)
+    snap = _make_snap(110, 30, 2, datetime(2024, 1, 2, 11, 0))
+    # 多單 entry 100, stop 80（很遠不觸）；price 110 高於 exit_k_low ~104 不 trailing
+    # bars=19 > max_bars=18 → time stop
+    sig = strat.check_exit(_pos(Side.LONG, 100, 80, 19), snap)
+    assert sig is not None and "時間停損" in sig.reason
+
+
+def test_check_exit_does_not_mutate_state():
+    """invariant：check_exit 不 update _donchian、不 increment _session_bar"""
+    from core.position import Side
+    from datetime import datetime
+    strat = _strat_with_warmed_donchian()
+    high_before = strat._donchian.entry_n_high
+    low_before  = strat._donchian.entry_n_low
+    session_bar_before = strat._session_bar
+    snap = _make_snap(103, 30, 2, datetime(2024, 1, 2, 10, 0))
+    strat.check_exit(_pos(Side.LONG, 100, 90, 3), snap)
+    assert strat._donchian.entry_n_high == high_before
+    assert strat._donchian.entry_n_low  == low_before
+    assert strat._session_bar == session_bar_before
