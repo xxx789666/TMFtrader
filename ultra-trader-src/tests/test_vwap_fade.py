@@ -121,7 +121,21 @@ def test_entry_long_on_deviation():
     ts = datetime(2024, 1, 2, 10, 0)
     sig = strat.on_kbar(_kbar(ts, 90), _make_snap(90, 20, 2, ts))   # far below VWAP
     assert sig is not None and sig.direction == SignalDirection.BUY
-    # stop_loss is below take_profit (VWAP); the k2-band formula places stop between
-    # close and vwap (stop <= vwap). Verifying stop < take_profit (not stop < entry,
-    # since the k2-band can sit above a deeply-discounted close).
-    assert sig.stop_loss < sig.take_profit
+    assert sig.stop_loss < 90    # 多單停損必須在進場價下方（這個 assertion 抓的就是上面 fix 的 bug）
+    assert sig.take_profit > 90  # 多單 TP（=vwap）必須在進場價上方
+
+
+def test_entry_stop_below_close_on_deep_deviation():
+    """Regression: deep BUY deviation must not produce stop >= entry (instant stop-out bug)."""
+    from strategy.vwap_fade import VwapFadeStrategy
+    from strategy.base import SignalDirection
+    from datetime import datetime
+    strat = VwapFadeStrategy(k=2.0, k2=3.0, sl_atr=2.0, adx_max=99, min_warmup=3)
+    # Build a session with low sigma, then a deep undershoot that breaches even the k2 band.
+    for i, p in enumerate([100,100,100,100,100,100,100,100,100,100]):
+        ts = datetime(2024,1,2,9,i*5)
+        strat.on_kbar(_kbar(ts,p), _make_snap(p,20,2,ts))
+    ts = datetime(2024,1,2,10,0)
+    sig = strat.on_kbar(_kbar(ts, 80), _make_snap(80, 20, 2, ts))   # 深 fade
+    assert sig is not None and sig.direction == SignalDirection.BUY
+    assert sig.stop_loss < 80, f"Stop {sig.stop_loss} must be below entry 80 (long), else instant stop-out"

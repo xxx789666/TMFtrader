@@ -203,14 +203,20 @@ class VwapFadeStrategy(BaseStrategy):
         if close <= lower:
             sl_band = vwap - self.k2 * sigma
             sl_atrp = close - self.sl_atr * atr
-            stop = max(sl_band, sl_atrp)   # 取較緊（離進場近）
+            # 二擇緊者，但停損必須在進場價的保護側（多單：< close）。
+            # 深偏離時 sl_band 可能 >= close（無效）→ 排除後在剩下的候選中取較緊（max for long）。
+            candidates = [s for s in (sl_band, sl_atrp) if s < close]
+            stop = max(candidates)   # sl_atrp 必 < close（atr,sl_atr>0），candidates 不會空
             return self._signal(SignalDirection.BUY, close, stop, vwap, sigma)
 
         # ── 空單：收盤突破上軌 ─────────────────────────────────────────────
         if close >= upper:
             sl_band = vwap + self.k2 * sigma
             sl_atrp = close + self.sl_atr * atr
-            stop = min(sl_band, sl_atrp)   # 取較緊（離進場近）
+            # 二擇緊者，但停損必須在進場價的保護側（空單：> close）。
+            # 深偏離時 sl_band 可能 <= close（無效）→ 排除後在剩下的候選中取較緊（min for short）。
+            candidates = [s for s in (sl_band, sl_atrp) if s > close]
+            stop = min(candidates)   # sl_atrp 必 > close（atr,sl_atr>0），candidates 不會空
             return self._signal(SignalDirection.SELL, close, stop, vwap, sigma)
 
         return None
