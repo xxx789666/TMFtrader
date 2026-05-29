@@ -49,14 +49,20 @@ INITIAL_BALANCE = 200_000.0
 RISK_PROFILE    = "balanced"
 SPLIT_DATE      = "2024-01-01"   # touch-point 3: date-based split
 
-# touch-point 2: PARAM_GRID
-# 3*3*3*2*2 = 108 combos（long-only 與 biside 皆相同；allow_short 不剪 grid 維度）
+# touch-point 2: PARAM_GRID  ── v2: 加 vol_mult 量能濾網 + trim v1 診斷出的死維
+# v1 grid 診斷結論（diag_donchian_grid.py @ 2026-05-29）：
+#   - cooldown spread≈0.000 → 死維、固定 3
+#   - entry_n=30 樣本不足/崩塌（test_pf 0.638）→ 砍、只留 10/20（兩變體各自最佳）
+#   - exit_k=5 不在任何 Top-10、spread≈0.014 → 砍、留 10/15
+#   - 新增 vol_mult [0.0=off baseline, 1.2, 1.5, 2.0]：直接對照「有無量能確認」
+# 2*2*3*2*1*4 = 96 combos / variant（與 v1 的 108 相當）
 PARAM_GRID = {
-    "entry_n":  [10, 20, 30],
-    "exit_k":   [5, 10, 15],
+    "entry_n":  [10, 20],
+    "exit_k":   [10, 15],
     "sl_atr":   [1.5, 2.0, 2.5],
     "max_bars": [24, 48],
-    "cooldown": [3, 5],
+    "cooldown": [3],
+    "vol_mult": [0.0, 1.2, 1.5, 2.0],
 }
 
 
