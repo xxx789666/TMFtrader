@@ -3,7 +3,7 @@ from pathlib import Path
 import os, time, shioaji as sj
 from dotenv import load_dotenv
 
-load_dotenv(Path("/home/xx/ultra-trader-src/.env"))
+load_dotenv(Path("/home/xx/TMFtrader-src/.env"))
 
 api = sj.Shioaji(simulation=False)
 api.login(

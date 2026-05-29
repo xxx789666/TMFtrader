@@ -1,5 +1,5 @@
 """
-UltraTrader 策略基類
+TMFtrader 策略基類
 定義策略介面和共用資料結構
 """
 

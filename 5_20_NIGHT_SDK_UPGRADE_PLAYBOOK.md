@@ -49,7 +49,7 @@ wsl rsync -avz -e "ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes" \
   xx@35.221.239.245:/tmp/
 
 # 執行（會跑 5 分鐘）
-ssh ultratrader-night "cd ~/ultra-trader-src && source .venv/bin/activate && python3 /tmp/_min_verify_live.py 2>&1 | tail -20"
+ssh ultratrader-night "cd ~/TMFtrader-src && source .venv/bin/activate && python3 /tmp/_min_verify_live.py 2>&1 | tail -20"
 ```
 
 **判讀**：
@@ -74,7 +74,7 @@ ssh ultratrader-night "cd ~/ultra-trader-src && source .venv/bin/activate && pyt
 
 ```bash
 ssh ultratrader-night
-cd ~/ultra-trader-src
+cd ~/TMFtrader-src
 
 # Kill 跑中 process（paper start.py + paper_night_orb）
 pkill -f 'scripts/start.py' 2>/dev/null
@@ -97,7 +97,7 @@ cat /tmp/sdk_versions_before.txt
 ## 21:05 — pip install rshioaji
 
 ```bash
-cd ~/ultra-trader-src
+cd ~/TMFtrader-src
 source .venv/bin/activate
 
 # 卸舊版（rshioaji 會占 shioaji namespace、避免衝突）
@@ -119,11 +119,11 @@ python3 -c "import shioaji; print(shioaji.__version__)"
 # 本機已 commit 預改版本、rsync 上 VPS
 # （從你電腦執行）
 wsl rsync -avz -e "ssh -i ~/.ssh/google_compute_engine -o IdentitiesOnly=yes" \
-  /mnt/c/Users/xx/Desktop/vps永豐微台指/ultra-trader-src/core/broker.py \
-  xx@35.221.239.245:/home/xx/ultra-trader-src/core/broker.py
+  /mnt/c/Users/xx/Desktop/vps永豐微台指/TMFtrader-src/core/broker.py \
+  xx@35.221.239.245:/home/xx/TMFtrader-src/core/broker.py
 
 # VPS 上驗證 md5（本機/VPS 應一致）
-md5sum /home/xx/ultra-trader-src/core/broker.py
+md5sum /home/xx/TMFtrader-src/core/broker.py
 ```
 
 ---
@@ -132,7 +132,7 @@ md5sum /home/xx/ultra-trader-src/core/broker.py
 
 ```bash
 ssh ultratrader-night
-cd ~/ultra-trader-src
+cd ~/TMFtrader-src
 
 # 確認 .env 是 paper
 grep TRADING_MODE .env
@@ -144,7 +144,7 @@ sleep 30
 
 # 看是否能成功 init
 ps -ef | grep start.py | grep -v grep
-grep -E "Mode|Contract|Subscribe|KbarPoller|Heartbeat" data/logs/ultratrader_$(date +%Y%m%d).log | tail -10
+grep -E "Mode|Contract|Subscribe|KbarPoller|Heartbeat" data/logs/TMFtrader_$(date +%Y%m%d).log | tail -10
 
 # 觀察 5 分鐘看是否 die
 sleep 300
@@ -161,7 +161,7 @@ ps -ef | grep start.py | grep -v grep
 
 ```bash
 ssh ultratrader-night
-cd ~/ultra-trader-src
+cd ~/TMFtrader-src
 
 # kill paper
 pkill -f scripts/start.py
@@ -177,7 +177,7 @@ bash scripts/restart_day.sh
 sleep 30
 
 # 看 [Mode] LIVE 載入
-grep "\[Mode\]" data/logs/ultratrader_$(date +%Y%m%d).log | tail -3
+grep "\[Mode\]" data/logs/TMFtrader_$(date +%Y%m%d).log | tail -3
 # 應該看到 [Mode] LIVE trading
 
 # 觀察 5 分鐘
@@ -214,7 +214,7 @@ cron `55 6 * * 1-5` 已過、今晚 ORB 不會 cron 自動起。要手動起：
 
 ```bash
 ssh ultratrader-night
-bash ~/ultra-trader-src/scripts/restart_night.sh
+bash ~/TMFtrader-src/scripts/restart_night.sh
 sleep 10
 ps -ef | grep paper_night_orb | grep -v grep
 ```
@@ -247,7 +247,7 @@ ps -ef | grep paper_night_orb | grep -v grep
 
 ```bash
 ssh ultratrader-night
-cd ~/ultra-trader-src
+cd ~/TMFtrader-src
 source .venv/bin/activate
 
 # 卸 rshioaji
@@ -261,12 +261,12 @@ sed -i 's/^TRADING_MODE=live/TRADING_MODE=paper/' .env
 
 # rsync 回原版 broker.py（含 decorator）
 # 從本機：
-wsl ssh -i ~/.ssh/google_compute_engine xx@35.221.239.245 'cd ~/ultra-trader-src && git checkout HEAD~1 -- core/broker.py'
+wsl ssh -i ~/.ssh/google_compute_engine xx@35.221.239.245 'cd ~/TMFtrader-src && git checkout HEAD~1 -- core/broker.py'
 
 # 重啟
 bash scripts/restart_day.sh
 sleep 30
-grep "\[Mode\]" data/logs/ultratrader_$(date +%Y%m%d).log | tail -3
+grep "\[Mode\]" data/logs/TMFtrader_$(date +%Y%m%d).log | tail -3
 # 應該回到 [Mode] paper
 
 # 重新 disable watchdog（不該繼續嘗試 live）

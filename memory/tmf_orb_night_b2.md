@@ -92,7 +92,7 @@ ORBStrategy(
 - **Port 8888**：日盤 Breakout 策略（TRADING_MODE=paper）
 - **Port 8889**：夜盤 ORB 策略（TMFN，ML 停用，session 21:30-04:00）
 - 各自獨立 200K 預算
-- 夜盤排程：每天 **14:55** 啟動（`UltraTrader-NightORB` 工作排程器）
+- 夜盤排程：每天 **14:55** 啟動（`TMFtrader-NightORB` 工作排程器）
 
 ## 重訓觸發條件
 

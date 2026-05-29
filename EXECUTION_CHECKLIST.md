@@ -52,13 +52,13 @@
 >
 > Stack：**Hermes Agent**（Nous Research、2026-02 發佈）+ NVIDIA NIM provider
 > 覆盤頻率：**每週六 09:00 (Asia/Taipei)** 一次（Windows Task Scheduler 觸發），聚合上週 Mon-Fri 的日盤+夜盤
-> 專案模組：`ultra-trader-src/review/`（資料層）+ `hermes_skills/`（skill）+ `scripts/`（orchestrator + 可選 sync）
+> 專案模組：`TMFtrader-src/review/`（資料層）+ `hermes_skills/`（skill）+ `scripts/`（orchestrator + 可選 sync）
 
 ## 部署架構速覽（**VPS 已上線、5/13 進入 paper 觀察期**）
 
 ```
 ☁️ GCP VPS: ultratrader-night (asia-east1-b, e2-small, 35.221.239.245 靜態 IP)
-  /home/xx/ultra-trader-src/
+  /home/xx/TMFtrader-src/
     ├─ scripts/restart_{day,night}.sh    Linux 啟動腳本
     ├─ scripts/paper_night_orb.py        夜盤 ORB B2 ML strategy
     ├─ scripts/start.py                  日盤 FastAPI 8888
@@ -85,7 +85,7 @@
     └─ scheduled_trigger.ps1
           └─ wsl.exe -d Ubuntu -- bash -lc 'cd ~/vps_trader && bash scripts/run_weekly_review.sh'
                 ├─ [0]  kill_switch 預檢
-                ├─ [1]  sync from VPS（5/13 後：rsync xx@35.221.239.245:~/ultra-trader-src/data/）
+                ├─ [1]  sync from VPS（5/13 後：rsync xx@35.221.239.245:~/TMFtrader-src/data/）
                 ├─ [2a] python load_week → JSON
                 ├─ [2b] bash 格式化成 facts
                 ├─ [2c] curl NIM hosted → 繁中報告 ★直接 API★
@@ -159,9 +159,9 @@
 
 > 角色：Hermes Agent 透過 `execute_code` 呼叫此模組取得結構化交易資料 + Python 端統計（**LLM 不算數字**）。
 
-- [x] `ultra-trader-src/review/__init__.py` — 模組定位說明
-- [x] `ultra-trader-src/review/loader.py` — `load_daily` + `load_week`，算 WR/PF/MFE/MAE + 跨日聚合
-- [x] `ultra-trader-src/review/tools_for_hermes.py` — CLI JSON 介面：`load_daily` + `load_week` subcommand
+- [x] `TMFtrader-src/review/__init__.py` — 模組定位說明
+- [x] `TMFtrader-src/review/loader.py` — `load_daily` + `load_week`，算 WR/PF/MFE/MAE + 跨日聚合
+- [x] `TMFtrader-src/review/tools_for_hermes.py` — CLI JSON 介面：`load_daily` + `load_week` subcommand
 - [x] Inf / NaN sanitize（避免破壞 JSON）
 - [x] `load_daily` 對 5/11 資料驗證輸出正確（PF=null、net=2340.0）
 - [x] `load_week` 對 5/11–5/15 那週驗證正確（3 筆、+3510、WR 66.7%、PF 3.85、best=5/11、worst=5/12）
@@ -205,7 +205,7 @@
 
 ### L2 — 外部 Watchdog（已寫好）
 
-- [x] `ultra-trader-src/review/runaway_guard.py` 已實作
+- [x] `TMFtrader-src/review/runaway_guard.py` 已實作
 - [x] 門檻可由 env var 覆寫（`GUARD_MAX_TOOL_CALLS / GUARD_MAX_MINUTES / GUARD_MAX_TOKENS / GUARD_BURST_LIMIT_1H`）
 - [x] Hermes 未安裝時 graceful skip（不誤觸發）
 - [x] dry-run 模式測試通過
@@ -243,7 +243,7 @@
 
 ### 為何不裝 VPS
 
-VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watchdog + pandas）已用掉 1.2–1.5GB，剩餘 RAM 不足以再塞 Hermes Agent（Python 3.11 + SQLite + Node + sandbox 工具，需 300–500MB）。記憶體競爭可能拖累交易延遲、甚至觸發 OOM。
+VPS 是 GCP e2-small **2GB RAM**，現有 TMFtrader（Shioaji + FastAPI + watchdog + pandas）已用掉 1.2–1.5GB，剩餘 RAM 不足以再塞 Hermes Agent（Python 3.11 + SQLite + Node + sandbox 工具，需 300–500MB）。記憶體競爭可能拖累交易延遲、甚至觸發 OOM。
 
 **改本機 WSL2** 跑 Hermes，VPS 只負責交易與寫 JSON。
 
@@ -263,7 +263,7 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
 - [ ] 在 WSL2 內執行：
   ```bash
   ln -s "/mnt/c/Users/xx/Desktop/vps永豐微台指" ~/vps_trader
-  ls ~/vps_trader/   # 應該看到 ultra-trader-src/, hermes_skills/, scripts/, ...
+  ls ~/vps_trader/   # 應該看到 TMFtrader-src/, hermes_skills/, scripts/, ...
   ```
 - [ ] 給 sync 腳本執行權限：
   ```bash
@@ -281,7 +281,7 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
 
 - [ ] 從本機 `.env` 把 NVIDIA_API_KEY 複製進 Hermes config：
   ```bash
-  source ~/vps_trader/ultra-trader-src/.env
+  source ~/vps_trader/TMFtrader-src/.env
   hermes config set NVIDIA_API_KEY "$NVIDIA_API_KEY"
   hermes config set NVIDIA_BASE_URL "https://integrate.api.nvidia.com/v1"
   ```
@@ -294,7 +294,7 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
 - [ ] `hermes` 進 TUI，問「ping」確認 NIM 回應
 - [ ] 確認 Python 端工具能跑（Linux Python 版）：
   ```bash
-  cd ~/vps_trader/ultra-trader-src
+  cd ~/vps_trader/TMFtrader-src
   pip install python-dotenv
   python3 -m review.tools_for_hermes load_week --week_ending=2026-05-15 --compact
   ```
@@ -311,7 +311,7 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
   # 複製 → 貼到 GCP Console: Compute Engine → Metadata → SSH Keys，或：
   gcloud compute os-login ssh-keys add --key-file=~/.ssh/id_ed25519.pub
   ```
-- [ ] 測試連線：`ssh root@<VPS_IP> "ls ~/ultra-trader-src/data/performance/daily | head"`
+- [ ] 測試連線：`ssh root@<VPS_IP> "ls ~/TMFtrader-src/data/performance/daily | head"`
 
 ---
 
@@ -355,7 +355,7 @@ VPS 是 GCP e2-small **2GB RAM**，現有 UltraTrader（Shioaji + FastAPI + watc
 
 ### 設 bot（在 WSL2 內）
 
-- [ ] 從 `~/vps_trader/ultra-trader-src/.env` 抄 TG bot token + chat id
+- [ ] 從 `~/vps_trader/TMFtrader-src/.env` 抄 TG bot token + chat id
 - [ ] `hermes gateway setup`（互動輸入）
 - [ ] 把 gateway daemon 設成 WSL2 系統服務（避免 WSL2 重啟後不啟動）：
   ```bash
@@ -507,7 +507,7 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
   - 時段：08:00–20:00（18:00–20:00 限台灣 IP）
   - 指令（在 Windows PowerShell 跑、用既有 .env）：
     ```
-    cd "C:\Users\xx\Desktop\永豐-自動化交易\ultra-trader-src"
+    cd "C:\Users\xx\Desktop\永豐-自動化交易\TMFtrader-src"
     python "C:\Users\xx\Desktop\vps永豐微台指\scripts\shioaji_api_test.py"
     ```
   - 腳本流程：login (sim=True) → activate_ca → 取 TXF 近月 → Buy 15000 / 1 口 / ROD → sleep 2s → cancel
@@ -534,26 +534,26 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 
 - [x] **gcloud CLI 裝 WSL2 內**（v568.0.0）
 - [x] **開 VM** `ultratrader-night` 在 `asia-east1-b`（e2-small / Ubuntu 22.04 / 50GB SSD pd-balanced）
-- [x] 設靜態 IP `ultratrader-ip` = **35.221.239.245**
+- [x] 設靜態 IP `TMFtrader-ip` = **35.221.239.245**
 - [x] 啟用 Compute Engine API + 確認 billing
 - [x] 防火牆：建 `deny-trading-ports` 規則（block 8888/8889 對外、target trader-vm tag）
 - [x] ufw：本機只允許 SSH 22
 - [x] 裝 Python 3.12.13 + pip 26.1.1（deadsnakes PPA）
-- [x] rsync 上傳 `ultra-trader-src/`（342 檔、52MB、排除 historical/data/logs）
-- [x] rsync 上傳 `Sinopac.pfx` → `~/ultra-trader-src/certs/cert.pfx`
+- [x] rsync 上傳 `TMFtrader-src/`（342 檔、52MB、排除 historical/data/logs）
+- [x] rsync 上傳 `Sinopac.pfx` → `~/TMFtrader-src/certs/cert.pfx`
 - [x] rsync 上傳 `deployed_strategies/` (B2 ML model)
-- [x] 修 `.env`：`SHIOAJI_CA_PATH=/home/xx/ultra-trader-src/certs/cert.pfx`
+- [x] 修 `.env`：`SHIOAJI_CA_PATH=/home/xx/TMFtrader-src/certs/cert.pfx`
 - [x] 建 venv + `pip install -r requirements.txt`
 - [x] 補裝 ML 依賴：xgboost / scikit-learn / lightgbm + sys libgomp1
 - [x] **Shioaji simulation 登入測試成功**（Session up、期貨帳戶 `徐安利` 抓到）
 - [x] 寫 Linux 啟動腳本：`restart_day.sh` / `restart_night.sh` / `start_watchdog.sh`
 - [x] crontab：日盤 30 0 * * 1-5（UTC=TST−8）、夜盤 55 6 * * 1-5、watchdog 56 6 * * 1-5、收盤關 server
 - [x] **22:03 啟動夜盤 ORB paper**：ML model 載入 OK、訂閱 MXF tick feed、PID 4619 running
-- [x] paper log 寫入 `~/ultra-trader-src/data/paper_trading/night_orb_20260512.csv`
+- [x] paper log 寫入 `~/TMFtrader-src/data/paper_trading/night_orb_20260512.csv`
 
 ### Day 1（Claude 做、orchestrator 接 VPS）✅ 完成
 
-- [x] `~/vps_trader/scripts/.env.sync` 改為 `VPS_HOST=xx@35.221.239.245` / `SSH_KEY=$HOME/.ssh/google_compute_engine` / `TMF_DATA_ROOT=$HOME/vps_trader/ultra-trader-src/data`
+- [x] `~/vps_trader/scripts/.env.sync` 改為 `VPS_HOST=xx@35.221.239.245` / `SSH_KEY=$HOME/.ssh/google_compute_engine` / `TMF_DATA_ROOT=$HOME/vps_trader/TMFtrader-src/data`
 - [x] `bash sync_from_vps.sh` rsync 拉 12 個 daily JSON 到本機 sync 目錄
 - [x] `load_week` dry-run 驗證：5/11–5/15 trades=4 net=+5,880 best=5/11 +4740 worst=5/12 +1140
 - [x] 5/16 (Sat) 09:00 Task Scheduler 跑時、Step 1 sync 不再跳過、改 rsync VPS
@@ -576,7 +576,7 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 
 **5/14（四）**
 - [x] **08:30 日盤 cron restart 驗證**：TG 收到「🔄 [Cron] 日盤 start.py 排程重啟 PID=49253」✅
-- [x] **13:45 日盤收盤 broker spam 風波**：發現 circuit_breaker 在收盤 dead zone 震盪、8 則「[UltraTrader] 券商連線中斷/恢復」湧入 TG、commit `0f45ea7` 加 5 分鐘 cooldown、commit `3d687fd` rename [UltraTrader]→[Sinopac-Paper]/[Sinopac-Live] 動態 tag、PID 60541 重啟生效
+- [x] **13:45 日盤收盤 broker spam 風波**：發現 circuit_breaker 在收盤 dead zone 震盪、8 則「[TMFtrader] 券商連線中斷/恢復」湧入 TG、commit `0f45ea7` 加 5 分鐘 cooldown、commit `3d687fd` rename [TMFtrader]→[Sinopac-Paper]/[Sinopac-Live] 動態 tag、PID 60541 重啟生效
 - [x] **🚨 重大發現：日盤 0 trade 是 kbars API bug 不是市況**
   - log `[Shioaji] TMF 歷史 K 棒: 0 bars` (broker.py:727)、整個早盤 09:00-12:59 共 4.5 小時 [Scan] log=0、breakout.py:145 `if bar_count < 80: return None` 全程觸發
   - 進一步測試（`scripts/_test_kbars.py`）：TMFR1 / TXFR1 / MXFR1 / 股票 2330 / 古老日期、**全部 0 bars**
@@ -612,7 +612,7 @@ memory: `secret_scan_must_cover_hardcoded.md` —— push 前不只看 .gitignor
 - [x] **🎉 修法 A 生效驗證**：log 有 `08:30:53 [KbarPoller] 已停用（節省流量、設 ENABLE_KBAR_POLLER=true 可復開）`、commit `0892ac7` 真的在跑
 - [x] **🎉 Warmup 完全成功**：`[Shioaji] TMF 歷史 K 棒: 3722 bars`、合成 `404 bars for 5m / 138 bars for 15m`、`last_price=42360.0`、ema200=42077（不再是 0）
 - [x] **[Scan] 從 8:35 就開始**：09:00 前已 10 個 [Scan] log、整個早盤策略 active、**不再 mute 4.5 小時** 🎉
-- [x] **08:57 TST 解註解 watchdog cron**：`* * * * * /home/xx/ultra-trader-src/scripts/vps_watchdog.sh` 已恢復
+- [x] **08:57 TST 解註解 watchdog cron**：`* * * * * /home/xx/TMFtrader-src/scripts/vps_watchdog.sh` 已恢復
 - [ ] **13:50 TST**：TG 收「📊 [日盤日報]」、trades 應該 ≥ 1（如果 breakout 真有訊號 fire）
 - [ ] **14:55 TST**：TG 收「🌙 [Cron] 夜盤」、ORB 上線
 - [ ] **21:30 TST**：ORB session 啟動觀察
@@ -864,7 +864,7 @@ user 醒來必做（5 分鐘）：
 - [ ] SSH 到 VPS 改 `.env`：
   ```bash
   ssh ultratrader-night
-  cd ~/ultra-trader-src
+  cd ~/TMFtrader-src
   cp .env .env.backup-paper   # 留 paper 版備份
   sed -i 's/^TRADING_MODE=paper/TRADING_MODE=live/' .env
   # 順便把 INITIAL_BALANCE 改成實際權益（不是 paper 的 222890）
@@ -879,7 +879,7 @@ user 醒來必做（5 分鐘）：
 
 ### 9.2 cron 自然觸發 / 手動觸發（擇一）
 - 等 cron 08:30 自動跑 `restart_day.sh`、PID 新起、載入 `TRADING_MODE=live`
-- 或手動：`bash ~/ultra-trader-src/scripts/restart_day.sh`
+- 或手動：`bash ~/TMFtrader-src/scripts/restart_day.sh`
 
 ### 9.3 開盤前 5 分鐘驗證（08:30-08:45）
 - [ ] TG 收到「🔄 [Cron] 日盤 start.py 排程重啟 PID=...」
@@ -903,7 +903,7 @@ user 醒來必做（5 分鐘）：
   ```bash
   ssh ultratrader-night 'pkill -f start.py'
   # 看 5 分鐘 broker 是否有殘留問題
-  # 確認沒事再啟動：ssh ultratrader-night 'bash ~/ultra-trader-src/scripts/restart_day.sh'
+  # 確認沒事再啟動：ssh ultratrader-night 'bash ~/TMFtrader-src/scripts/restart_day.sh'
   ```
 
 ### 9.5 全日監看（5/20 8:30 - 5/21 8:30）
@@ -917,8 +917,8 @@ user 醒來必做（5 分鐘）：
 
 ```bash
 # A. 切回 paper（不平倉、新單轉 paper）
-ssh ultratrader-night "sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/ultra-trader-src/.env"
-ssh ultratrader-night "bash ~/ultra-trader-src/scripts/restart_day.sh"
+ssh ultratrader-night "sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/TMFtrader-src/.env"
+ssh ultratrader-night "bash ~/TMFtrader-src/scripts/restart_day.sh"
 
 # B. 全部平倉（緊急）
 ssh -L 8889:localhost:8889 ultratrader-night &
@@ -1067,7 +1067,7 @@ if False and self._heartbeat_count % 60 == 0 and self.trading_mode == "live":
 - [ ] SSH 到 VPS 改 `.env`：
   - [ ] `TRADING_MODE=live`
   - [ ] `INITIAL_BALANCE=<永豐戶頭實際權益>`（不是 paper 的 222890）
-- [ ] 重啟：`bash ~/ultra-trader-src/scripts/restart_night.sh`
+- [ ] 重啟：`bash ~/TMFtrader-src/scripts/restart_night.sh`
 - [ ] `curl localhost:8889/api/state | jq '.trading_mode'` 確認 = `"live"`
 - [ ] TG 收到「實單模式啟動」通知
 - [ ] **第一筆進場後**：永豐 App **必檢成交回報**（最重要）
@@ -1077,7 +1077,7 @@ if False and self._heartbeat_count % 60 == 0 and self.trading_mode == "live":
 
 ```bash
 # 切回 paper（不平倉、新單轉 paper）
-ssh VPS "sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/ultra-trader-src/.env && bash ~/ultra-trader-src/scripts/restart_night.sh"
+ssh VPS "sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/TMFtrader-src/.env && bash ~/TMFtrader-src/scripts/restart_night.sh"
 
 # 全部平倉（緊急）
 ssh -L 8889:localhost:8889 VPS &
@@ -1155,12 +1155,12 @@ GUARD_MAX_TOOL_CALLS=0 bash scripts/run_weekly_review.sh   # 故意觸發測試
 
 | 用途 | 位置 |
 |---|---|
-| **交易執行 + 寫資料**（LIVE）| Windows：`C:\Users\xx\Desktop\永豐-自動化交易\ultra-trader-src\` |
+| **交易執行 + 寫資料**（LIVE）| Windows：`C:\Users\xx\Desktop\永豐-自動化交易\TMFtrader-src\` |
 | **本專案（git tracked）** | Windows：`C:\Users\xx\Desktop\vps永豐微台指\` → `xxx789666/VPS--` |
 | **WSL2 內視角（本專案）** | `~/vps_trader/` → symlink → `/mnt/c/.../vps永豐微台指/` |
 | **WSL2 內視角（live data）** | `~/vps_trader_paper/` → symlink → `/mnt/c/.../永豐-自動化交易/` |
-| **資料根（TMF_DATA_ROOT）** | `~/vps_trader_paper/ultra-trader-src/data/` —— loader 從這讀 |
-| **資料層 Python 模組** | `~/vps_trader/ultra-trader-src/review/` |
+| **資料根（TMF_DATA_ROOT）** | `~/vps_trader_paper/TMFtrader-src/data/` —— loader 從這讀 |
+| **資料層 Python 模組** | `~/vps_trader/TMFtrader-src/review/` |
 | **Skill 原檔（git 版控）** | `~/vps_trader/hermes_skills/tmf-weekly-review/` |
 | **Sync/orchestrator scripts** | `~/vps_trader/scripts/` |
 | **Hermes runtime** | WSL2：`~/.hermes/`（skills/、cron/、memory.sqlite、gateway/）|

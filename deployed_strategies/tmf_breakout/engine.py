@@ -1,5 +1,5 @@
 """
-UltraTrader 交易引擎（多商品版）
+TMFtrader 交易引擎（多商品版）
 核心迴圈：串接 Broker → MarketData → Strategy → Risk → Dashboard
 支援同時交易多個商品（如 TMF + TGF）
 """
@@ -25,7 +25,7 @@ def _safe_round(val, decimals=1, default=0):
 from loguru import logger
 from dotenv import load_dotenv
 
-# 確保 UltraTrader 根目錄在 sys.path
+# 確保 TMFtrader 根目錄在 sys.path
 PROJECT_ROOT = Path(__file__).parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))

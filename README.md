@@ -8,7 +8,7 @@
 vps永豐微台指/
 ├── README.md                          ← 本檔（部署索引）
 ├── vps_zeabur_deploy.md               ← 完整部署 SOP（10 步驟）
-├── ultra-trader-src/                  ← 程式主體（9.8 MB）
+├── TMFtrader-src/                  ← 程式主體（9.8 MB）
 │   ├── core/                            引擎、broker、position、market_data
 │   ├── strategy/                        breakout + ORB 策略邏輯
 │   ├── risk/                            風控（manager、circuit_breaker、persistence）
@@ -46,8 +46,8 @@ vps永豐微台指/
 
 ```bash
 gcloud compute scp --recurse \
-  "C:\Users\xx\Desktop\永豐-自動化交易\ultra-trader-src\data\historical" \
-  ultratrader-night:~/ultra-trader-src/data/ \
+  "C:\Users\xx\Desktop\永豐-自動化交易\TMFtrader-src\data\historical" \
+  ultratrader-night:~/TMFtrader-src/data/ \
   --zone=asia-east1-b
 ```
 
@@ -59,7 +59,7 @@ gcloud compute scp --recurse \
 **.env 裡寫的是 Windows 路徑** `C:/Users/xx/Downloads/Sinopac.pfx`，Linux 用要：
 
 1. 把 `.pfx` 檔 scp 上 VM
-2. 改 `.env` 的 `SHIOAJI_CA_PATH` 為 Linux 路徑（例 `/root/ultra-trader-src/certs/cert.pfx`）
+2. 改 `.env` 的 `SHIOAJI_CA_PATH` 為 Linux 路徑（例 `/root/TMFtrader-src/certs/cert.pfx`）
 
 ### 3. 即時 log `data/logs/`
 
@@ -84,9 +84,9 @@ gcloud compute scp --recurse \
 
 | 你說的 | 對應的檔案/資料夾 |
 |--------|------------------|
-| **策略** | `ultra-trader-src/strategy/` + `deployed_strategies/` |
-| **監測** | `ultra-trader-src/dashboard/`（FastAPI server, port 8888/8889 dashboard）|
-| **自癒** | `ultra-trader-src/scripts/watchdog.py`（搜尋 `[Scan]` 心跳, 12 min 無 → 重啟）|
+| **策略** | `TMFtrader-src/strategy/` + `deployed_strategies/` |
+| **監測** | `TMFtrader-src/dashboard/`（FastAPI server, port 8888/8889 dashboard）|
+| **自癒** | `TMFtrader-src/scripts/watchdog.py`（搜尋 `[Scan]` 心跳, 12 min 無 → 重啟）|
 | **記憶** | `memory/`（Claude 操作知識）+ `data/state/`（持倉持久化）+ `data/risk_state*.json`（風控狀態）|
 
 ## 上線前必看的 memory
@@ -104,7 +104,7 @@ gcloud compute scp --recurse \
 每日（建議晨 7:00 看一次）：
 
 - [ ] `cat data/risk_state_night.json` peak_equity 是否合理（≈ INITIAL_BALANCE）
-- [ ] `grep "_execute_exit_inner" data/logs/ultratrader_$(date +%Y%m%d).log` 看出場紀錄
+- [ ] `grep "_execute_exit_inner" data/logs/TMFtrader_$(date +%Y%m%d).log` 看出場紀錄
 - [ ] TG 是否有「策略心跳異常」spam（若有 → 查 watchdog log）
 - [ ] `curl localhost:8889/api/state | python -m json.tool | head -20` 看 balance 是否累計正確
 

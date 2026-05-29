@@ -6,8 +6,8 @@
 #   bash scripts/daily_status_ping.sh night   # 夜盤收盤後（05:15 TST）
 #
 # cron（VPS）：
-#   50 5  * * 1-5  cd ~/ultra-trader-src && bash scripts/daily_status_ping.sh day   >/dev/null 2>&1
-#   15 21 * * 0-4  cd ~/ultra-trader-src && bash scripts/daily_status_ping.sh night >/dev/null 2>&1
+#   50 5  * * 1-5  cd ~/TMFtrader-src && bash scripts/daily_status_ping.sh day   >/dev/null 2>&1
+#   15 21 * * 0-4  cd ~/TMFtrader-src && bash scripts/daily_status_ping.sh night >/dev/null 2>&1
 
 set +e
 export TZ=Asia/Taipei
@@ -73,7 +73,8 @@ for p in ['$DAY_JSON', '$LIVE_JSON']:
     except Exception:
         pass
 if not cands:
-    print('(無交易紀錄檔)')
+    print('交易: 0 筆 / 訊號: 0 個')
+    print('日 PnL: +0 元')
 else:
     cands.sort(key=lambda x: (x[0], x[1]), reverse=True)
     d = cands[0][2]

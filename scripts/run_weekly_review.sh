@@ -27,7 +27,7 @@ TG_BOT_TOKEN="${TG_BOT_TOKEN:-${TELEGRAM_BOT_TOKEN:-}}"
 TG_CHAT_ID="${TG_CHAT_ID:-${TELEGRAM_CHAT_ID:-}}"
 
 PROJECT_ROOT="${PROJECT_ROOT:-$HOME/vps_trader}"
-LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$PROJECT_ROOT/ultra-trader-src}"
+LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$PROJECT_ROOT/TMFtrader-src}"
 HERMES_BIN="${HERMES_BIN:-$HOME/.local/bin/hermes}"
 WEEK_ENDING="${WEEK_ENDING:-today}"
 
@@ -35,8 +35,8 @@ WEEK_ENDING="${WEEK_ENDING:-today}"
 #   1. .env.sync 內顯式設定 TMF_DATA_ROOT → 用設定值
 #   2. 偵測本機 paper EA 路徑 → 用 ~/vps_trader_paper（symlink → 永豐-自動化交易）
 #   3. fallback：repo 內 ../data（不推薦、會是舊快照）
-if [[ -z "${TMF_DATA_ROOT:-}" ]] && [[ -d "$HOME/vps_trader_paper/ultra-trader-src/data" ]]; then
-  export TMF_DATA_ROOT="$HOME/vps_trader_paper/ultra-trader-src/data"
+if [[ -z "${TMF_DATA_ROOT:-}" ]] && [[ -d "$HOME/vps_trader_paper/TMFtrader-src/data" ]]; then
+  export TMF_DATA_ROOT="$HOME/vps_trader_paper/TMFtrader-src/data"
 fi
 [[ -n "${TMF_DATA_ROOT:-}" ]] && export TMF_DATA_ROOT
 
@@ -94,7 +94,7 @@ fi
 # ---- Step 2a：bash 預載資料（取代 agent 跑 execute_code）----
 log "[Step 2a/3] bash 預載 load_week / load_daily JSON"
 export PYTHONPATH="$LOCAL_PROJECT_DIR"
-export TMF_DATA_ROOT="${TMF_DATA_ROOT:-$HOME/vps_trader_paper/ultra-trader-src/data}"
+export TMF_DATA_ROOT="${TMF_DATA_ROOT:-$HOME/vps_trader_paper/TMFtrader-src/data}"
 # 2026-05-23: 過濾 paper trades、只統計 live。trade.reason 開頭 [PAPER] 排除。
 export EXCLUDE_PAPER_TRADES=true
 

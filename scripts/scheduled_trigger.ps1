@@ -15,7 +15,7 @@ $LogDir      = Join-Path $PSScriptRoot "logs"
 $null        = New-Item -ItemType Directory -Force -Path $LogDir
 $Stamp       = Get-Date -Format "yyyyMMdd_HHmmss"
 $LogFile     = Join-Path $LogDir ("scheduled_" + $Stamp + ".log")
-$EnvFile     = Join-Path $ProjectRoot (Join-Path "ultra-trader-src" ".env")
+$EnvFile     = Join-Path $ProjectRoot (Join-Path "TMFtrader-src" ".env")
 
 function Write-Log($msg) {
   $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg

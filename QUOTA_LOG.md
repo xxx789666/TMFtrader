@@ -59,7 +59,7 @@
 ### 方法 A：手動跑診斷腳本（任何時候）
 ```bash
 ssh ultratrader-night
-cd ~/ultra-trader-src && source .venv/bin/activate
+cd ~/TMFtrader-src && source .venv/bin/activate
 python3 /tmp/_test_kbars.py 2>&1 | tail -10
 ```
 看最後 `api.usage()` 輸出：
@@ -86,8 +86,8 @@ UsageStatus(connections=N, bytes=X, limit_bytes=Y, remaining_bytes=Z)
 
 手動跑（隨時）：
 ```bash
-ssh ultratrader-night '/home/xx/ultra-trader-src/.venv/bin/python3 \
-  /home/xx/ultra-trader-src/scripts/log_quota.py --verbose'
+ssh ultratrader-night '/home/xx/TMFtrader-src/.venv/bin/python3 \
+  /home/xx/TMFtrader-src/scripts/log_quota.py --verbose'
 # --verbose 每次都推 TG（debug 用）、不加只在警戒時推
 ```
 

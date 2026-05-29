@@ -10,7 +10,7 @@ set -euo pipefail
 
 PROJECT_MNT="/mnt/c/Users/xx/Desktop/vps永豐微台指"
 PROJECT_LINK="$HOME/vps_trader"
-PROJECT_ENV="$PROJECT_MNT/ultra-trader-src/.env"
+PROJECT_ENV="$PROJECT_MNT/TMFtrader-src/.env"
 
 # ---------- 工具 ----------
 GREEN=$'\e[32m'; YELLOW=$'\e[33m'; RED=$'\e[31m'; RESET=$'\e[0m'
@@ -133,7 +133,7 @@ else
 fi
 
 step "Python 端 smoke test（load_week）"
-cd "$PROJECT_LINK/ultra-trader-src"
+cd "$PROJECT_LINK/TMFtrader-src"
 python3 -m review.tools_for_hermes load_week --week_ending=2026-05-15 --compact \
   | python3 -c "import sys, json; d=json.loads(sys.stdin.read()); print('  ✓ load_week OK:', d['week_start'], '-', d['week_end'], 'net=', d['net_pnl'], 'trades=', d['n_trades'])"
 

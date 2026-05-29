@@ -40,7 +40,7 @@
 
 ```
 /home/xx/
-└── ultra-trader-src/                  # 整個專案（從 永豐-自動化交易/ 同步來）
+└── TMFtrader-src/                  # 整個專案（從 永豐-自動化交易/ 同步來）
     ├── .env                           # SHIOAJI keys / cert path / TG token
     ├── .venv/                         # Python 3.12 venv
     ├── certs/cert.pfx                 # Shioaji 永豐憑證（2752 bytes、~2027/4 到期）
@@ -63,7 +63,7 @@
     └── data/
         ├── performance/daily/         # 每日 _live.json / _live_night.json
         ├── paper_trading/             # paper_night_orb CSV
-        ├── logs/                      # ultratrader_YYYYMMDD.log / cron.log / watchdog.log
+        ├── logs/                      # TMFtrader_YYYYMMDD.log / cron.log / watchdog.log
         └── risk_state{,_night}.json   # 風控狀態（peak_equity / daily_loss / circuit_state）
 ```
 
@@ -90,11 +90,11 @@ pgrep -fa "scripts/start.py|paper_night_orb.py|watchdog.py"
 
 ```cron
 # === 日盤（start.py 24h 跑、breakout 內部過濾 in_day）===
-30 0 * * 1-5    /home/xx/ultra-trader-src/scripts/restart_day.sh        # 08:30 TST 重啟一次（fresh state）
+30 0 * * 1-5    /home/xx/TMFtrader-src/scripts/restart_day.sh        # 08:30 TST 重啟一次（fresh state）
 
 # === 夜盤 ===
-55 6 * * 1-5    /home/xx/ultra-trader-src/scripts/restart_night.sh      # 14:55 TST 啟動
-56 6 * * 1-5    /home/xx/ultra-trader-src/scripts/start_watchdog.sh     # 14:56 TST watchdog
+55 6 * * 1-5    /home/xx/TMFtrader-src/scripts/restart_night.sh      # 14:55 TST 啟動
+56 6 * * 1-5    /home/xx/TMFtrader-src/scripts/start_watchdog.sh     # 14:56 TST watchdog
 10 21 * * 0-4   pkill -f 'paper_night_orb.py'                            # 05:10 TST(隔日) 關
 10 21 * * 0-4   pkill -f 'watchdog.py.*--night'                          # 05:10 TST 關 watchdog
 ```
@@ -154,33 +154,33 @@ VPS 機房骨幹比家用網路更穩定、且 < 5ms 完全符合永豐 API 同�
 date && uptime                          # 時間 + load
 free -m && df -h /                      # RAM / 磁碟
 pgrep -fa "start.py|paper_night_orb|watchdog.py"   # 確認 process
-tail -50 ~/ultra-trader-src/data/logs/ultratrader_$(date +%Y%m%d).log
+tail -50 ~/TMFtrader-src/data/logs/TMFtrader_$(date +%Y%m%d).log
 ```
 
 ### 看當日交易
 ```bash
-cat ~/ultra-trader-src/data/performance/daily/$(date +%F)_live.json | python3 -m json.tool
-cat ~/ultra-trader-src/data/performance/daily/$(date +%F)_live_night.json | python3 -m json.tool 2>/dev/null
+cat ~/TMFtrader-src/data/performance/daily/$(date +%F)_live.json | python3 -m json.tool
+cat ~/TMFtrader-src/data/performance/daily/$(date +%F)_live_night.json | python3 -m json.tool 2>/dev/null
 ```
 
 ### 看風控狀態
 ```bash
-cat ~/ultra-trader-src/data/risk_state.json
-cat ~/ultra-trader-src/data/risk_state_night.json
+cat ~/TMFtrader-src/data/risk_state.json
+cat ~/TMFtrader-src/data/risk_state_night.json
 ```
 
 ### 手動重啟
 ```bash
-bash ~/ultra-trader-src/scripts/restart_day.sh
-bash ~/ultra-trader-src/scripts/restart_night.sh
-bash ~/ultra-trader-src/scripts/start_watchdog.sh
+bash ~/TMFtrader-src/scripts/restart_day.sh
+bash ~/TMFtrader-src/scripts/restart_night.sh
+bash ~/TMFtrader-src/scripts/start_watchdog.sh
 ```
 
 ### 緊急平倉（live 期）
 ```bash
 # 切回 paper（不平倉、新單轉 paper）
-sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/ultra-trader-src/.env
-bash ~/ultra-trader-src/scripts/restart_night.sh
+sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/TMFtrader-src/.env
+bash ~/TMFtrader-src/scripts/restart_night.sh
 
 # 立即關掉所有 trader
 pkill -f 'paper_night_orb.py|scripts/start.py'
@@ -192,7 +192,7 @@ curl -X POST http://localhost:8889/api/close_all
 
 ### 看 cron log
 ```bash
-tail -50 ~/ultra-trader-src/data/logs/cron.log
+tail -50 ~/TMFtrader-src/data/logs/cron.log
 journalctl -u cron.service --since "1 hour ago"
 ```
 
@@ -203,10 +203,10 @@ journalctl -u cron.service --since "1 hour ago"
 `scripts/.env.sync` 設定：
 ```
 VPS_HOST=xx@35.221.239.245
-VPS_PROJECT_DIR=/home/xx/ultra-trader-src
+VPS_PROJECT_DIR=/home/xx/TMFtrader-src
 SSH_KEY=$HOME/.ssh/google_compute_engine
 SYNC_DAYS=14
-TMF_DATA_ROOT=$HOME/vps_trader/ultra-trader-src/data
+TMF_DATA_ROOT=$HOME/vps_trader/TMFtrader-src/data
 ```
 
 每週六 09:00 Windows Task Scheduler 觸發、rsync 拉近 14 天 daily JSON 到本機、餵 Hermes 產覆盤推 TG。

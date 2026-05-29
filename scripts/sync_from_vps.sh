@@ -12,8 +12,8 @@
 #
 # 環境變數（可由 .env.sync 覆寫）：
 #   VPS_HOST           SSH 目標，例 "xx@34.81.x.x"
-#   VPS_PROJECT_DIR    VPS 上專案路徑，預設 /root/ultra-trader-src
-#   LOCAL_PROJECT_DIR  本機路徑，預設 ~/vps_trader/ultra-trader-src
+#   VPS_PROJECT_DIR    VPS 上專案路徑，預設 /root/TMFtrader-src
+#   LOCAL_PROJECT_DIR  本機路徑，預設 ~/vps_trader/TMFtrader-src
 #   SSH_KEY            SSH 私鑰路徑，預設 ~/.ssh/id_ed25519
 #   SYNC_DAYS          往回拉幾天，預設 14
 #   TG_BOT_TOKEN       失敗時推 Telegram
@@ -36,8 +36,8 @@ if [[ -f "$SCRIPT_DIR/.env.sync" ]]; then
 fi
 
 : "${VPS_HOST:?VPS_HOST 未設定，請在 scripts/.env.sync 內設定 VPS_HOST=user@ip}"
-VPS_PROJECT_DIR="${VPS_PROJECT_DIR:-/root/ultra-trader-src}"
-LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$HOME/vps_trader/ultra-trader-src}"
+VPS_PROJECT_DIR="${VPS_PROJECT_DIR:-/root/TMFtrader-src}"
+LOCAL_PROJECT_DIR="${LOCAL_PROJECT_DIR:-$HOME/vps_trader/TMFtrader-src}"
 SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519}"
 SYNC_DAYS="${SYNC_DAYS:-14}"
 

@@ -1,6 +1,6 @@
 # 永豐-自動化交易 — 已部署策略
 
-> ⚠️ **這個資料夾是 backup 副本** — 真實運行的檔案在 `ultra-trader-src/` 下。
+> ⚠️ **這個資料夾是 backup 副本** — 真實運行的檔案在 `TMFtrader-src/` 下。
 > 修改這裡的檔案**不會**自動同步回去。改完要手動 copy 到 source of truth 才會生效。
 
 最後同步：2026-04-16
@@ -40,8 +40,8 @@ deployed_strategies/
 │   └── start_watchdog.bat             手動啟動 watchdog
 │
 └── startup/                           ← 開機自啟（Windows Startup folder）
-    ├── UltraTrader-Server.bat         開機自啟 server
-    └── UltraTrader-Watchdog.bat       開機自啟 watchdog
+    ├── TMFtrader-Server.bat         開機自啟 server
+    └── TMFtrader-Watchdog.bat       開機自啟 watchdog
 ```
 
 ---
@@ -52,21 +52,21 @@ deployed_strategies/
 
 ### 策略原始碼
 ```
-ultra-trader-src/strategy/breakout.py
-ultra-trader-src/strategy/base.py
-ultra-trader-src/strategy/filters.py
+TMFtrader-src/strategy/breakout.py
+TMFtrader-src/strategy/base.py
+TMFtrader-src/strategy/filters.py
 ```
 
 ### 自動化腳本（實際在跑的）
 ```
-ultra-trader-src/scripts/start.py       ← port 8888 主 server
-ultra-trader-src/scripts/watchdog.py    ← 自癒看門狗
+TMFtrader-src/scripts/start.py       ← port 8888 主 server
+TMFtrader-src/scripts/watchdog.py    ← 自癒看門狗
 ```
 
 ### 開機自啟（真正被 Windows 執行的）
 ```
-C:\Users\xx\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\UltraTrader-Server.bat
-C:\Users\xx\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\UltraTrader-Watchdog.bat
+C:\Users\xx\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\TMFtrader-Server.bat
+C:\Users\xx\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\TMFtrader-Watchdog.bat
 ```
 
 ### 策略說明
@@ -101,13 +101,13 @@ C:\Users\xx\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\UltraT
 
 ### 啟動 server（手動）
 ```bash
-cd ultra-trader-src
+cd TMFtrader-src
 nohup python scripts/start.py --no-browser > /tmp/trader.log 2>&1 &
 ```
 
 ### 啟動 watchdog（手動）
 ```bash
-cd ultra-trader-src
+cd TMFtrader-src
 nohup pythonw scripts/watchdog.py > /dev/null 2>&1 &
 ```
 

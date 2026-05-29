@@ -9,8 +9,8 @@ metadata:
     category: trading
     config:
       # 實際資料來源以 env var TMF_DATA_ROOT 為準（orchestrator 會 export）
-      # 主要來源：~/vps_trader_paper/ultra-trader-src/data（symlink → 永豐-自動化交易，live paper）
-      # Fallback：~/vps_trader/ultra-trader-src/data（vps永豐微台指 內舊快照、開發用）
+      # 主要來源：~/vps_trader_paper/TMFtrader-src/data（symlink → 永豐-自動化交易，live paper）
+      # Fallback：~/vps_trader/TMFtrader-src/data（vps永豐微台指 內舊快照、開發用）
       data_root: env:TMF_DATA_ROOT
       strategy_files:
         day: strategy/breakout.py
@@ -64,8 +64,8 @@ import subprocess, os
 result = subprocess.run(
     ['python3', '-m', 'review.tools_for_hermes', 'load_week', '--week_ending=<DATE>'],
     env={**os.environ,
-         'PYTHONPATH': os.path.expanduser('~/vps_trader/ultra-trader-src'),
-         'TMF_DATA_ROOT': os.path.expanduser('~/vps_trader_paper/ultra-trader-src/data')},
+         'PYTHONPATH': os.path.expanduser('~/vps_trader/TMFtrader-src'),
+         'TMF_DATA_ROOT': os.path.expanduser('~/vps_trader_paper/TMFtrader-src/data')},
     capture_output=True, text=True, timeout=30,
 )
 print(result.stdout)

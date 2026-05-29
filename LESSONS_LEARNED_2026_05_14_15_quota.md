@@ -30,7 +30,7 @@
 - 14:55 夜盤開盤、storm 停
 - 22:00 ORB session 啟動、邏輯正常
 - 收線時 `api.usage()` 顯示 1.59 GB、超量 318%
-- TG spam 8 則「[UltraTrader] 券商連線中斷/恢復」
+- TG spam 8 則「[TMFtrader] 券商連線中斷/恢復」
 
 **當天 Claude 抓到的**：
 - ✅ daily JSON 顯示 0 trade

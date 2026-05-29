@@ -18,7 +18,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 echo
 echo "▌ 1. 日盤（breakout / TMF）"
-DAY_JSON=~/ultra-trader-src/data/performance/daily/\${TODAY}_live.json
+DAY_JSON=~/TMFtrader-src/data/performance/daily/\${TODAY}_live.json
 if [ -f "\$DAY_JSON" ]; then
   python3 <<PY
 import json
@@ -48,8 +48,8 @@ fi
 
 echo
 echo "▌ 2. 夜盤 ORB CSV（MXF / B2 ML）"
-NIGHT_CSV=~/ultra-trader-src/data/paper_trading/live_night_orb_\${TODAY_COMPACT}.csv
-[ ! -f "\$NIGHT_CSV" ] && NIGHT_CSV=~/ultra-trader-src/data/paper_trading/night_orb_\${TODAY_COMPACT}.csv
+NIGHT_CSV=~/TMFtrader-src/data/paper_trading/live_night_orb_\${TODAY_COMPACT}.csv
+[ ! -f "\$NIGHT_CSV" ] && NIGHT_CSV=~/TMFtrader-src/data/paper_trading/night_orb_\${TODAY_COMPACT}.csv
 if [ -f "\$NIGHT_CSV" ]; then
   TOTAL=\$(wc -l < "\$NIGHT_CSV")
   echo "  總行數: \$TOTAL（首行 = header、>1 = 有交易）"
@@ -66,20 +66,20 @@ fi
 
 echo
 echo "▌ 3. 夜盤 breakout JSON（如果 breakout 夜盤有訊號才有 — 現在已關閉）"
-NIGHT_JSON=~/ultra-trader-src/data/performance/daily/\${TODAY}_live_night.json
+NIGHT_JSON=~/TMFtrader-src/data/performance/daily/\${TODAY}_live_night.json
 [ -f "\$NIGHT_JSON" ] && cat "\$NIGHT_JSON" | python3 -m json.tool 2>&1 | head -30 || echo "  (無、breakout 夜盤已關閉、預期內)"
 
 echo
 echo "▌ 4. 風控狀態（risk_state）"
 echo "  日盤："
-cat ~/ultra-trader-src/data/risk_state.json 2>/dev/null | python3 -m json.tool 2>&1 | head -10
+cat ~/TMFtrader-src/data/risk_state.json 2>/dev/null | python3 -m json.tool 2>&1 | head -10
 echo
 echo "  夜盤："
-cat ~/ultra-trader-src/data/risk_state_night.json 2>/dev/null | python3 -m json.tool 2>&1 | head -10
+cat ~/TMFtrader-src/data/risk_state_night.json 2>/dev/null | python3 -m json.tool 2>&1 | head -10
 
 echo
 echo "▌ 5. 今日 Engine log 內訊號類事件（過濾顯示）"
-LOG=~/ultra-trader-src/data/logs/ultratrader_\${TODAY_COMPACT}.log
+LOG=~/TMFtrader-src/data/logs/TMFtrader_\${TODAY_COMPACT}.log
 if [ -f "\$LOG" ]; then
   echo "  Signal / Entry / Exit / Order / ORB 相關："
   grep -iE 'Signal|Entry|Exit|\[Order\]|place_order|fired|breakout SHORT|breakout LONG|A-Squeeze|ORB.*Range' "\$LOG" 2>/dev/null | tail -15

@@ -6,7 +6,7 @@
 #   2. scripts/night_orb.py（只在 14:55–05:10 夜盤時段檢查）
 #
 # 用 cron 每分鐘跑一次：
-#   * * * * * /home/xx/ultra-trader-src/scripts/vps_watchdog.sh
+#   * * * * * /home/xx/TMFtrader-src/scripts/vps_watchdog.sh
 #
 # 失敗時：寫 vps_watchdog.log + 推 TG + 重啟對應 process
 
@@ -30,7 +30,7 @@ MIN=$(date +%M)
 DAY=$(date +%u)   # 1=Mon ... 7=Sun
 
 # ─── Restart 互斥：若 restart_*.sh 正在跑、本輪 watchdog skip ─────
-RESTART_LOCK=/tmp/ultratrader_restart_in_progress
+RESTART_LOCK=/tmp/TMFtrader_restart_in_progress
 if [ -f "$RESTART_LOCK" ]; then
   LOCK_TIME=$(awk '{print $2}' "$RESTART_LOCK" 2>/dev/null)
   NOW=$(date +%s)

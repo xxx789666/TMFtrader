@@ -7,7 +7,7 @@ Min-verify Shioaji live mode callback issue (Discord expert 建議)
 
 用法：21:00 後執行：
   ssh ultratrader-night
-  cd ~/ultra-trader-src && source .venv/bin/activate
+  cd ~/TMFtrader-src && source .venv/bin/activate
   python3 /tmp/_min_verify_live.py
 """
 from pathlib import Path
@@ -16,7 +16,7 @@ from datetime import datetime
 import shioaji as sj
 from dotenv import load_dotenv
 
-load_dotenv(Path("/home/xx/ultra-trader-src/.env"))
+load_dotenv(Path("/home/xx/TMFtrader-src/.env"))
 
 print("=" * 60)
 print("Min-verify Shioaji live mode callback race")

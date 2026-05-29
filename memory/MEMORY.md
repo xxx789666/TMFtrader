@@ -49,8 +49,8 @@
 
 ## 系統狀態確認指令（快速健診）
 - 心跳：`tail -c 2000 data/logs/watchdog_night.log` — 最後一行應是 `[OK] 最後心跳 Xs 前`
-- 引擎：`tail -c 3000 data/logs/ultratrader_YYYYMMDD.log` — 最後應有 `[Heartbeat] TMFN:` 每 60s 一筆
-- ORB：grep `\[ORB\]` ultratrader_YYYYMMDD.log — 22:15 應有區間建立記錄
+- 引擎：`tail -c 3000 data/logs/TMFtrader_YYYYMMDD.log` — 最後應有 `[Heartbeat] TMFN:` 每 60s 一筆
+- ORB：grep `\[ORB\]` TMFtrader_YYYYMMDD.log — 22:15 應有區間建立記錄
 - 風控：`cat data/risk_state_night.json` — circuit_state 應為 active，peak 應≈200000
 
 ## 交易復盤

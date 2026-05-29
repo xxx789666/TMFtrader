@@ -9,7 +9,7 @@
   - 證券 + 期貨需分別測；本腳本只測期貨（TXF 近月）
 
 執行：
-  cd "C:\\Users\\xx\\Desktop\\永豐-自動化交易\\ultra-trader-src"
+  cd "C:\\Users\\xx\\Desktop\\永豐-自動化交易\\TMFtrader-src"
   python "C:\\Users\\xx\\Desktop\\vps永豐微台指\\scripts\\shioaji_api_test.py"
 
 判斷通過：
@@ -42,9 +42,9 @@ if 18 <= hour < 20:
 # ============== Step 0.5: 找 .env 並手動解析（不依賴 python-dotenv）==============
 CANDIDATES = [
     Path.cwd() / ".env",
-    Path(__file__).resolve().parent.parent.parent / "永豐-自動化交易" / "ultra-trader-src" / ".env",
-    Path("C:/Users/xx/Desktop/永豐-自動化交易/ultra-trader-src/.env"),
-    Path(__file__).resolve().parent.parent / "ultra-trader-src" / ".env",
+    Path(__file__).resolve().parent.parent.parent / "永豐-自動化交易" / "TMFtrader-src" / ".env",
+    Path("C:/Users/xx/Desktop/永豐-自動化交易/TMFtrader-src/.env"),
+    Path(__file__).resolve().parent.parent / "TMFtrader-src" / ".env",
 ]
 env_file = next((p for p in CANDIDATES if p.exists()), None)
 if env_file is None:

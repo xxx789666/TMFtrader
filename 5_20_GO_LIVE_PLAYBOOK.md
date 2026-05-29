@@ -64,7 +64,7 @@
 
 ```bash
 # 已 ssh 進去後跑：
-cd ~/ultra-trader-src
+cd ~/TMFtrader-src
 
 # 備份 paper 版（之後若要切回 paper 用）
 cp .env .env.backup-paper
@@ -95,19 +95,19 @@ INITIAL_BALANCE=125000.0   ← 總入金額
 
 ```bash
 # 1. quota 是否 reset
-/home/xx/ultra-trader-src/.venv/bin/python3 /home/xx/ultra-trader-src/scripts/log_quota.py
+/home/xx/TMFtrader-src/.venv/bin/python3 /home/xx/TMFtrader-src/scripts/log_quota.py
 # 應該看到 bytes ≈ 0 MB / remaining ≈ 500 MB ← 必須是
 
 # 2. watchdog cron 是否啟用
 crontab -l | grep watchdog
-# 應該看到「* * * * * /home/xx/ultra-trader-src/scripts/vps_watchdog.sh」（不該有 # 開頭）
+# 應該看到「* * * * * /home/xx/TMFtrader-src/scripts/vps_watchdog.sh」（不該有 # 開頭）
 
 # 3. broker.py 修法 D + A + C 載入
-md5sum /home/xx/ultra-trader-src/core/broker.py
+md5sum /home/xx/TMFtrader-src/core/broker.py
 # 應該是 4ca8cd23f86a71bcbcddcd4cea1ff864 (或更新)
 
 # 4. circuit_breaker 修法 1+2+3 載入
-md5sum /home/xx/ultra-trader-src/risk/circuit_breaker.py
+md5sum /home/xx/TMFtrader-src/risk/circuit_breaker.py
 # 應該是 69b15ed3d0e5e2035bd6a54ef6501987 (或更新)
 ```
 
@@ -124,7 +124,7 @@ md5sum /home/xx/ultra-trader-src/risk/circuit_breaker.py
 
 **選 B：手動立刻起**（如不想等 5 分鐘）
 ```bash
-bash ~/ultra-trader-src/scripts/restart_day.sh
+bash ~/TMFtrader-src/scripts/restart_day.sh
 ```
 
 ---
@@ -136,7 +136,7 @@ bash ~/ultra-trader-src/scripts/restart_day.sh
 
 ### SSH 看 log
 ```bash
-LOG=/home/xx/ultra-trader-src/data/logs/ultratrader_$(date +%Y%m%d).log
+LOG=/home/xx/TMFtrader-src/data/logs/TMFtrader_$(date +%Y%m%d).log
 
 # 驗證 live 模式載入
 grep -E "Mode.*live|Mode.*paper" $LOG | tail -3
@@ -205,7 +205,7 @@ grep notify_entry $LOG | tail -1
 
 ### A. 切回 paper（最溫和）
 ```bash
-ssh ultratrader-night "sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/ultra-trader-src/.env && bash ~/ultra-trader-src/scripts/restart_day.sh"
+ssh ultratrader-night "sed -i 's/TRADING_MODE=live/TRADING_MODE=paper/' ~/TMFtrader-src/.env && bash ~/TMFtrader-src/scripts/restart_day.sh"
 ```
 
 ### B. 全部平倉（緊急、強平）
@@ -243,7 +243,7 @@ ssh ultratrader-night "pkill -f 'start.py'"
 
 5 分鐘後沒問題 → 重啟：
 ```bash
-ssh ultratrader-night "bash ~/ultra-trader-src/scripts/restart_day.sh"
+ssh ultratrader-night "bash ~/TMFtrader-src/scripts/restart_day.sh"
 ```
 
 ---
@@ -301,7 +301,7 @@ SSH key:       ~/.ssh/google_compute_engine
 期貨帳號:       2066213 (broker F002000)
 戶名:           徐安利
 API key 名:    SHIOAJI_API_KEY (in .env)
-CA path:       /home/xx/ultra-trader-src/certs/cert.pfx
+CA path:       /home/xx/TMFtrader-src/certs/cert.pfx
 本機 repo:     C:\Users\xx\Desktop\vps永豐微台指
 TG bot:        金秘書（你的私人 channel）
 ```

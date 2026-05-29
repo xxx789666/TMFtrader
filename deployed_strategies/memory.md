@@ -93,7 +93,7 @@ Walk-Forward: Train PF=1.983 / Test PF=2.080（泛化良好）
   - `core/engine.py`：移除頂層死碼 `import time`
   - `core/engine.py`：移除 `_engine_loop` 內無用的 `import time as _time_mod`
   - `core/engine.py`：`_engine_loop` 所有 heartbeat / WallClock 區塊包 try/except，防止 thread 無聲死亡
-- **檔案**：`ultra-trader-src/core/engine.py`
+- **檔案**：`TMFtrader-src/core/engine.py`
 - **驗證**：
   - 18:27:11 重啟後：Heartbeat 每 60 秒穩定觸發（18:27:12 → 18:28:12 → 18:29:12）
   - Watchdog 顯示 `[OK] 最後心跳 23s 前`，不再重啟
@@ -135,14 +135,14 @@ _time_mod.sleep(1)
 - **sweep 結果**：432 組進場 × 81 組出場組合，最佳為 er=1.18, min_adx=22, afternoon_adx=32, early_cut=40
 - **v6 vs v5（current code）**：PF 2.203→2.723，WR 57.8%→63.5%，MaxDD 10.9%→8.7%
 - **檔案**：
-  - source: `ultra-trader-src/strategy/breakout.py`, `ultra-trader-src/core/engine.py`
+  - source: `TMFtrader-src/strategy/breakout.py`, `TMFtrader-src/core/engine.py`
   - 副本：`deployed_strategies/tmf_breakout/breakout.py`（已同步）
 - **驗證**：全量回測 52筆 WR=63.5% PF=2.723 MaxDD=8.7% net=+132,990 ✅
 - **狀態**：🟡 待重啟 server 生效（server 自 4/17 15:57 持續運行，使用舊參數）
 
 ### 2026-04-18 — 同步 breakout.py 備份
 - **動機**：4/17 新增 ema20/ema200/rsi 到 [Scan] log 後，deployed_strategies 備份未同步
-- **改動**：`cp ultra-trader-src/strategy/breakout.py deployed_strategies/tmf_breakout/breakout.py`
+- **改動**：`cp TMFtrader-src/strategy/breakout.py deployed_strategies/tmf_breakout/breakout.py`
 - **驗證**：diff 無差異
 - **狀態**：✅ 已同步
 
@@ -153,11 +153,11 @@ _time_mod.sleep(1)
   - 複製（非移動）以下檔案作為 backup 副本：
     - `tmf_breakout/`: breakout.py, base.py, filters.py, 策略說明.md
     - `automation/`: start.py, watchdog.py, restart_trader.bat, start_watchdog.bat
-    - `startup/`: UltraTrader-Server.bat, UltraTrader-Watchdog.bat
+    - `startup/`: TMFtrader-Server.bat, TMFtrader-Watchdog.bat
 - **檔案**：
   - 新建：`deployed_strategies/README.md`, `deployed_strategies/memory.md`
   - 副本位置：詳見 README.md
-  - Source of truth 仍在 `ultra-trader-src/` 和 Windows Startup folder
+  - Source of truth 仍在 `TMFtrader-src/` 和 Windows Startup folder
 - **驗證**：`ls deployed_strategies/*/` 檔案都在、server/watchdog 未受影響（PID 15480, 26696 持續運行）
 - **狀態**：✅ 已驗證
 
@@ -167,7 +167,7 @@ _time_mod.sleep(1)
   - 新增 `TW_TZ = timezone(timedelta(hours=8))` 和 `tw_now()` helper
   - 所有 `tg(...)` 呼叫內的 `datetime.now().strftime(...)` 改為 `tw_now().strftime(...)`（replace_all 一次完成）
 - **檔案**：
-  - source: `ultra-trader-src/scripts/watchdog.py`
+  - source: `TMFtrader-src/scripts/watchdog.py`
   - 副本（此資料夾）：`automation/watchdog.py` — 已同步
 - **驗證**：重啟 watchdog 後 log 正常，下次 TG 通知會是 UTC+8
 - **狀態**：🟡 觀察中（等下次 Solace 斷線/恢復事件驗證）
@@ -179,7 +179,7 @@ _time_mod.sleep(1)
   - fallback_active=True 時設 `_solace_was_down = True`
   - fallback_active=False 時若 `_solace_was_down`，發 TG「Solace Tick 已恢復正常」並重置 flag
 - **檔案**：
-  - source: `ultra-trader-src/scripts/watchdog.py`（line ~398-404）
+  - source: `TMFtrader-src/scripts/watchdog.py`（line ~398-404）
   - 副本：`automation/watchdog.py` — 已同步
 - **驗證**：🟡 待下次 Solace 斷線恢復事件驗證
 - **狀態**：🟡 觀察中
@@ -187,11 +187,11 @@ _time_mod.sleep(1)
 ### 2026-04-16 ~08:40 — 開機自啟設定（新增 Server bat）
 - **動機**：重開機後發現 server 沒有自動啟動，只有 watchdog.bat 在 Startup，而 watchdog 啟動失敗的話就沒人拉起 server
 - **改動**：
-  - 在 `C:\Users\xx\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\` 新增 `UltraTrader-Server.bat`，直接啟動 `pythonw scripts/start.py --no-browser`
-  - 原有的 `UltraTrader-Watchdog.bat` 保留，雙保險
+  - 在 `C:\Users\xx\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\` 新增 `TMFtrader-Server.bat`，直接啟動 `pythonw scripts/start.py --no-browser`
+  - 原有的 `TMFtrader-Watchdog.bat` 保留，雙保險
 - **檔案**：
-  - source: `C:\Users\xx\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\UltraTrader-Server.bat`
-  - 副本：`startup/UltraTrader-Server.bat` — 已同步
+  - source: `C:\Users\xx\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\TMFtrader-Server.bat`
+  - 副本：`startup/TMFtrader-Server.bat` — 已同步
 - **驗證**：下次重開機驗證（目前手動啟動 PID 15480 正常）
 - **狀態**：🟡 觀察中（待下次重開機驗證）
 

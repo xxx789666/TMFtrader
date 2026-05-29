@@ -127,4 +127,4 @@ self._api.quote.set_on_tick_fop_v1_callback(on_tick)
 
 ### 已附 stderr 全文 (供參)
 
-[user 可附上 ultratrader_20260520.log line 1170-1350 + journalctl 那段]
+[user 可附上 TMFtrader_20260520.log line 1170-1350 + journalctl 那段]

@@ -1,16 +1,16 @@
 #!/bin/bash
 
 # Restart 互斥 lock（防止 watchdog 同時間 restart 撞期）
-_LOCK=/tmp/ultratrader_restart_in_progress
+_LOCK=/tmp/TMFtrader_restart_in_progress
 echo "$$ $(date +%s)" > "$_LOCK"
 trap 'rm -f "$_LOCK"' EXIT
 
-cd /home/xx/ultra-trader-src
+cd /home/xx/TMFtrader-src
 export TZ=Asia/Taipei
 source .venv/bin/activate
 pkill -f 'night_orb.py' 2>/dev/null || true
 sleep 3
-LOG="data/logs/ultratrader_$(date +%Y%m%d).log"
+LOG="data/logs/TMFtrader_$(date +%Y%m%d).log"
 mkdir -p data/logs
 nohup python3.12 scripts/night_orb.py --threshold 0.40 >> "$LOG" 2>&1 &
 NEW_PID=$!

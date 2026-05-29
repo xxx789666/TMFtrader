@@ -92,8 +92,8 @@ if hasattr(contract, 'target_code') and contract.target_code:
 ## TG 訊息模式標籤（2026-04-20 新增）
 
 所有 TG 訊息現在加入 `[{_MODE_LABEL}]`，例如：
-- `[UltraTrader] [夜盤(8889)] 伺服器重啟`
-- `[UltraTrader] [日盤(8888)] 策略運行正常`
+- `[TMFtrader] [夜盤(8889)] 伺服器重啟`
+- `[TMFtrader] [日盤(8888)] 策略運行正常`
 
 **新增變數：**
 - `_MODE_LABEL = "夜盤(8889)"` 或 `"日盤(8888)"`
@@ -152,7 +152,7 @@ self._last_ok_tg: float = 0.0
 # tick() 中心跳 OK 分支：
 if is_market_day() and (time.time() - self._last_ok_tg) > self._OK_TG_INTERVAL:
     self._last_ok_tg = time.time()
-    tg(f"[UltraTrader] [{_MODE_LABEL}] 策略運行正常\n心跳: {age:.0f}s 前\n引擎: {state.get('engine_state','?')}\n時間: ...")
+    tg(f"[TMFtrader] [{_MODE_LABEL}] 策略運行正常\n心跳: {age:.0f}s 前\n引擎: {state.get('engine_state','?')}\n時間: ...")
 ```
 
 ---
@@ -162,7 +162,7 @@ if is_market_day() and (time.time() - self._last_ok_tg) > self._OK_TG_INTERVAL:
 `start_night_watchdog.bat` 用 `start /MIN pythonw`，在 bash 子程序中無法正常 spawn。
 改用 PowerShell：
 ```powershell
-Start-Process -FilePath 'pythonw.exe' -ArgumentList 'scripts\watchdog.py --night' -WorkingDirectory 'C:\...\ultra-trader-src' -WindowStyle Hidden
+Start-Process -FilePath 'pythonw.exe' -ArgumentList 'scripts\watchdog.py --night' -WorkingDirectory 'C:\...\TMFtrader-src' -WindowStyle Hidden
 ```
 
 重啟雙 watchdog（升級代碼後）：

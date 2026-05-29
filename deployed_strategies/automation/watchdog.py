@@ -1,5 +1,5 @@
 """
-scripts/watchdog.py — UltraTrader 自癒看門狗
+scripts/watchdog.py — TMFtrader 自癒看門狗
 
 每 60 秒檢查一次：
   1. 伺服器是否在線（HTTP GET /api/state）
@@ -75,14 +75,14 @@ def tg(msg: str):
 
 
 def get_log_file() -> "Path | None":
-    """返回今日（或最新）的 ultratrader_*.log，不存在返回 None。"""
+    """返回今日（或最新）的 TMFtrader_*.log，不存在返回 None。"""
     today = datetime.now().strftime("%Y%m%d")
-    candidate = LOGS_DIR / f"ultratrader_{today}.log"
+    candidate = LOGS_DIR / f"TMFtrader_{today}.log"
     if candidate.exists():
         return candidate
     # fallback：找最新的 .log（排除 watchdog.log）
     logs = sorted(
-        [p for p in LOGS_DIR.glob("ultratrader_*.log") if not p.name.endswith(".gz")],
+        [p for p in LOGS_DIR.glob("TMFtrader_*.log") if not p.name.endswith(".gz")],
         key=lambda p: p.stat().st_mtime,
         reverse=True,
     )
@@ -266,7 +266,7 @@ def start_server() -> int:
 def restart_server(reason: str):
     """完整重啟流程：kill → wait → start → wait → resume CB。"""
     wlog(f"[Restart] 原因: {reason}")
-    tg(f"[UltraTrader] 伺服器重啟\n原因: {reason}\n時間: {tw_now().strftime('%H:%M:%S')}")
+    tg(f"[TMFtrader] 伺服器重啟\n原因: {reason}\n時間: {tw_now().strftime('%H:%M:%S')}")
 
     pid = find_server_pid()
     if pid:
@@ -290,7 +290,7 @@ def restart_server(reason: str):
 
     if state:
         wlog("[Restart] [OK] 伺服器已上線")
-        tg(f"[UltraTrader] 伺服器重啟成功 [OK]\n時間: {tw_now().strftime('%H:%M:%S')}")
+        tg(f"[TMFtrader] 伺服器重啟成功 [OK]\n時間: {tw_now().strftime('%H:%M:%S')}")
         # 清除 emergency / halted 狀態
         if call_resume():
             wlog("[Restart] [OK] 熔斷器已 resume")
@@ -298,7 +298,7 @@ def restart_server(reason: str):
             wlog("[Restart] [WARN] 熔斷器 resume 失敗（下次輪詢再重試）")
     else:
         wlog("[Restart] [ERR] 伺服器啟動失敗，下次輪詢再重試")
-        tg(f"[UltraTrader] 伺服器啟動失敗！需要手動處理\n時間: {tw_now().strftime('%H:%M:%S')}")
+        tg(f"[TMFtrader] 伺服器啟動失敗！需要手動處理\n時間: {tw_now().strftime('%H:%M:%S')}")
 
 
 # ─── [Scan] 心跳監控 ─────────────────────────────────────────────────────────
@@ -385,7 +385,7 @@ class Watchdog:
             else:
                 halt_reason = cb.get("halt_reason", "")
                 wlog(f"[CB] state={cb_state} reason='{halt_reason}'，嘗試 resume...")
-                tg(f"[UltraTrader] 熔斷器觸發\n狀態: {cb_state}\n原因: {halt_reason}\n時間: {tw_now().strftime('%H:%M:%S')}")
+                tg(f"[TMFtrader] 熔斷器觸發\n狀態: {cb_state}\n原因: {halt_reason}\n時間: {tw_now().strftime('%H:%M:%S')}")
                 if call_resume():
                     wlog("[CB] [OK] resume 成功")
                 else:
@@ -402,7 +402,7 @@ class Watchdog:
                 self._solace_was_down = True
                 # 第一次偵測到 fallback 時通知（fb_min < 2 表示剛開始）
                 if fb_min < 2:
-                    tg(f"[UltraTrader] Solace Tick 斷線\nfallback 模式啟動\n時間: {tw_now().strftime('%H:%M:%S')}")
+                    tg(f"[TMFtrader] Solace Tick 斷線\nfallback 模式啟動\n時間: {tw_now().strftime('%H:%M:%S')}")
                 if fb_min * 60 > FALLBACK_TIMEOUT:
                     pos_side = state.get("position", {}).get("side", "flat")
                     if pos_side != "flat":
@@ -412,7 +412,7 @@ class Watchdog:
             else:
                 if self._solace_was_down:
                     wlog("[Tick] Solace 已恢復 [OK]")
-                    tg(f"[UltraTrader] Solace Tick 已恢復正常\n時間: {tw_now().strftime('%H:%M:%S')}")
+                    tg(f"[TMFtrader] Solace Tick 已恢復正常\n時間: {tw_now().strftime('%H:%M:%S')}")
                     self._solace_was_down = False
                 else:
                     wlog("[Tick] Solace [OK]")
@@ -424,7 +424,7 @@ class Watchdog:
                 wlog("[Scan] 找不到 [Scan] 紀錄（策略尚未掃描或日誌尚未生成）")
             elif age > SCAN_TIMEOUT:
                 wlog(f"[Scan] [WARN] {age/60:.1f} 分鐘沒有 [Scan]，策略疑似卡住")
-                tg(f"[UltraTrader] 策略心跳異常\n{age/60:.1f} 分鐘沒有 [Scan]\n時間: {tw_now().strftime('%H:%M:%S')}")
+                tg(f"[TMFtrader] 策略心跳異常\n{age/60:.1f} 分鐘沒有 [Scan]\n時間: {tw_now().strftime('%H:%M:%S')}")
                 # 有開倉時不重啟（持倉表示引擎仍在運作，心跳正常）
                 pos_side = state.get("position", {}).get("side", "flat")
                 if pos_side != "flat":
@@ -438,12 +438,12 @@ class Watchdog:
 
     def run(self):
         wlog("=" * 55)
-        wlog("[Watchdog] UltraTrader 自癒看門狗啟動")
+        wlog("[Watchdog] TMFtrader 自癒看門狗啟動")
         wlog(f"  伺服器 : {SERVER_URL}")
         wlog(f"  日誌目錄: {LOGS_DIR}")
         wlog(f"  輪詢   : {CHECK_INTERVAL}s | Scan超時: {SCAN_TIMEOUT//60}min | 重啟冷卻: {RESTART_COOLDOWN}s")
         wlog("=" * 55)
-        tg(f"[UltraTrader] Watchdog 啟動\n時間: {tw_now().strftime('%Y-%m-%d %H:%M:%S')}")
+        tg(f"[TMFtrader] Watchdog 啟動\n時間: {tw_now().strftime('%Y-%m-%d %H:%M:%S')}")
 
         while True:
             try:

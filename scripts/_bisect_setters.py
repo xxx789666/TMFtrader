@@ -29,7 +29,7 @@ from datetime import datetime
 import shioaji as sj
 from dotenv import load_dotenv
 
-load_dotenv(Path("/home/xx/ultra-trader-src/.env"))
+load_dotenv(Path("/home/xx/TMFtrader-src/.env"))
 
 ROUND = int(sys.argv[1]) if len(sys.argv) > 1 else 0
 OBSERVE_SEC = int(sys.argv[2]) if len(sys.argv) > 2 else 180

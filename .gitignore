@@ -25,16 +25,16 @@ scripts/_*.ps1
 scripts/logs/
 
 # ---- 大型資料 ----
-ultra-trader-src/data/historical/
-ultra-trader-src/data/logs/
-ultra-trader-src/data/llm_audit/
+TMFtrader-src/data/historical/
+TMFtrader-src/data/logs/
+TMFtrader-src/data/llm_audit/
 *.parquet
 
 # ---- 執行期產物 ----
-ultra-trader-src/data/state/*.json
-ultra-trader-src/data/risk_state*.json
-ultra-trader-src/data/performance/daily/*.json
-ultra-trader-src/data/reports/
+TMFtrader-src/data/state/*.json
+TMFtrader-src/data/risk_state*.json
+TMFtrader-src/data/performance/daily/*.json
+TMFtrader-src/data/reports/
 
 # ---- Python ----
 __pycache__/
