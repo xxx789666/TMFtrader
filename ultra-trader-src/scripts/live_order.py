@@ -1,10 +1,23 @@
-"""正式環境下單 - MXF 買進 1 口"""
+"""正式環境下單 - TMF 買進 1 口"""
 import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 import shioaji as sj
+
+# ── LIVE ORDER GUARD (2026-05-29 lock-tmf-only) ──────────────
+# 這是會對 LIVE 帳戶下真實單的腳本。需雙重確認才放行：
+#   1) 環境變數 CONFIRM_LIVE_ORDER=YES
+#   2) 互動輸入 yes（非互動/cron 環境直接拒絕）
+if os.environ.get("CONFIRM_LIVE_ORDER") != "YES":
+    sys.exit("[BLOCKED] 真實下單腳本，需設環境變數 CONFIRM_LIVE_ORDER=YES 才能執行")
+try:
+    if input("⚠️  確認要對 LIVE 帳戶下真實單？輸入 yes 繼續: ").strip().lower() != "yes":
+        sys.exit("[BLOCKED] 未輸入 yes、已中止")
+except EOFError:
+    sys.exit("[BLOCKED] 非互動環境、拒絕執行真實下單")
+# ─────────────────────────────────────────────────────────────
 
 api = sj.Shioaji(simulation=False)
 
@@ -41,8 +54,8 @@ def order_cb(stat, msg):
 
 api.set_order_callback(order_cb)
 
-# Place order: MXF Buy 1 lot, Market IOC
-contract = api.Contracts.Futures.MXF.MXFR1
+# Place order: TMF Buy 1 lot, Market IOC
+contract = api.Contracts.Futures.TMF.TMFR1
 print(f"\nContract: {contract.code} ({contract.name})")
 
 # 先看一下最新報價
@@ -60,7 +73,7 @@ order = api.Order(
     account=api.futopt_account,
 )
 
-print(f"\n>>> Placing order: BUY MXF x1 @ MKT IOC <<<")
+print(f"\n>>> Placing order: BUY TMF x1 @ MKT IOC <<<")
 trade = api.place_order(contract, order)
 print(f"\nOrder result:")
 print(f"  Status: {trade.status}")

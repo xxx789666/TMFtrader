@@ -64,46 +64,8 @@ try:
 except Exception as e:
     print(f"  error: {e}")
 
-# 5. Try limit order instead of market
-print("\n=== Try Limit Order ===")
-contract = api.Contracts.Futures.MXF.MXFR1
-snap = api.snapshots([contract])
-for s in snap:
-    print(f"  MXF: buy={s.buy_price} sell={s.sell_price} last={s.close}")
-    sell_price = s.sell_price
-
-# Try with explicit limit price at sell_price
-if sell_price > 0:
-    print(f"\n  Trying LIMIT order at {sell_price}...")
-    order = api.Order(
-        action=sj.constant.Action.Buy,
-        price=sell_price,
-        quantity=1,
-        price_type=sj.constant.FuturesPriceType.LMT,
-        order_type=sj.constant.OrderType.IOC,
-        octype=sj.constant.FuturesOCType.Auto,
-        account=api.futopt_account,
-    )
-
-    def order_cb(stat, msg):
-        print(f"  [CB] {stat}")
-        if 'operation' in msg:
-            print(f"    op={msg['operation']}")
-        if 'status' in msg and isinstance(msg['status'], dict):
-            st = msg['status']
-            print(f"    status={st}")
-
-    api.set_order_callback(order_cb)
-    trade = api.place_order(contract, order)
-    print(f"  result: {trade.status}")
-    time.sleep(3)
-
-    # Update
-    api.update_status(api.futopt_account)
-    for t in api.list_trades():
-        print(f"  trade: {t.contract.code} {t.order.action} status={t.status.status} deals={len(t.status.deals)}")
-        for d in t.status.deals:
-            print(f"    FILLED: price={d.price} qty={d.quantity}")
+# (2026-05-29 lock-tmf-only) 已移除原本的 LIVE 限價測試單尾巴。
+# check_account 回歸「純查帳」：只查保證金/餘額/部位/委託，絕不下任何單。
 
 api.logout()
 print("\nDone")

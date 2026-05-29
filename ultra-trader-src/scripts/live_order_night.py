@@ -1,4 +1,4 @@
-"""正式環境下單 - MXF 買進 1 口 (夜盤)"""
+"""正式環境下單 - TMF 買進 1 口 (夜盤)"""
 import sys, os, time
 from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -6,6 +6,16 @@ from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 
 import shioaji as sj
+
+# ── LIVE ORDER GUARD (2026-05-29 lock-tmf-only) ──────────────
+if os.environ.get("CONFIRM_LIVE_ORDER") != "YES":
+    sys.exit("[BLOCKED] 真實下單腳本，需設環境變數 CONFIRM_LIVE_ORDER=YES 才能執行")
+try:
+    if input("⚠️  確認要對 LIVE 帳戶下真實單？輸入 yes 繼續: ").strip().lower() != "yes":
+        sys.exit("[BLOCKED] 未輸入 yes、已中止")
+except EOFError:
+    sys.exit("[BLOCKED] 非互動環境、拒絕執行真實下單")
+# ─────────────────────────────────────────────────────────────
 
 # 等到 15:00
 now = datetime.now()
@@ -59,10 +69,10 @@ def order_cb(stat, msg):
 api.set_order_callback(order_cb)
 
 # Check price before ordering
-contract = api.Contracts.Futures.MXF.MXFR1
+contract = api.Contracts.Futures.TMF.TMFR1
 snap = api.snapshots([contract])
 for s in snap:
-    print(f"\nMXF: buy={s.buy_price} sell={s.sell_price} last={s.close} change={s.change_price} ({s.change_rate}%)")
+    print(f"\nTMF: buy={s.buy_price} sell={s.sell_price} last={s.close} change={s.change_price} ({s.change_rate}%)")
     print(f"  high={s.high} low={s.low} vol={s.total_volume}")
 
 # Place order
@@ -76,7 +86,7 @@ order = api.Order(
     account=api.futopt_account,
 )
 
-print(f"\n>>> BUY MXF x1 @ MKT IOC [{datetime.now().strftime('%H:%M:%S')}] <<<")
+print(f"\n>>> BUY TMF x1 @ MKT IOC [{datetime.now().strftime('%H:%M:%S')}] <<<")
 trade = api.place_order(contract, order)
 print(f"Status: {trade.status}")
 

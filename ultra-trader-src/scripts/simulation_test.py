@@ -37,7 +37,7 @@ print("Step 2: 模擬環境期貨下單測試")
 print("=" * 50)
 
 try:
-    contract = api.Contracts.Futures.MXF.MXFR1
+    contract = api.Contracts.Futures.TMF.TMFR1
     print(f"合約: {contract}")
 
     order = api.Order(

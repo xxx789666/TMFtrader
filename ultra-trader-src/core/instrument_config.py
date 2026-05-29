@@ -22,7 +22,7 @@ class InstrumentSpec:
     tax: float = 0.0         # DEPRECATED：保留欄位給舊資料相容、新計算改用 tax_rate_pct
     strategy_type: str = ""  # 使用的策略類型
     default_initial_price: float = 0.0  # MockBroker 模擬用的初始價格
-    shioaji_code: str = ""   # Shioaji 合約代碼（空字串=與 code 相同；TMFN→MXF）
+    shioaji_code: str = ""   # Shioaji 合約代碼（空字串=與 code 相同）
 
 
 # 支援的商品
@@ -38,18 +38,8 @@ INSTRUMENT_SPECS = {
         strategy_type="breakout",
         default_initial_price=22000.0,
     ),
-    "TMFN": InstrumentSpec(
-        code="TMFN",
-        name="微型台指期貨（夜盤ORB）",
-        point_value=10.0,
-        margin=20600,
-        maintenance_margin=15800,
-        commission=18.0,
-        tax=7.0,
-        strategy_type="orb",
-        default_initial_price=22000.0,
-        shioaji_code="MXF",   # 對應 Shioaji 的 MXF 近月合約
-    ),
+    # (2026-05-29 lock-tmf-only) 移除舊 TMFN spec（shioaji_code=MXF）。
+    # 夜盤 ORB 自 2026-05-20 起已直接用 TMF/TMFR1（見 night_orb.py），TMFN→MXF 映射不再使用。
     "TGF": InstrumentSpec(
         code="TGF",
         name="小型黃金期貨",

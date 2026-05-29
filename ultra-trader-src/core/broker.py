@@ -96,7 +96,7 @@ class ShioajiBroker(BaseBroker):
 
     def __init__(self, api_key: str, secret_key: str, ca_path: str = "", ca_password: str = "",
                  person_id: str = "", simulation: bool = True,
-                 contract_code: str = "MXF", contract_codes: list[str] = None):
+                 contract_code: str = "TMF", contract_codes: list[str] = None):
         self._api_key = api_key
         self._secret_key = secret_key
         self._ca_path = ca_path
@@ -982,7 +982,7 @@ class ShioajiBroker(BaseBroker):
     def _get_nearby_contract(self, code: str = None):
         """自動取得指定商品的近月合約"""
         code = code or self._contract_code
-        # 支援 shioaji_code 映射（如 TMFN → MXF）
+        # 支援 shioaji_code 映射（spec.shioaji_code 非空時覆蓋；目前各 spec 皆未設、等同直用 code）
         try:
             from core.instrument_config import INSTRUMENT_SPECS
             spec = INSTRUMENT_SPECS.get(code)

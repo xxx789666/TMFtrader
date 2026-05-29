@@ -7,6 +7,16 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
 
 import shioaji as sj
 
+# ── LIVE ORDER GUARD (2026-05-29 lock-tmf-only) ──────────────
+if os.environ.get("CONFIRM_LIVE_ORDER") != "YES":
+    sys.exit("[BLOCKED] 真實下單腳本，需設環境變數 CONFIRM_LIVE_ORDER=YES 才能執行")
+try:
+    if input("⚠️  確認要對 LIVE 帳戶下真實單？輸入 yes 繼續: ").strip().lower() != "yes":
+        sys.exit("[BLOCKED] 未輸入 yes、已中止")
+except EOFError:
+    sys.exit("[BLOCKED] 非互動環境、拒絕執行真實下單")
+# ─────────────────────────────────────────────────────────────
+
 api = sj.Shioaji(simulation=False)
 accounts = api.login(
     api_key=os.environ["SHIOAJI_API_KEY"],
