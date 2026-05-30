@@ -55,3 +55,4 @@ vps*.txt
 *.pkl
 kronos_experiment/
 optimizer/results*/*.csv
+deployed_strategies/
