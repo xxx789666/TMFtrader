@@ -56,3 +56,4 @@ vps*.txt
 kronos_experiment/
 optimizer/results*/*.csv
 deployed_strategies/
+SECURITY_SCAN_*.md
