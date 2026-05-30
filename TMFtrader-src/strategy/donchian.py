@@ -96,6 +96,7 @@ class DonchianStrategy(BaseStrategy):
         force_close: str = "13:25",
         allow_short: bool = False,
         point_value: float = 10.0,
+        vol_mult: float = 0.0,
     ):
         self.entry_n = entry_n
         self.exit_k = exit_k
@@ -105,6 +106,9 @@ class DonchianStrategy(BaseStrategy):
         self.max_trades = max_trades
         self.allow_short = allow_short
         self.point_value = point_value
+        # v2 量能確認濾網：進場突破 bar 要求 volume_ratio >= vol_mult。
+        # 0.0 = off（向後相容 v1）；選 volume 而非 ATR/EMA 以維持與 BreakoutTrend 差異化。
+        self.vol_mult = vol_mult
 
         # _ew_start 動態 = 08:45 + entry_n*5min
         ew_start_min = 8 * 60 + 45 + entry_n * 5
@@ -151,10 +155,13 @@ class DonchianStrategy(BaseStrategy):
         # 進場（entry_n_high/low 不含當前 bar）
         atr = max(snapshot.atr, 1.0)
         close = kbar.close
-        if close > self._donchian.entry_n_high:
+        # v2 量能確認：突破 bar 的量能須達 vol_mult 倍均量（0.0=off）。
+        # volume_ratio 由引擎以 trailing 20根均量因果計算、無 lookahead。
+        vol_ok = snapshot.volume_ratio >= self.vol_mult
+        if vol_ok and close > self._donchian.entry_n_high:
             stop = close - self.sl_atr * atr
             return self._signal(SignalDirection.BUY, close, stop)
-        if self.allow_short and close < self._donchian.entry_n_low:
+        if vol_ok and self.allow_short and close < self._donchian.entry_n_low:
             stop = close + self.sl_atr * atr
             return self._signal(SignalDirection.SELL, close, stop)
         return None
@@ -210,6 +217,7 @@ class DonchianStrategy(BaseStrategy):
             "entry_n": self.entry_n, "exit_k": self.exit_k, "sl_atr": self.sl_atr,
             "max_bars": self.max_bars, "cooldown": self.cooldown,
             "max_trades": self.max_trades, "allow_short": self.allow_short,
+            "vol_mult": self.vol_mult,
         }
 
     def reset(self):

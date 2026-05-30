@@ -1149,7 +1149,7 @@ class TradingEngine:
                 "take_profit": signal.take_profit,
             }
             self._broadcast("trade", {**signal_data, "reason": f"[PAPER] {signal.reason}"})
-            notify_entry("paper", instrument, action, price, qty, signal.stop_loss, signal.reason)
+            notify_entry("paper", instrument, action, price, qty, signal.stop_loss, signal.reason, signal.take_profit, signal.trail_dist_pts)
             # 取得跨策略持倉鎖
             position_lock.acquire(
                 owner="breakout", side=action.lower(),
@@ -1215,7 +1215,7 @@ class TradingEngine:
 
         log_fill(action, fill_price, decision.quantity)
         self._save_strategy_state(instrument)
-        notify_entry("live", instrument, action, fill_price, decision.quantity, signal.stop_loss, signal.reason)
+        notify_entry("live", instrument, action, fill_price, decision.quantity, signal.stop_loss, signal.reason, signal.take_profit, signal.trail_dist_pts)
         # 取得跨策略持倉鎖（live）
         position_lock.acquire(
             owner="breakout", side=action.lower(),

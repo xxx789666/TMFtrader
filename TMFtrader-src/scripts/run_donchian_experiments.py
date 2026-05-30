@@ -146,6 +146,7 @@ def step2_pick_best() -> dict:
 VALID_CTOR_KEYS = {
     "entry_n", "exit_k", "sl_atr", "max_bars", "cooldown",
     "max_trades", "entry_window_end", "force_close", "point_value",
+    "vol_mult",   # v2: 量能濾網 — 必須在此、否則 OOS 重建會靜默丟棄濾網跑 0.0(off)
 }
 # Keys to drop when building ctor kwargs from the JSON best dict (top-level)
 DROP_KEYS = {
@@ -259,7 +260,8 @@ def step4_robustness(bests: dict, oos_results: dict) -> dict:
 
         # 4-2 Perturbation (using _run_one_d from optimize_donchian)
         _log("  [4-2] Perturbation ...")
-        VALID_PERTURB_KEYS = {"entry_n", "exit_k", "sl_atr", "max_bars", "cooldown"}
+        # v2: 加 vol_mult — 擾動濾網門檻測穩定性（若 best vol_mult=0.0 則退化為常數、stability 0、無害）
+        VALID_PERTURB_KEYS = {"entry_n", "exit_k", "sl_atr", "max_bars", "cooldown", "vol_mult"}
         valid_params = _extract_ctor_params(best)
         perturb_base = {k: v for k, v in valid_params.items() if k in VALID_PERTURB_KEYS}
         allow_short = best["allow_short"]

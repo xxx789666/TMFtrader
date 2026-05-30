@@ -45,11 +45,15 @@ class FastBacktestEngine:
         slippage: int = 1,
         commission: float = 18.0,
         instrument: str = "TMF",
+        intrabar_hard_exits: bool = False,
     ):
         self.initial_balance = initial_balance
         self.slippage = slippage
         self.commission = commission
         self.instrument = instrument
+        # 預設 False(維持既有回測行為)。True = 用 bar high/low 在盤中強制檢查
+        # pos.stop_loss / pos.take_profit，複製 live core/engine.py 的 tick 層硬停損/止盈。
+        self.intrabar_hard_exits = intrabar_hard_exits
 
     def run(
         self,
@@ -154,14 +158,33 @@ class FastBacktestEngine:
             # ── 出場
             pos = position_manager.positions[inst]
             if not pos.is_flat:
-                exit_signal = strategy.check_exit(pos, snapshot)
-                if exit_signal:
-                    from core.position import Side
-                    ep = kbar.close
-                    if self.slippage > 0:
-                        ep = ep - self.slippage if pos.side == Side.LONG else ep + self.slippage
-                    close_qty = getattr(exit_signal, 'close_quantity', 0)
-                    trade = position_manager.close_position(inst, ep, exit_signal.reason, kbar.datetime, quantity=close_qty)
+                from core.position import Side
+                # intrabar 硬停損/止盈（複製 live core/engine.py tick 層；停損優先=保守）
+                hard_px, hard_reason = None, None
+                if self.intrabar_hard_exits:
+                    hi = float(indicators["high"][i]); lo = float(indicators["low"][i])
+                    if pos.side == Side.LONG:
+                        if pos.stop_loss > 0 and lo <= pos.stop_loss:
+                            hard_px, hard_reason = pos.stop_loss, f"硬停損 @ {pos.stop_loss:.0f}"
+                        elif pos.take_profit > 0 and hi >= pos.take_profit:
+                            hard_px, hard_reason = pos.take_profit, f"硬停利 @ {pos.take_profit:.0f}"
+                    else:
+                        if pos.stop_loss > 0 and hi >= pos.stop_loss:
+                            hard_px, hard_reason = pos.stop_loss, f"硬停損 @ {pos.stop_loss:.0f}"
+                        elif pos.take_profit > 0 and lo <= pos.take_profit:
+                            hard_px, hard_reason = pos.take_profit, f"硬停利 @ {pos.take_profit:.0f}"
+
+                exit_signal = None if hard_px is not None else strategy.check_exit(pos, snapshot)
+                if hard_px is not None or exit_signal:
+                    if hard_px is not None:
+                        ep, reason, close_qty = hard_px, hard_reason, 0
+                    else:
+                        ep = kbar.close
+                        if self.slippage > 0:
+                            ep = ep - self.slippage if pos.side == Side.LONG else ep + self.slippage
+                        reason = exit_signal.reason
+                        close_qty = getattr(exit_signal, 'close_quantity', 0)
+                    trade = position_manager.close_position(inst, ep, reason, kbar.datetime, quantity=close_qty)
                     if trade:
                         balance += trade.net_pnl
                         # 僅全平時才觸發風控回調（部分平倉不計入連損）

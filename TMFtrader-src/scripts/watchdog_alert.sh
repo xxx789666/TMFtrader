@@ -80,6 +80,8 @@ if [ $HHMM -ge 508 ] && [ $HHMM -le 512 ]; then
   night_expected=0
   wlog "夜盤 05:10 收盤窗、跳過 night_orb 檢查"
 fi
+# [PAUSED-NIGHT-ORB 2026-05-30] live 夜盤暫停中、跳過存活檢查（恢復：刪 $PROJ/.night_orb_paused）
+if [ -f "$PROJ/.night_orb_paused" ]; then night_expected=0; wlog "night_orb 已暫停（marker）、跳過檢查"; fi
 if [ $night_expected -eq 1 ]; then
   if pgrep -f 'night_orb.py' >/dev/null; then
     wlog "night_orb.py OK"

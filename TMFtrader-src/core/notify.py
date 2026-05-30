@@ -43,14 +43,22 @@ def _now() -> str:
 
 
 def notify_entry(mode: str, instrument: str, action: str, price: float,
-                 qty: int, stop_loss: float, reason: str):
+                 qty: int, stop_loss: float, reason: str, take_profit: float = 0, trail_dist_pts: float = 0):
     direction = "做多 ▲" if action == "BUY" else "做空 ▼"
     sl_pts = abs(round(price - stop_loss))
+    tp_line = ""
+    if take_profit and take_profit > 0:
+        tp_line = f"硬止盈: {take_profit:.0f}（{abs(round(take_profit - price))}pt）\n"
+    trail_line = ""
+    if trail_dist_pts and trail_dist_pts > 0:
+        trail_line = f"追蹤回落止盈: 高點回落 {trail_dist_pts:.0f}pt 出場\n"
     tg(
         f"{'[PAPER]' if mode == 'paper' else '[LIVE]'} 進場\n"
         f"{instrument} {direction} x{qty}\n"
         f"進場價: {price:.0f}\n"
         f"停損: {stop_loss:.0f}（{sl_pts}pt）\n"
+        f"{tp_line}"
+        f"{trail_line}"
         f"原因: {reason}\n"
         f"時間: {_now()}"
     )

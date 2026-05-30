@@ -127,10 +127,13 @@ def test_donchian_invalid_params():
 
 
 # ── Shared helpers (used by Tasks 4, 5) ────────────────────────────────────
-def _make_snap(price, adx, atr, ts):
+def _make_snap(price, adx, atr, ts, vr=1.0):
+    """vr = volume_ratio（當根量 / 20根均量）；vol_mult 濾網讀此欄位。
+    預設 1.0 → 對 vol_mult=0.0(off) 永遠通過、不影響既有測試。"""
     from core.market_data import MarketSnapshot
     s = MarketSnapshot()
     s.price = price; s.adx = adx; s.atr = atr; s.timestamp = ts; s.volume = 100
+    s.volume_ratio = vr
     return s
 
 
@@ -265,6 +268,67 @@ def test_daily_reset_clears_state():
     assert strat._trades_today == 0
     assert strat._session_bar == 1
     assert strat._donchian.warmup_ready is False
+
+
+# ── v2: vol_mult volume-confirmation filter ───────────────────────────────
+# 進場突破 bar 要求 snapshot.volume_ratio >= vol_mult（量能確認、砍低波假突破）。
+# vol_mult=0.0 = off（向後相容 v1）；多空皆套；差異化選 volume（BreakoutTrend 不用 volume）。
+
+def _warm_then_breakout(strat, breakout_close, vr_breakout, vr_warm=1.0):
+    """灌 entry_n=3 的 4 根 warmup（ascending、無突破），再回傳突破 bar 的 signal。"""
+    from datetime import datetime
+    for i, p in enumerate([100, 102, 105, 103]):
+        ts = datetime(2024, 1, 2, 9, 0 + i * 5)
+        strat.on_kbar(_kbar(ts, c=p, h=p, l=p - 1), _make_snap(p, 30, 2, ts, vr=vr_warm))
+    ts = datetime(2024, 1, 2, 9, 20)
+    bc = breakout_close
+    return strat.on_kbar(_kbar(ts, c=bc, h=bc, l=bc - 1), _make_snap(bc, 30, 2, ts, vr=vr_breakout))
+
+
+def test_vol_mult_default_off_low_volume_still_fires():
+    """vol_mult=0.0(預設) → 低量突破(vr=0.5)仍 BUY（向後相容 v1）"""
+    from strategy.donchian import DonchianStrategy
+    from strategy.base import SignalDirection
+    strat = DonchianStrategy(entry_n=3, sl_atr=2.0, allow_short=False)
+    sig = _warm_then_breakout(strat, breakout_close=107, vr_breakout=0.5)
+    assert sig is not None and sig.direction == SignalDirection.BUY
+
+
+def test_vol_mult_blocks_low_volume_breakout():
+    """vol_mult=1.5 → 突破 bar vr=1.2 < 1.5 → 不進場"""
+    from strategy.donchian import DonchianStrategy
+    strat = DonchianStrategy(entry_n=3, sl_atr=2.0, allow_short=False, vol_mult=1.5)
+    sig = _warm_then_breakout(strat, breakout_close=107, vr_breakout=1.2)
+    assert sig is None
+    assert strat._trades_today == 0
+
+
+def test_vol_mult_allows_high_volume_breakout():
+    """vol_mult=1.5 → 突破 bar vr=2.0 >= 1.5 → BUY"""
+    from strategy.donchian import DonchianStrategy
+    from strategy.base import SignalDirection
+    strat = DonchianStrategy(entry_n=3, sl_atr=2.0, allow_short=False, vol_mult=1.5)
+    sig = _warm_then_breakout(strat, breakout_close=107, vr_breakout=2.0)
+    assert sig is not None and sig.direction == SignalDirection.BUY
+
+
+def test_vol_mult_applies_to_short():
+    """空方突破同樣受 vol_mult 約束：vr=1.0 擋、vr=2.0 過"""
+    from strategy.donchian import DonchianStrategy
+    from strategy.base import SignalDirection
+    # 低量空方突破 → 擋
+    s1 = DonchianStrategy(entry_n=3, sl_atr=2.0, allow_short=True, vol_mult=1.5)
+    assert _warm_then_breakout(s1, breakout_close=98, vr_breakout=1.0) is None
+    # 放量空方突破 → SELL
+    s2 = DonchianStrategy(entry_n=3, sl_atr=2.0, allow_short=True, vol_mult=1.5)
+    sig = _warm_then_breakout(s2, breakout_close=98, vr_breakout=2.0)
+    assert sig is not None and sig.direction == SignalDirection.SELL
+
+
+def test_vol_mult_in_get_parameters():
+    from strategy.donchian import DonchianStrategy
+    assert DonchianStrategy(vol_mult=1.5).get_parameters()["vol_mult"] == 1.5
+    assert DonchianStrategy().get_parameters()["vol_mult"] == 0.0
 
 
 # ── Task 4 exit tests (P2c) ────────────────────────────────────────────────

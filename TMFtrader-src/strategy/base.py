@@ -34,6 +34,8 @@ class Signal:
     slippage_buffer: float = 0.0
     # 部分平倉口數：0=全平，N=平 N 口（分批出場用）
     close_quantity: int = 0
+    # 追蹤回落止盈距離（點數，= trail_dist_atr × entry_atr；0=無）
+    trail_dist_pts: float = 0.0
 
     @property
     def is_buy(self) -> bool:

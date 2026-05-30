@@ -50,3 +50,8 @@ venv/
 vps api.txt
 vps_api.txt
 vps*.txt
+
+# [reconcile 2026-05-30] exclude trained ML models + experiment data (kept on VPS + cold backup)
+*.pkl
+kronos_experiment/
+optimizer/results*/*.csv

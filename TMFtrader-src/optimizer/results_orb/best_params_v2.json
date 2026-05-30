@@ -1,0 +1,20 @@
+{
+  "n_est_xgb": 488.0,
+  "max_depth_xgb": 7.0,
+  "lr_xgb": 0.09681687526869776,
+  "subsample_xgb": 0.9396893641976711,
+  "colsample_xgb": 0.7074097511688326,
+  "min_child_xgb": 12.0,
+  "reg_alpha_xgb": 0.3188346445882751,
+  "reg_lambda_xgb": 0.029570809414943493,
+  "num_leaves_lgb": 54.0,
+  "lr_lgb": 0.1498853605925049,
+  "subsample_lgb": 0.9543910992944749,
+  "min_child_lgb": 23.0,
+  "reg_alpha_lgb": 3.6998679204890905,
+  "reg_lambda_lgb": 6.0126084038369445,
+  "n_est_lgb": 440.0,
+  "threshold": 0.5507911279315576,
+  "w_xgb": 0.4307615538505436,
+  "w_lgb": 0.39700707752754555
+}

@@ -14,11 +14,6 @@ data/backtest_results/
 data/logs/
 data/risk_state.json
 
-# vwap_fade grid/param outputs (large; reports kept separately)
-data/vwap_fade/grid_*.csv
-data/vwap_fade/best_params_*.json
-data/vwap_fade/*.parquet
-
 # Python
 __pycache__/
 *.pyc

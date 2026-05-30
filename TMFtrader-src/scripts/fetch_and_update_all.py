@@ -73,14 +73,10 @@ else:
     # ════════════════════════════════════════════════════
     print("\n[Step 2] 登入 Shioaji 並下載 TMF 1m K 棒...")
     import shioaji as sj
-    from dotenv import load_dotenv
-    load_dotenv()
 
-    # 從 .env 讀；禁止硬編 key 進 git
-    API_KEY    = os.environ.get('SHIOAJI_API_KEY') or os.environ.get('SHIOAJI_BACKUP_API_KEY')
-    SECRET_KEY = os.environ.get('SHIOAJI_SECRET_KEY') or os.environ.get('SHIOAJI_BACKUP_SECRET_KEY')
-    if not (API_KEY and SECRET_KEY):
-        sys.exit("[fatal] SHIOAJI_API_KEY / SHIOAJI_SECRET_KEY 未設定，請填 .env")
+    # 優先用備用 Key（410.txt），若無則用 .env
+    API_KEY    = os.environ.get('SHIOAJI_API_KEY', '')
+    SECRET_KEY = os.environ.get('SHIOAJI_SECRET_KEY', '')
 
     api = sj.Shioaji(simulation=False)
     try:

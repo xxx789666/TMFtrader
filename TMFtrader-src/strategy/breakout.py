@@ -329,6 +329,7 @@ class BreakoutTrendStrategy(BaseStrategy):
         if signal is not None:
             self._entry_atr = atr
             self._trail_best = price
+            signal.trail_dist_pts = round(self.trail_dist_atr * atr)
             self._breakeven_active = False
             self._scaled_out = False
             self._cooldown_bars = 5
