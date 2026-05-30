@@ -29,3 +29,14 @@ venv/
 .DS_Store
 Thumbs.db
 nul
+
+# tick 錄製(replay 用、體積大、不進版控)
+data/ticks/
+
+# 產生的回測輸出 + 同步來的操作資料(可重生,不進版控)
+data/breakout_tmf_*.json
+data/breakout_tmf_*.csv
+data/breakout_tmf_*.md
+data/replay_live_engine_*.json
+data/session_edge_account.*
+data/trade_sessions.csv

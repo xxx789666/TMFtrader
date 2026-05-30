@@ -124,6 +124,12 @@ class TickAggregator:
         self.tick_count: int = 0
         self._diag_tick_count: int = 0  # 診斷用計數器
         self.use_wall_clock: bool = use_wall_clock
+        # tick 錄製(env RECORD_TICKS=1 才啟用;預設關閉、零影響)
+        try:
+            from core.tick_recorder import TickRecorder
+            self._tick_recorder = TickRecorder()
+        except Exception:
+            self._tick_recorder = None
 
     def on_kbar_complete(self, interval: int, callback: Callable[[KBar], None]):
         """註冊 K 棒完成回調"""
@@ -135,6 +141,10 @@ class TickAggregator:
         self.current_price = tick.price
         self.tick_count += 1
         self._diag_tick_count += 1
+
+        # tick 落地(env 開關;失敗不影響主路徑)
+        if self._tick_recorder is not None:
+            self._tick_recorder.record(tick)
 
         # 診斷：每 300 個 tick 記錄一次 tick.datetime（用於排查 bar 不翻滾問題）
         if self._diag_tick_count % 300 == 1:

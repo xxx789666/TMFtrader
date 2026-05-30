@@ -119,6 +119,10 @@ if [[ -n "$WORST_DATE" && "$WORST_DATE" != "$BEST_DATE" ]]; then
 fi
 log "  ✅ best_day=$BEST_DATE worst_day=$WORST_DATE"
 
+# 帳戶級日/夜 edge（與券商對帳一致;weekly_session_report.py 產出、sync 拉回）
+SESSION_JSON=$(python3 -m review.tools_for_hermes load_session_edge 2>&1 || echo '{}')
+log "  session_edge: $(echo "$SESSION_JSON" | python3 -c 'import sys,json;d=json.loads(sys.stdin.read());print("avail=",d.get("available"),"day=",(d.get("day") or {}).get("net"),"night=",(d.get("night") or {}).get("net"))' 2>/dev/null || echo 'parse-fail')"
+
 # ---- Step 2b：用 Python 把 JSON 格式化成「純文字事實」(model 處理 raw JSON 容易回空) ----
 log "[Step 2b/3] 把資料格式化成 prompt facts"
 FACTS=$(python3 <<PY
@@ -126,6 +130,7 @@ import json
 w = json.loads('''$WEEK_JSON''')
 b = json.loads('''$BEST_JSON''')
 w_= json.loads('''$WORST_JSON''')
+se= json.loads('''$SESSION_JSON''')
 
 print(f"週次: {w['week_start']} ~ {w['week_end']}")
 print(f"交易日數: {w['n_trading_days']}（有交易 {w['n_days_with_trades']} 日）")
@@ -160,6 +165,14 @@ rs = w.get('risk_state')
 if rs:
     print()
     print(f"風控: circuit={rs.get('circuit_state')} peak_eq={rs.get('peak_equity')} daily_loss={rs.get('daily_loss')} halt_reason={rs.get('halt_reason','')}")
+if se.get('available'):
+    d_, n_ = se.get('day') or {}, se.get('night') or {}
+    print()
+    print("=== 帳戶實際對帳(累積、net=毛-稅-費,與券商App一致)===")
+    print(f"  日盤: {d_.get('n',0)} 筆 PF {d_.get('pf',0)} 淨 {d_.get('net',0):+,.0f}")
+    print(f"  夜盤: {n_.get('n',0)} 筆 PF {n_.get('pf',0)} 淨 {n_.get('net',0):+,.0f}")
+    print(f"  全期淨: {se.get('total_net',0):+,.0f} / 共 {se.get('n_total',0)} 筆")
+    print(f"  夜盤判讀: {se.get('night_verdict','')}")
 PY
 )
 log "  ✅ facts 長度 $(echo "$FACTS" | wc -c) bytes"
@@ -171,28 +184,14 @@ read -r -d '' PROMPT <<EOF || true
 
 $FACTS
 
-依以下格式輸出繁體中文週度覆盤訊息（6-12 行）：
-
-📊 TMF 週度覆盤 — {週期}
-週淨損益: {±,.0f} | {筆數} 筆 | WR {勝率}%
-
-本週故事：{1-2 句敘事}
-
-最佳日：{日期} {±,.0f}
-最差日：{日期} {±,.0f}
-連虧日數上限：{N}
-
-診斷：
-• {觀察 1，引用真實 MFE/MAE 或訊號類型}
-• {觀察 2}
-
-建議：
-- 若總筆數 < 5：observe-only（樣本太小）
-- 否則給 1-2 條具體可操作的參數方向
-
-信心：{low/medium/high}
-
-只輸出上面格式的繁體中文，不要加 JSON / markdown 區塊 / 前言。
+請只輸出一個 JSON 物件（繁體中文內容、不要 markdown 區塊、不要前言），鍵如下：
+{
+  "story": "1-2 句本週敘事（哪天好哪天壞、為什麼）",
+  "diagnosis": ["觀察1（引用真實 MFE/MAE 或訊號類型）", "觀察2（若事實有夜盤判讀則照引用 night_verdict 那句）"],
+  "suggestions": ["若總筆數<5 寫 observe-only（樣本太小）；否則給 1-2 條具體可操作方向"],
+  "confidence": "low | medium | high"
+}
+數字一律以事實為準、禁止自行計算或更改。只輸出 JSON。
 EOF
 
 REVIEW_MODEL="${REVIEW_MODEL:-nvidia/llama-3.3-nemotron-super-49b-v1}"
@@ -233,17 +232,67 @@ if [[ "$HTTP_CODE" != "200" ]]; then
   exit 1
 fi
 
-REPORT=$(python3 -c "
-import json, sys
+# 版面由 Python 固定組裝(數字優先用帳戶級 session_edge),LLM 只供 story/diagnosis/suggestions/confidence
+python3 <<PY >/tmp/_report.txt
+import json, re
 with open('$REPORT_FILE') as f:
     r = json.load(f)
-print(r['choices'][0]['message']['content'].strip())
-usage = r.get('usage', {})
-import sys
-sys.stderr.write(f'usage: in={usage.get(\"prompt_tokens\")} out={usage.get(\"completion_tokens\")} total={usage.get(\"total_tokens\")}\n')
-" 2>&1 >/tmp/_report.txt)
+content = r['choices'][0]['message']['content'].strip()
+# 去除可能的 code fence,抓第一個 {...}
+m = re.search(r'\{.*\}', content, re.S)
+try:
+    llm = json.loads(m.group(0)) if m else {}
+except Exception:
+    llm = {}
+
+w  = json.loads('''$WEEK_JSON''')
+se = json.loads('''$SESSION_JSON''')
+
+# 表頭數字:有帳戶級就用帳戶級(與券商對帳一致),否則退回引擎週統計
+if se.get('available'):
+    tot = se.get('total') or {}
+    net, n, wr = tot.get('net', 0), tot.get('n', 0), tot.get('wr', 0)
+else:
+    net, n, wr = w.get('net_pnl', 0), w.get('n_trades', 0), (w.get('win_rate') or 0) * 100
+
+bd = w.get('best_day') or {}
+wd = w.get('worst_day') or {}
+story = (llm.get('story') or '').strip()
+diags = llm.get('diagnosis') or []
+sugs  = llm.get('suggestions') or []
+conf  = llm.get('confidence') or 'low'
+
+L = []
+L.append(f"📊 TMF 週度覆盤 — {w.get('week_start')} ~ {w.get('week_end')}")
+L.append(f"週淨損益: {net:+,.0f} | {n} 筆 | WR {wr:.0f}%")
+L.append("")
+if story:
+    L.append(f"本週故事：{story}")
+    L.append("")
+L.append(f"最佳日：{bd.get('date')} {bd.get('net_pnl',0):+,.0f}    最差日：{wd.get('date')} {wd.get('net_pnl',0):+,.0f}")
+L.append(f"連虧日數上限：{w.get('max_consec_losing_days',0)}")
+L.append("")
+if se.get('available'):
+    d_, n_ = se.get('day') or {}, se.get('night') or {}
+    pf_fmt = lambda v: "∞(全勝)" if v is None else f"{v}"
+    L.append("帳戶日/夜對帳(與券商App一致)：")
+    L.append(f"  日盤 {d_.get('n',0)} 筆 PF {pf_fmt(d_.get('pf'))} {d_.get('net',0):+,.0f}")
+    L.append(f"  夜盤 {n_.get('n',0)} 筆 PF {pf_fmt(n_.get('pf'))} {n_.get('net',0):+,.0f}")
+    L.append(f"  └ {se.get('night_verdict','')}")
+    L.append("")
+L.append("診斷：")
+for d in diags[:3]:
+    L.append(f"• {str(d).strip()}")
+L.append("")
+L.append("建議：")
+for s in sugs[:2]:
+    L.append(f"- {str(s).strip()}")
+L.append("")
+L.append(f"信心：{conf}")
+print("\n".join(L))
+PY
 REPORT=$(cat /tmp/_report.txt)
-log "  ✅ 摘要產生（$(echo "$REPORT" | wc -c) bytes）"
+log "  ✅ 報告組裝完成（$(echo "$REPORT" | wc -c) bytes）"
 echo "─── 報告全文 ───" | tee -a "$RUN_LOG"
 echo "$REPORT" | tee -a "$RUN_LOG"
 echo "─── 報告結束 ───" | tee -a "$RUN_LOG"

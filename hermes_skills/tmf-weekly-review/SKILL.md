@@ -1,7 +1,7 @@
 ---
 name: tmf-weekly-review
 description: 永豐微台指 TMF 每週盤後覆盤 — 聚合 Mon-Fri 的日盤+夜盤、找出跨日模式、提出參數建議。當被請求做本週 / 上週 / 指定週覆盤、或由內建 cron 觸發週度盤後分析時啟用。
-version: 0.1.0
+version: 0.2.0
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -44,11 +44,11 @@ test -f ~/.hermes/kill_switch && cat ~/.hermes/kill_switch || echo "OK"
 ### 0.5 預算宣告（寫進你的工作記憶）
 
 本次任務的硬性預算：
-- **tool calls 上限 = 8**（含 step 0 預檢的 1 次）
+- **tool calls 上限 = 9**（含 step 0 預檢的 1 次 + step 2.5 帳戶級 edge 的 1 次）
 - **wall clock = 10 分鐘**
 - **單次 LLM 輸出 max_tokens = 2048**
 
-每次呼叫 `execute_code` / `load_*` / 記憶查詢前，先在心中算「目前已用 N 次、剩 8-N 次」。**用滿 8 次就強制進入步驟 5**（即便資料還沒查完，也要用手上有的東西出報告，confidence 改 `low`、在 risk_flags 加 `budget_exceeded`）。
+每次呼叫 `execute_code` / `load_*` / 記憶查詢前，先在心中算「目前已用 N 次、剩 9-N 次」。**用滿 9 次就強制進入步驟 5**（即便資料還沒查完，也要用手上有的東西出報告，confidence 改 `low`、在 risk_flags 加 `budget_exceeded`）。
 
 ### 1. 確定週次
 - 預設：`week_ending=today`（工具會自動對齊到該週的 Mon-Fri）
@@ -85,6 +85,23 @@ if result.returncode != 0:
 - `sessions[]`：每個 (date, session) 的精簡統計
 
 若工具回 `{"error": ...}`，回報「找不到資料」並停止 —— 不要編造。
+
+### 2.5 帳戶級「日盤 vs 夜盤」edge（**與券商對帳一致 — 必跑**）
+
+`load_week` 是引擎紀錄;這一步是**真實帳戶**的日/夜績效（net = 毛利−手續費−稅,與永豐 App 平倉損益分毫不差）。BreakoutTrend 24h 運行,但日盤/夜盤 edge 可能天差地別,必須分開看。
+
+照 step 2 同樣方式呼叫,subcommand 改 `load_session_edge`（無參數）：
+```python
+# 同 step 2 的 subprocess 寫法,args 改成:
+['python3', '-m', 'review.tools_for_hermes', 'load_session_edge']
+```
+回傳:`day{n,net,wr,pf}` / `night{n,net,wr,pf}` / `total_net` / `night_verdict`（已內建保守門檻:夜盤 n<10 不下結論）。
+
+**判讀規則（寫進 diagnosis）**：
+- 直接引用 `night_verdict`,不要自己改寫結論門檻
+- 若 `night.pf < 1` 且 `night.n >= 10` → 在 suggestions 加一條 `target: observe→考慮關閉夜盤進場`、rationale 引用 night 的 n/pf/net
+- 若 `available=False`（VPS 未產出或未同步）→ 在 risk_flags 加 `session_edge_unavailable`,其餘照跑
+- 此資料**累積制**（會越長越準）,n 還小時明確說「樣本累積中」
 
 ### 3. 對「最佳日 / 最差日」做縱深
 - 對 `best_day.date` 與 `worst_day.date` 分別呼叫 `load_daily` 拿原始 trades + signals
@@ -136,6 +153,10 @@ if result.returncode != 0:
 最差日：{worst_day.date} {worst_day.net_pnl:+,.0f}
 連虧日數上限：{max_consec_losing_days}
 
+帳戶實際對帳（日/夜）：
+日盤 {day.n}筆 PF {day.pf} 淨 {day.net:+,.0f} | 夜盤 {night.n}筆 PF {night.pf} 淨 {night.net:+,.0f}
+↳ {night_verdict}
+
 診斷：
 • {diagnosis[0]}
 • {diagnosis[1]}
@@ -174,7 +195,7 @@ if result.returncode != 0:
 | 工具沒呼叫成功就憑印象寫數字 | **禁止**。沒 stdout 就回報失敗、不要編 |
 | 樣本期含放假/中斷日 | `n_trading_days < 4` 時降信心、註明資料不完整 |
 | 對同一日同 session 反覆呼叫 load_daily | **禁止**。每組 (date, session) 一次就夠；要再看細節從之前的回傳取 |
-| 用滿 8 次工具卻還在追加查詢 | 強制進入步驟 5 出報告，confidence=low、risk_flags 加 `budget_exceeded` |
+| 用滿 9 次工具卻還在追加查詢 | 強制進入步驟 5 出報告，confidence=low、risk_flags 加 `budget_exceeded` |
 | 為了「完整」而無限循環找佐證資料 | 預算 = 硬上限，**寧可資料不全也不可超**。reasonability > completeness |
 | 在已知 halt / kill_switch 仍跑完整流程 | 第 0 步若 kill_switch 啟動，**只能推警告然後停**，禁止繼續查資料 |
 
@@ -183,6 +204,7 @@ if result.returncode != 0:
 完成前自我檢查：
 
 - [ ] 我有真的呼叫 `load_week` 工具，而非從對話 context 推測
+- [ ] 我有跑 step 2.5 `load_session_edge`，TG 報告含「日/夜帳戶對帳」一段與 `night_verdict`
 - [ ] 我引用的所有數字都來自工具回傳
 - [ ] 我有對 `best_day` 與 `worst_day` 各做一次 `load_daily` 縱深
 - [ ] 若 `n_trades < 5`，所有 suggestion 都是 `observe-only`
@@ -191,9 +213,9 @@ if result.returncode != 0:
 - [ ] 若 `risk_state.circuit_state != "active"` 出現在任一天，訊息頂部有 ⚠️ 警示
 - [ ] 若 `n_trading_days < 4`，confidence 必須是 `low`
 - [ ] **我跑完第 0 步的 kill_switch 預檢**
-- [ ] **我總共呼叫工具 ≤ 8 次**（含預檢）；超過必須在報告 risk_flags 寫 `budget_exceeded`
+- [ ] **我總共呼叫工具 ≤ 9 次**（含預檢）；超過必須在報告 risk_flags 寫 `budget_exceeded`
 - [ ] **我沒有對同一 (date, session) 重複呼叫 load_daily**（資料 cache 在心智模型裡）
 
 ---
 
-*v0.1.0 — 初版週度覆盤。參數實際修改 / 套用走另一個 skill（待寫：tmf-strategy-tune），需人工 TG 核准。*
+*v0.2.0 — 加帳戶級日/夜 edge(load_session_edge)。v0.1.0 初版週度覆盤。參數實際修改 / 套用走另一個 skill（待寫：tmf-strategy-tune），需人工 TG 核准。*

@@ -116,6 +116,15 @@ rsync -avz --timeout=30 \
   "$LOCAL_PROJECT_DIR/data/" \
   2>&1 | tee -a "$LOG_FILE" || log "(risk_state 缺檔可接受)"
 
+# ---- 3. 同步 帳戶級日/夜績效（給 Hermes 週度覆盤）----
+log "[3/3] session_edge_account.json + trade_sessions.csv"
+rsync -avz --timeout=30 \
+  -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15" \
+  "$VPS_HOST:$VPS_PROJECT_DIR/data/session_edge_account.json" \
+  "$VPS_HOST:$VPS_PROJECT_DIR/data/trade_sessions.csv" \
+  "$LOCAL_PROJECT_DIR/data/" \
+  2>&1 | tee -a "$LOG_FILE" || log "(session_edge 缺檔可接受)"
+
 # ---- 摘要 ----
 n_daily=$(find "$LOCAL_PROJECT_DIR/data/performance/daily/" -name '*_live*.json' -mtime -"$SYNC_DAYS" 2>/dev/null | wc -l)
 log "✅ sync 完成。本機近 $SYNC_DAYS 天 daily JSON 計 $n_daily 個檔"

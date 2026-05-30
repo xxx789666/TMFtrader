@@ -32,6 +32,62 @@ DATA_ROOT = _resolve_data_root()
 DAILY_DIR = DATA_ROOT / "performance" / "daily"
 RISK_DAY = DATA_ROOT / "risk_state.json"
 RISK_NIGHT = DATA_ROOT / "risk_state_night.json"
+SESSION_EDGE = DATA_ROOT / "session_edge_account.json"
+
+
+def load_session_edge() -> dict:
+    """讀帳戶級「日盤 vs 夜盤」累積 edge（weekly_session_report.py 產出,與券商對帳一致）。
+
+    回傳含 day/night/total 摘要 + per-trade records。供 Hermes 覆盤判斷夜盤該不該關。
+    缺檔時回 {"available": False}（不視為硬錯,覆盤其他部分照跑）。
+    """
+    if not SESSION_EDGE.exists():
+        return {"available": False, "reason": f"{SESSION_EDGE.name} 不存在（VPS 尚未產出或未同步）"}
+    try:
+        data = json.loads(SESSION_EDGE.read_text(encoding="utf-8"))
+    except Exception as e:
+        return {"available": False, "reason": f"解析失敗: {e}"}
+
+    recs = data.get("records", [])
+
+    def _agg(sess):
+        rows = [r for r in recs if r.get("session") == sess]
+        nets = [float(r.get("net", 0)) for r in rows]
+        n = len(nets)
+        wins = [x for x in nets if x > 0]
+        losses = [x for x in nets if x <= 0]
+        gp = sum(wins)
+        gl = abs(sum(losses))
+        pf = None if (not losses and n) else (round(gp / gl, 3) if gl else 0)  # 全勝→None(∞)
+        return {"n": n, "net": round(sum(nets)), "wr": round(len(wins) / n * 100, 1) if n else 0,
+                "pf": pf}
+
+    def _agg_all():
+        nets = [float(r.get("net", 0)) for r in recs]
+        n = len(nets)
+        wins = [x for x in nets if x > 0]
+        losses = [x for x in nets if x <= 0]
+        gp = sum(wins); gl = abs(sum(losses))
+        pf = None if (not losses and n) else (round(gp / gl, 3) if gl else 0)
+        return {"n": n, "net": round(sum(nets)), "wr": round(len(wins) / n * 100, 1) if n else 0,
+                "pf": pf}
+
+    day, night, total = _agg("day"), _agg("night"), _agg_all()
+    # 給 LLM 的判讀提示（門檻保守:夜盤要 n>=10 才談 edge 結論）
+    if night["n"] < 10:
+        verdict = f"夜盤樣本不足（n={night['n']}<10）—— 還不能下結論,觀察累積中"
+    elif night["pf"] is not None and night["pf"] < 1.0:
+        verdict = f"夜盤 PF {night['pf']}<1（n={night['n']}）—— 實單顯示夜盤無 edge,建議評估關閉夜盤進場"
+    else:
+        verdict = f"夜盤 PF {night['pf']}（n={night['n']}）—— 暫有 edge,持續觀察"
+
+    return {
+        "available": True, "generated": data.get("generated"),
+        "day": day, "night": night, "total": total,
+        "total_net": round(data.get("total_net", 0)), "n_total": data.get("n", len(recs)),
+        "night_verdict": verdict,
+        "note": "net = 毛利 - 手續費 - 稅,與券商 App 平倉損益對帳一致;session 由 trade_sessions.csv(log 進場時間)分類",
+    }
 
 Session = Literal["day", "night"]
 

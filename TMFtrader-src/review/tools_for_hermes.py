@@ -15,7 +15,7 @@ import math
 import sys
 from datetime import date as date_cls
 
-from .loader import load_daily, load_week
+from .loader import load_daily, load_week, load_session_edge
 
 
 def _sanitize(obj):
@@ -52,6 +52,10 @@ def _cmd_load_week(args: argparse.Namespace) -> dict:
     return out
 
 
+def _cmd_load_session_edge(args: argparse.Namespace) -> dict:
+    return load_session_edge()
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Hermes Agent 用的資料介面")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -74,6 +78,9 @@ def main(argv: list[str] | None = None) -> int:
         help="省略 sessions 細節，只回週度聚合 + daily_rollup",
     )
     p_week.set_defaults(func=_cmd_load_week)
+
+    p_edge = sub.add_parser("load_session_edge", help="讀帳戶級日盤vs夜盤累積 edge（與券商對帳一致）")
+    p_edge.set_defaults(func=_cmd_load_session_edge)
 
     args = p.parse_args(argv)
 
