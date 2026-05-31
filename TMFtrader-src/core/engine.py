@@ -42,6 +42,9 @@ from strategy.momentum import AdaptiveMomentumStrategy
 from strategy.gold_trend import GoldTrendStrategy
 from strategy.breakout import BreakoutTrendStrategy
 from strategy.orb import ORBStrategy
+from strategy.breakout_dualslope import BreakoutDualSlopeStrategy
+from strategy.day_orb import DayORBStrategy
+from strategy.night_orb import NightORBStrategy
 from strategy.filters import MarketRegime, SessionManager, SessionPhase
 from risk.manager import RiskManager
 from core.performance import PerformanceTracker
@@ -74,7 +77,7 @@ class InstrumentPipeline:
 
     def __post_init__(self):
         if self.aggregator is None:
-            self.aggregator = TickAggregator(intervals=[1, 5, 15])
+            self.aggregator = TickAggregator(intervals=[1, 5, 15, 30, 60])
         if self.indicator_engine is None:
             self.indicator_engine = IndicatorEngine(lookback_period=200)
         if self.indicator_engine_5m is None:
@@ -132,6 +135,37 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             min_adx=23.0,             # v6b: 22→23（穩健性測試後更佳）
             afternoon_min_adx=30.0,   # v6b: 32→30（32 為尖峰，30 較穩健）
             squeeze_grace_bars=1,     # 等同原始行為
+        )
+    if strategy_type == "breakout_v7":
+        # BreakoutDualSlopeStrategy — v7 確認 edge（kill-A-short + EMA200 斜率閘 + EMA60/200 雙水平對齊）
+        # 日盤限定、5m。V7_DEFAULTS 由子類內部套用（expand_ratio=1.20 / trail 1.2/1.25 /
+        # early_cut=50 / min_adx=21 / afternoon_min_adx=34 / squeeze_grace_bars=1）。
+        # 此處只釘死 ctor 額外參數 + money-stop backstop。
+        return BreakoutDualSlopeStrategy(
+            slope_lookback=48,
+            slope_thr=0.015,
+            kill_a_short=True,
+            require_dual_slope=True,
+            max_loss_twd=4000.0,   # 經 **kw 傳入 V7_DEFAULTS 後覆寫至 BreakoutTrendStrategy
+        )
+    if strategy_type == "day_orb":
+        # DayORBStrategy — 日盤開盤區間突破（or_bars=6、min/max OR 寬度過濾、每日 1 筆、13:25 強平）。
+        # ctor 預設已釘死，這裡顯式重申避免未來預設漂移。
+        # 註：研究凍結 lockbox 為 or_bars=7（見 docs/live_handoff_manifest §4/§7），上線前須確認採用哪一口徑。
+        return DayORBStrategy(
+            mode="breakout",
+            or_bars=6,
+            max_loss_twd=4000.0,
+            point_value=10.0,
+            force_close=(13, 25),
+        )
+    if strategy_type == "night_v3":
+        # NightORBStrategy — 夜盤開盤區間突破（不可動到既有 "orb" 分支）。
+        # ctor 預設已釘死；max_loss_twd=4000 / point_value=10。
+        return NightORBStrategy(
+            mode="breakout",
+            max_loss_twd=4000.0,
+            point_value=10.0,
         )
     return AdaptiveMomentumStrategy()
 
@@ -1065,6 +1099,19 @@ class TradingEngine:
                         "data": {"instrument": instrument, "price": pipeline.snapshot.price}
                     })
 
+    def _position_owner(self, instrument: str) -> str:
+        """跨策略持倉鎖的 owner key。
+        優先 STRATEGY_OWNER env（多策略多進程部署、每進程一個 owner），
+        否則用該商品 spec.strategy_type，最後 fallback 'breakout'（向後相容既有 live；
+        現行 TMF spec.strategy_type 即 'breakout'，行為不變）。
+        """
+        env = os.getenv("STRATEGY_OWNER", "").strip()
+        if env:
+            return env
+        pipe = self.pipelines.get(instrument)
+        st = getattr(pipe.spec, "strategy_type", None) if pipe else None
+        return st or "breakout"
+
     def _execute_entry(self, instrument: str, signal: Signal):
         """執行進場（指定商品）"""
         # ── Reconcile halt：上次 reconcile 偵測引擎/券商持倉背離、阻止新倉
@@ -1083,11 +1130,12 @@ class TradingEngine:
         if phase in (SessionPhase.CLOSED, SessionPhase.CLOSING):
             return
 
-        # ──【跨策略持倉鎖】── 若 ORB 已持倉、breakout 跳過進場
-        blocker = position_lock.is_blocked("breakout")
+        # ──【跨策略持倉鎖】── 若別的策略 owner 已持倉、本策略跳過進場
+        owner = self._position_owner(instrument)
+        blocker = position_lock.is_blocked(owner)
         if blocker:
             logger.info(
-                f"[Lock] breakout 進場跳過：{blocker.get('owner')} 已持倉 "
+                f"[Lock] {owner} 進場跳過：{blocker.get('owner')} 已持倉 "
                 f"({blocker.get('side')} {blocker.get('instrument')} @ {blocker.get('entry_price')})"
             )
             return
@@ -1152,7 +1200,7 @@ class TradingEngine:
             notify_entry("paper", instrument, action, price, qty, signal.stop_loss, signal.reason, signal.take_profit, signal.trail_dist_pts)
             # 取得跨策略持倉鎖
             position_lock.acquire(
-                owner="breakout", side=action.lower(),
+                owner=owner, side=action.lower(),
                 entry_price=price, instrument=instrument, quantity=qty,
                 mode="paper", reason=signal.reason,
             )
@@ -1218,7 +1266,7 @@ class TradingEngine:
         notify_entry("live", instrument, action, fill_price, decision.quantity, signal.stop_loss, signal.reason, signal.take_profit, signal.trail_dist_pts)
         # 取得跨策略持倉鎖（live）
         position_lock.acquire(
-            owner="breakout", side=action.lower(),
+            owner=self._position_owner(instrument), side=action.lower(),
             entry_price=fill_price, instrument=instrument, quantity=decision.quantity,
             mode="live", reason=signal.reason,
         )
@@ -1304,6 +1352,7 @@ class TradingEngine:
         pos = self.position_manager.positions.get(instrument)
         if not pos or pos.is_flat:
             return
+        owner = self._position_owner(instrument)
 
         # 下單失敗冷卻中 → 跳過（所有模式都適用，防止無限重試轟炸）
         # 但硬停損和盤別收盤不受冷卻限制 — 這些是保命的
@@ -1337,7 +1386,7 @@ class TradingEngine:
             _exit_pts = trade.pnl_points if trade else round((price - pos.entry_price) * (1 if pos.side == Side.LONG else -1), 1)
             notify_exit("paper", instrument, pos.side.value, price, _exit_pnl, _exit_pts, signal.reason)
             # 釋放跨策略持倉鎖
-            position_lock.release("breakout")
+            position_lock.release(owner)
 
             if trade and self.risk_manager:
                 self.risk_manager.on_trade_closed(trade.net_pnl)
@@ -1406,7 +1455,7 @@ class TradingEngine:
             log_pnl(trade.net_pnl, f"[{instrument}] {signal.reason}")
             notify_exit("live", instrument, trade.side, fill_price, trade.net_pnl, trade.pnl_points, signal.reason)
             # 釋放跨策略持倉鎖（live）
-            position_lock.release("breakout")
+            position_lock.release(owner)
 
             if isinstance(self.broker, MockBroker):
                 self.broker.update_balance(trade.pnl)
@@ -1486,7 +1535,26 @@ class TradingEngine:
                 engine_qty = engine_pos.quantity if engine_pos and not engine_pos.is_flat else 0
                 engine_side = engine_pos.side.value if engine_pos and not engine_pos.is_flat else "flat"
 
-                if engine_qty != real_qty or (real_qty > 0 and engine_side != real_side):
+                mismatch = engine_qty != real_qty or (real_qty > 0 and engine_side != real_side)
+
+                # ── lock-aware：我方 flat、且券商部位由「另一策略 owner」持鎖且 side/qty 相符
+                #    → 多策略共用同一 TMF 帳戶（單一淨倉）時的預期跨策略持倉、非背離，不 halt。
+                #    （lock.side 存 buy/sell，real_side 為 long/short，須正規化後比對）
+                cross_strategy = False
+                if mismatch and engine_qty == 0 and real_qty > 0:
+                    lock = position_lock.is_blocked(self._position_owner(inst))
+                    if lock is not None and lock.get("instrument") == inst:
+                        lock_side = {"buy": "long", "sell": "short"}.get(
+                            lock.get("side"), lock.get("side"))
+                        if lock_side == real_side and int(lock.get("quantity", 0) or 0) == real_qty:
+                            cross_strategy = True
+                            logger.info(
+                                f"[RECONCILE] {inst} 券商部位屬其他策略 "
+                                f"owner={lock.get('owner')} ({real_side}×{real_qty}) "
+                                f"— 預期跨策略持倉、不 halt"
+                            )
+
+                if mismatch and not cross_strategy:
                     logger.error(
                         f"[RECONCILE] {inst} 持倉不一致！"
                         f" 引擎={engine_side}×{engine_qty}"
@@ -1507,7 +1575,7 @@ class TradingEngine:
                             f"已 halt new entry、請手動歸位（平掉外部部位或讓 rogue script 停止）"
                         )
                 else:
-                    # ── 一致 → 解除 halt（人工歸位後自動恢復進場）
+                    # ── 一致（含預期的跨策略持倉）→ 解除 halt（人工歸位後自動恢復進場）
                     if self._reconcile_halt.get(inst):
                         self._reconcile_halt[inst] = False
                         self._reconcile_last_alert[inst] = 0.0
