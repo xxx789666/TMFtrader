@@ -38,6 +38,7 @@ export INSTRUMENTS=TMF
 export TIMEFRAME=30
 export STRATEGY_TYPE=day_orb
 export STRATEGY_OWNER=day_orb
+export RECORD_TICKS=0   # paper 不錄 tick(live 已錄、避免寫進同一個 data/ticks 檔)
 
 LOG="data/logs/day_orb_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs

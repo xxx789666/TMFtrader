@@ -35,6 +35,7 @@ export INSTRUMENTS=TMF
 export TIMEFRAME=5
 export STRATEGY_TYPE=breakout_v7
 export STRATEGY_OWNER=breakout_v7
+export RECORD_TICKS=0   # paper 不錄 tick(live 已錄、避免寫進同一個 data/ticks 檔)
 
 LOG="data/logs/breakout_v7_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs

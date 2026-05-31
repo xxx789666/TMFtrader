@@ -319,7 +319,7 @@ class TradingEngine:
                 pipeline.aggregator.use_wall_clock = True
                 logger.info(f"[Pipeline] {code}: use_wall_clock=True (trading_mode={self.trading_mode})")
             self.pipelines[code] = pipeline
-            logger.info(f"[Pipeline] {code}: {spec.name} | strategy={spec.strategy_type} | point_value={spec.point_value}")
+            logger.info(f"[Pipeline] {code}: {spec.name} | strategy={_stype} ({type(strategy).__name__}/{strategy.name}) | point_value={spec.point_value}")
 
         # 向後相容 — 第一個商品
         first = self.pipelines[self.instruments[0]]
@@ -376,11 +376,20 @@ class TradingEngine:
             self.risk_manager._peak_equity = 0.0
             logger.info("[Risk] Paper mode: peak_equity 已重置（跟隨本次啟動餘額重新計算）")
 
+        # paper 模式：每個 owner 用獨立 data 命名空間 data/paper/<owner>/，
+        # 避免污染 live 的 data/（position state / performance）；
+        # risk_state 與 position_lock 在各自模組亦同樣 owner-scope。
+        self._paper_ns = None
+        if self.trading_mode == "paper":
+            _owner = (os.getenv("STRATEGY_OWNER", "") or os.getenv("STRATEGY_TYPE", "") or "paper").strip()
+            self._paper_ns = PROJECT_ROOT / "data" / "paper" / _owner
+            logger.info(f"[Paper] 隔離命名空間: {self._paper_ns}")
+
         # ---- 部位管理（多商品共用餘額）----
         initial_balance = float(os.getenv("INITIAL_BALANCE", "0"))
         configs = {code: get_spec(code) for code in self.instruments}
         # paper 模式：啟用持倉持久化，重啟後自動恢復
-        _state_dir = (PROJECT_ROOT / "data" / "state") if self.trading_mode == "paper" else None
+        _state_dir = (self._paper_ns / "state") if self.trading_mode == "paper" else None
         self.position_manager = PositionManager(
             instruments=self.instruments,
             configs=configs,
@@ -401,7 +410,8 @@ class TradingEngine:
                 self._restore_strategy_state(inst)
 
         # ---- 績效追蹤 ----
-        perf_dir = str(PROJECT_ROOT / "data" / "performance")
+        perf_dir = str(self._paper_ns / "performance") if self.trading_mode == "paper" \
+            else str(PROJECT_ROOT / "data" / "performance")
         self.performance = PerformanceTracker(
             data_dir=perf_dir,
             trading_mode=self.trading_mode,

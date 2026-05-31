@@ -22,14 +22,23 @@ from typing import Optional
 
 _DATA = Path(__file__).resolve().parent.parent / "data"
 LIVE_LOCK_FILE = _DATA / "active_position.json"
-PAPER_LOCK_FILE = _DATA / "active_position_paper.json"
 LOCK_FILE = LIVE_LOCK_FILE  # 向後相容別名（舊程式/測試直接引用）
 STALE_HOURS = 12
 
 
+def paper_owner() -> str:
+    return os.getenv("STRATEGY_OWNER", "").strip() or "paper"
+
+
+def paper_lock_file(owner: str | None = None) -> Path:
+    return _DATA / "paper" / (owner or paper_owner()) / "active_position.json"
+
+
 def _lock_file(mode: str = "live") -> Path:
-    """paper 用獨立鎖檔,其餘(live/simulation)用主鎖檔。"""
-    return PAPER_LOCK_FILE if mode == "paper" else LIVE_LOCK_FILE
+    """live/simulation 用主鎖檔;paper 用「每個 owner 獨立」鎖檔
+    (data/paper/<owner>/active_position.json)→ paper 既不擋 live、各 paper 策略間也互不干擾,
+    可獨立前推評估。"""
+    return paper_lock_file() if mode == "paper" else LIVE_LOCK_FILE
 
 
 def _read(mode: str = "live") -> Optional[dict]:

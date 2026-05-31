@@ -37,6 +37,7 @@ export INSTRUMENTS=TMF
 export TIMEFRAME=60
 export STRATEGY_TYPE=night_v3
 export STRATEGY_OWNER=night_v3
+export RECORD_TICKS=0   # paper 不錄 tick(live 已錄、避免寫進同一個 data/ticks 檔)
 
 LOG="data/logs/night_v3_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs

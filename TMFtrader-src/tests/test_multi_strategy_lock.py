@@ -22,7 +22,11 @@ SPEC_CODE = get_spec("TMF").code
 
 
 def _clear_lock():
-    for f in (position_lock.LIVE_LOCK_FILE, position_lock.PAPER_LOCK_FILE):
+    files = [position_lock.LIVE_LOCK_FILE,
+             position_lock.paper_lock_file("day_orb"),
+             position_lock.paper_lock_file("breakout_v7"),
+             position_lock.paper_lock_file("night_v3")]
+    for f in files:
         if f.exists():
             f.unlink()
 
@@ -135,20 +139,25 @@ check("券商歸位後自動解除 halt", e._reconcile_halt.get("TMF") is False)
 
 _clear_lock()
 
-# ───────── 4) 鎖依模式分離：paper 不擋 live（保護真實下單） ─────────
-print("[4] mode-scoped lock (paper must NOT block live)")
+# ───────── 4) paper 隔離：每 owner 獨立鎖；paper 不擋 live、paper 之間互不干擾 ─────────
+print("[4] paper isolation (per-owner; paper never blocks live)")
 _clear_lock()
+os.environ["STRATEGY_OWNER"] = "day_orb"
 position_lock.acquire(owner="day_orb", side="buy", entry_price=1, instrument="TMF", quantity=1, mode="paper")
-check("paper 鎖只寫 paper 檔、不碰 live 檔",
-      position_lock.PAPER_LOCK_FILE.exists() and not position_lock.LIVE_LOCK_FILE.exists())
+check("paper 鎖寫到 data/paper/day_orb/、不碰 live 檔",
+      position_lock.paper_lock_file("day_orb").exists() and not position_lock.LIVE_LOCK_FILE.exists())
 check("live breakout 不被 paper 鎖擋（關鍵安全性）",
       position_lock.is_blocked("breakout", mode="live") is None)
-check("paper night_v3 會被 paper day_orb 擋（同模式仲裁）",
-      position_lock.is_blocked("night_v3", mode="paper") is not None)
+os.environ["STRATEGY_OWNER"] = "breakout_v7"
+check("另一支 paper(breakout_v7) 與 day_orb 互不干擾（可獨立評估）",
+      position_lock.is_blocked("breakout_v7", mode="paper") is None)
+os.environ["STRATEGY_OWNER"] = "day_orb"
 position_lock.release("day_orb", mode="paper")
-check("paper release 只刪 paper 檔", not position_lock.PAPER_LOCK_FILE.exists())
+check("paper release 只刪自己 owner 的鎖", not position_lock.paper_lock_file("day_orb").exists())
+os.environ.pop("STRATEGY_OWNER", None)
 position_lock.acquire(owner="breakout", side="buy", entry_price=1, instrument="TMF", quantity=1, mode="live")
-check("反向：paper day_orb 不被 live 鎖擋", position_lock.is_blocked("day_orb", mode="paper") is None)
+check("反向：paper day_orb 不被 live 鎖擋",
+      position_lock.is_blocked("day_orb", mode="paper") is None)
 position_lock.release("breakout", mode="live")
 _clear_lock()
 

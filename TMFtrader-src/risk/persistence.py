@@ -16,7 +16,15 @@ import os
 _DATA_DIR = Path(__file__).parent.parent / "data"
 
 def _state_file() -> Path:
-    """依 DASHBOARD_PORT 區分日盤(8888)與夜盤(8889)的風控狀態檔"""
+    """風控狀態檔路徑。
+    - paper(且有 STRATEGY_OWNER):data/paper/<owner>/risk_state.json
+      → 絕不污染 live 的 risk_state.json(否則 paper 平模擬單會覆蓋 live 的 peak/熔斷狀態)。
+    - 否則(live/simulation)依 DASHBOARD_PORT 區分日盤(8888)/夜盤(8889)。
+    """
+    if os.getenv("TRADING_MODE", "").strip().lower() == "paper":
+        owner = os.getenv("STRATEGY_OWNER", "").strip()
+        if owner:
+            return _DATA_DIR / "paper" / owner / "risk_state.json"
     port = os.getenv("DASHBOARD_PORT", "8888")
     suffix = "_night" if port == "8889" else ""
     return _DATA_DIR / f"risk_state{suffix}.json"
