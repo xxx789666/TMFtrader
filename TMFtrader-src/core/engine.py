@@ -1154,7 +1154,7 @@ class TradingEngine:
 
         # ──【跨策略持倉鎖】── 若別的策略 owner 已持倉、本策略跳過進場
         owner = self._position_owner(instrument)
-        blocker = position_lock.is_blocked(owner)
+        blocker = position_lock.is_blocked(owner, mode=self.trading_mode)
         if blocker:
             logger.info(
                 f"[Lock] {owner} 進場跳過：{blocker.get('owner')} 已持倉 "
@@ -1408,7 +1408,7 @@ class TradingEngine:
             _exit_pts = trade.pnl_points if trade else round((price - pos.entry_price) * (1 if pos.side == Side.LONG else -1), 1)
             notify_exit("paper", instrument, pos.side.value, price, _exit_pnl, _exit_pts, signal.reason)
             # 釋放跨策略持倉鎖
-            position_lock.release(owner)
+            position_lock.release(owner, mode=self.trading_mode)
 
             if trade and self.risk_manager:
                 self.risk_manager.on_trade_closed(trade.net_pnl)
@@ -1477,7 +1477,7 @@ class TradingEngine:
             log_pnl(trade.net_pnl, f"[{instrument}] {signal.reason}")
             notify_exit("live", instrument, trade.side, fill_price, trade.net_pnl, trade.pnl_points, signal.reason)
             # 釋放跨策略持倉鎖（live）
-            position_lock.release(owner)
+            position_lock.release(owner, mode=self.trading_mode)
 
             if isinstance(self.broker, MockBroker):
                 self.broker.update_balance(trade.pnl)
@@ -1564,7 +1564,7 @@ class TradingEngine:
                 #    （lock.side 存 buy/sell，real_side 為 long/short，須正規化後比對）
                 cross_strategy = False
                 if mismatch and engine_qty == 0 and real_qty > 0:
-                    lock = position_lock.is_blocked(self._position_owner(inst))
+                    lock = position_lock.is_blocked(self._position_owner(inst), mode="live")
                     if lock is not None and lock.get("instrument") == inst:
                         lock_side = {"buy": "long", "sell": "short"}.get(
                             lock.get("side"), lock.get("side"))

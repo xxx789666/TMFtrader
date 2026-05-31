@@ -22,8 +22,9 @@ SPEC_CODE = get_spec("TMF").code
 
 
 def _clear_lock():
-    if position_lock.LOCK_FILE.exists():
-        position_lock.LOCK_FILE.unlink()
+    for f in (position_lock.LIVE_LOCK_FILE, position_lock.PAPER_LOCK_FILE):
+        if f.exists():
+            f.unlink()
 
 
 def _make_engine(spec_type="breakout"):
@@ -133,4 +134,22 @@ e._reconcile_positions()
 check("券商歸位後自動解除 halt", e._reconcile_halt.get("TMF") is False)
 
 _clear_lock()
+
+# ───────── 4) 鎖依模式分離：paper 不擋 live（保護真實下單） ─────────
+print("[4] mode-scoped lock (paper must NOT block live)")
+_clear_lock()
+position_lock.acquire(owner="day_orb", side="buy", entry_price=1, instrument="TMF", quantity=1, mode="paper")
+check("paper 鎖只寫 paper 檔、不碰 live 檔",
+      position_lock.PAPER_LOCK_FILE.exists() and not position_lock.LIVE_LOCK_FILE.exists())
+check("live breakout 不被 paper 鎖擋（關鍵安全性）",
+      position_lock.is_blocked("breakout", mode="live") is None)
+check("paper night_v3 會被 paper day_orb 擋（同模式仲裁）",
+      position_lock.is_blocked("night_v3", mode="paper") is not None)
+position_lock.release("day_orb", mode="paper")
+check("paper release 只刪 paper 檔", not position_lock.PAPER_LOCK_FILE.exists())
+position_lock.acquire(owner="breakout", side="buy", entry_price=1, instrument="TMF", quantity=1, mode="live")
+check("反向：paper day_orb 不被 live 鎖擋", position_lock.is_blocked("day_orb", mode="paper") is None)
+position_lock.release("breakout", mode="live")
+_clear_lock()
+
 print(f"\nALL PASS ({passed} checks)")
