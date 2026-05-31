@@ -16,7 +16,7 @@
 set -u
 cd /home/xx/TMFtrader-src
 export TZ=Asia/Taipei
-source .venv/bin/activate
+PY=.venv/bin/python3   # 明確用 venv python(不靠 activate/PATH,避免 cron 環境抓到系統 python)
 
 PIDFILE=/tmp/TMFtrader_breakout_v7_paper.pid
 
@@ -38,7 +38,7 @@ export STRATEGY_OWNER=breakout_v7
 
 LOG="data/logs/breakout_v7_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs
-nohup python3.12 scripts/start_paper.py --no-browser --mode paper --port 8892 >> "$LOG" 2>&1 &
+nohup "$PY" scripts/start_paper.py --no-browser --mode paper --port 8892 >> "$LOG" 2>&1 &
 NEW_PID=$!
 echo "$NEW_PID" > "$PIDFILE"
 echo "[$(date '+%F %T')] breakout_v7 PAPER start_paper.py PID=$NEW_PID | TIMEFRAME=5 owner=breakout_v7 port=8892" >> "$LOG"

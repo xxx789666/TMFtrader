@@ -17,7 +17,7 @@
 set -u
 cd /home/xx/TMFtrader-src
 export TZ=Asia/Taipei
-source .venv/bin/activate
+PY=.venv/bin/python3   # 明確用 venv python(不靠 activate/PATH,避免 cron 環境抓到系統 python)
 
 PIDFILE=/tmp/TMFtrader_day_orb_paper.pid
 
@@ -41,7 +41,7 @@ export STRATEGY_OWNER=day_orb
 
 LOG="data/logs/day_orb_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs
-nohup python3.12 scripts/start_paper.py --no-browser --mode paper --port 8890 >> "$LOG" 2>&1 &
+nohup "$PY" scripts/start_paper.py --no-browser --mode paper --port 8890 >> "$LOG" 2>&1 &
 NEW_PID=$!
 echo "$NEW_PID" > "$PIDFILE"
 echo "[$(date '+%F %T')] day_orb PAPER start_paper.py PID=$NEW_PID | TIMEFRAME=30 owner=day_orb mode=fade port=8890" >> "$LOG"
