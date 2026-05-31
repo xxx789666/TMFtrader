@@ -141,6 +141,7 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
         # 日盤限定、5m。V7_DEFAULTS 由子類內部套用（expand_ratio=1.20 / trail 1.2/1.25 /
         # early_cut=50 / min_adx=21 / afternoon_min_adx=34 / squeeze_grace_bars=1）。
         # 此處只釘死 ctor 額外參數 + money-stop backstop。
+        # = lab forward_eval.py FROZEN「day_v7趨勢」(只傳 max_loss_twd、其餘走 class 預設、等價)。
         return BreakoutDualSlopeStrategy(
             slope_lookback=48,
             slope_thr=0.015,
@@ -149,21 +150,38 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             max_loss_twd=4000.0,   # 經 **kw 傳入 V7_DEFAULTS 後覆寫至 BreakoutTrendStrategy
         )
     if strategy_type == "day_orb":
-        # DayORBStrategy — 日盤開盤區間突破（or_bars=6、min/max OR 寬度過濾、每日 1 筆、13:25 強平）。
-        # ctor 預設已釘死，這裡顯式重申避免未來預設漂移。
-        # 註：研究凍結 lockbox 為 or_bars=7（見 docs/live_handoff_manifest §4/§7），上線前須確認採用哪一口徑。
+        # DayORBStrategy — 日盤開盤區間「均值回歸(fade)」、30m。
+        # 參數 = lab scripts/forward_eval.py FROZEN「day_ORB回歸」(2026-05-31 蓋章),
+        # 即 MCPT 驗證過的那組(p(net)=0.017 / p(PF)=0.003);勿在 live 調參。
         return DayORBStrategy(
-            mode="breakout",
-            or_bars=6,
+            mode="fade",
+            or_bars=7,
+            buf_atr=0.30,
+            max_or_atr=5.0,
+            sl_atr=1.0,
+            trail_trigger_atr=1.0,
+            trail_dist_atr=1.2,
+            max_hold_bars=30,
+            min_adx=17.5,
+            min_or_atr=1.3,
             max_loss_twd=4000.0,
             point_value=10.0,
             force_close=(13, 25),
         )
     if strategy_type == "night_v3":
-        # NightORBStrategy — 夜盤開盤區間突破（不可動到既有 "orb" 分支）。
-        # ctor 預設已釘死；max_loss_twd=4000 / point_value=10。
+        # NightORBStrategy — 夜盤開盤區間突破(不可動到既有 "orb" 分支)、60m。
+        # 參數 = lab scripts/forward_eval.py FROZEN「night_v3突破」(2026-05-31 蓋章);勿在 live 調參。
         return NightORBStrategy(
             mode="breakout",
+            or_bars=8,
+            buf_atr=0.35,
+            max_or_atr=6.5,
+            sl_atr=1.0,
+            trail_trigger_atr=1.0,
+            trail_dist_atr=1.2,
+            max_hold_bars=24,
+            min_adx=25.0,
+            min_or_atr=2.4,
             max_loss_twd=4000.0,
             point_value=10.0,
         )
@@ -271,7 +289,11 @@ class TradingEngine:
         # ---- 建立每個商品的 Pipeline ----
         for code in self.instruments:
             spec = get_spec(code)
-            strategy = _create_strategy(spec.strategy_type)
+            # STRATEGY_TYPE env 可覆寫 spec.strategy_type：讓 paper 進程跑 day_orb/night_v3/breakout_v7
+            # 而不必改動共用的 INSTRUMENT_SPECS（避免一改就連 live 的 breakout 一起換掉）。
+            # 未設時用 spec 預設（向後相容，現行 live 行為不變）。
+            _stype = os.getenv("STRATEGY_TYPE", "").strip() or spec.strategy_type
+            strategy = _create_strategy(_stype)
             pipeline = InstrumentPipeline(
                 code=code,
                 spec=spec,

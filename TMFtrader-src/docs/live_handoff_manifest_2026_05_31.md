@@ -77,26 +77,26 @@ if strategy_type == "breakout_v7":
         max_loss_twd=4000.0,   # 經 **kw 傳入 V7_DEFAULTS 後覆寫至 BreakoutTrendStrategy
     )
 if strategy_type == "day_orb":
-    # DayORBStrategy — 日盤開盤區間突破（or_bars=6、min/max OR 寬度過濾、每日 1 筆、13:25 強平）。
-    # ctor 預設已釘死，這裡顯式重申避免未來預設漂移。
+    # DayORBStrategy — 日盤開盤區間「均值回歸(fade)」、30m。
+    # 參數 = lab scripts/forward_eval.py FROZEN「day_ORB回歸」(2026-05-31 蓋章)=MCPT 驗證過那組。
     return DayORBStrategy(
-        mode="breakout",
-        or_bars=6,
-        max_loss_twd=4000.0,
-        point_value=10.0,
-        force_close=(13, 25),
+        mode="fade", or_bars=7, buf_atr=0.30, max_or_atr=5.0, sl_atr=1.0,
+        trail_trigger_atr=1.0, trail_dist_atr=1.2, max_hold_bars=30,
+        min_adx=17.5, min_or_atr=1.3,
+        max_loss_twd=4000.0, point_value=10.0, force_close=(13, 25),
     )
 if strategy_type == "night_v3":
-    # NightORBStrategy — 夜盤開盤區間突破（不可動到既有 "orb" 分支）。
-    # ctor 預設已釘死；max_loss_twd=4000 / point_value=10。
+    # NightORBStrategy — 夜盤開盤區間突破(不可動到既有 "orb" 分支)、60m。
+    # 參數 = lab scripts/forward_eval.py FROZEN「night_v3突破」(2026-05-31 蓋章)。
     return NightORBStrategy(
-        mode="breakout",
-        max_loss_twd=4000.0,
-        point_value=10.0,
+        mode="breakout", or_bars=8, buf_atr=0.35, max_or_atr=6.5, sl_atr=1.0,
+        trail_trigger_atr=1.0, trail_dist_atr=1.2, max_hold_bars=24,
+        min_adx=25.0, min_or_atr=2.4,
+        max_loss_twd=4000.0, point_value=10.0,
     )
 ```
 
-> **與舊交接稿差異(以本文件為準)**:研發 repo 舊稿曾把 `day_orb` 寫成 `mode="fade", or_bars=7`,並對 `night_v3` 列出一長串 ctor 參數。**Verify 以實際 engine 接線為準**:`day_orb` 採 `mode="breakout", or_bars=6, force_close=(13,25)`;`night_v3` 僅釘 `mode="breakout"` + money-stop,其餘進場結構走 ctor 預設(凍結值見 §4)。凍結的「選擇性旋鈕」數值(min_adx 等)由策略類別內部預設承載,不在此 ctor 重列。
+> **2026-05-31 校正(以本文件為準)**:接線值已對齊 lab `scripts/forward_eval.py` 的 🔒FROZEN 配置(=MCPT 驗證過的那組),取代先前誤用的「source 檔 ctor 預設」。關鍵修正:`day_orb` 是 **`mode="fade"`(均值回歸)、`or_bars=7`** 連同 buf/max_or/sl/max_hold/min_adx/min_or 全套凍結值;`night_v3` 為 `or_bars=8 / buf=0.35 / max_or=6.5 / sl=1.0 / min_adx=25 / min_or=2.4`。**檔案預設(day_orb breakout/or_bars=6、night_v3 走預設)並非驗證過的配置,勿用。** `breakout_v7` 只傳 `max_loss_twd`、其餘走 class 預設,與 FROZEN「day_v7趨勢」等價。
 
 ### (c) tickagg_change — `core/engine.py` `InstrumentPipeline.__post_init__`(**已驗 L77**)
 
@@ -123,7 +123,11 @@ AFTER:
 | `day_orb` | **30** | 日盤 ORB on 30m |
 | `night_v3` | **60** | 夜盤 ORB on 60m |
 
-選擇機制(已驗):engine 啟動時讀一次 `self.timeframe = int(os.getenv("TIMEFRAME","1"))`(L226)。每個 instrument 以 `_create_strategy(spec.strategy_type)`(L240)建策略,並在 `self.timeframe` 註冊主 kbar callback(L247-250)。故**單一 paper/live run 的驅動 TF 純由 `TIMEFRAME` env 決定,策略類別純由 instrument spec 的 `strategy_type` 決定**。paper 跑某策略:把 `INSTRUMENTS` 設成 `spec.strategy_type` 為目標的那個 instrument,並把 `TIMEFRAME` 設 5 / 30 / 60。
+選擇機制(已驗):engine 啟動時讀一次 `self.timeframe = int(os.getenv("TIMEFRAME","1"))`(L226)。每個 instrument 以 `_create_strategy(spec.strategy_type)`(L240)建策略,並在 `self.timeframe` 註冊主 kbar callback(L247-250)。驅動 TF 由 `TIMEFRAME` env 決定;策略類別由 `STRATEGY_TYPE` env 決定(2026-05-31 新增覆寫,未設時 fallback `spec.strategy_type`)。**paper 跑某策略不要去改 `INSTRUMENT_SPECS`(那會連 live 的 breakout 一起換掉)**,改用 env:例如 day_orb →
+> ```
+> TRADING_MODE=paper INSTRUMENTS=TMF TIMEFRAME=30 STRATEGY_TYPE=day_orb STRATEGY_OWNER=day_orb python start.py
+> ```
+> (breakout_v7 → TIMEFRAME=5;night_v3 → TIMEFRAME=60。`STRATEGY_OWNER` 給跨策略持倉鎖用,見 §3 wiring_gaps #5。)
 
 ### wiring_gaps(接線缺口,務必理解)
 
@@ -144,10 +148,10 @@ AFTER:
 | type | 類別 / TF | 凍結結構(釘死) | 凍結進場閾值(各 OOS 窗最佳中位) |
 |---|---|---|---|
 | `breakout_v7` | BreakoutDualSlope / 5m | slope_thr=0.015、雙水平對齊(EMA60/EMA200 同向)、kill-A-short;出場 trail_trigger_atr=1.2 / trail_dist_atr=1.25 / early_cut_bars=50 | min_adx=21 / afternoon_min_adx=34 / expand_ratio=1.20(僅此 3 個進場閾值取中位) |
-| `day_orb` | DayORB / 30m | or_bars=7 / buf=0.30 / max_or=5.0 / sl=1.0 / max_hold=30 | min_adx=17.5 / min_or_atr=1.3(選擇性旋鈕取中位) |
+| `day_orb` | DayORB **fade** / 30m | mode=fade / or_bars=7 / buf=0.30 / max_or=5.0 / sl=1.0 / max_hold=30 | min_adx=17.5 / min_or_atr=1.3(選擇性旋鈕取中位) |
 | `night_v3` | NightORB(breakout) / 60m | or_bars=8 / buf_atr=0.35 / max_or_atr=6.5 / sl_atr=1.0 / max_hold=24;**全參數釘死、零 per-window 優化**(seal JSON best={}) | min_adx=25 / min_or_atr=2.4 |
 
-> **凍結 caveat(誠實標註,口徑差異)**:`day_orb` 的凍結值是「選定中位數」,**並非** sealed 數字所用 JSON(`wfo_oos_day_orb_v2_ablation.json`)各窗實際優化值(該 JSON 每窗 or_bars 2-8 / min_adx 0-25 / max_hold 12-36 都在變)。§3(b) ctor 的 `or_bars=6` 為 engine 接線釘死值,與本表 §4 研究凍結結構表(or_bars=7)為**不同口徑**(接線 ctor vs 研究凍結),live 以 §3(b) 接線值上線、前推時對照 §4 凍結基線觀察。`night_v3` JSON best={} 已證實零調參。
+> **凍結 caveat(誠實標註,口徑差異)**:`day_orb` 的凍結值是「選定中位數」,**並非** sealed 數字所用 JSON(`wfo_oos_day_orb_v2_ablation.json`)各窗實際優化值(該 JSON 每窗 or_bars 2-8 / min_adx 0-25 / max_hold 12-36 都在變)。~~§3(b) 曾用 or_bars=6~~ → **2026-05-31 已校正:§3(b) 接線值與本表凍結結構完全一致(`mode=fade / or_bars=7`...),口徑統一,前推即直接對照本表基線。** 仍存的 caveat 是:凍結值本身為「選定中位數」、屬樂觀偏誤,逐窗最佳並不固定。`night_v3` JSON best={} 已證實零調參。
 
 ---
 
