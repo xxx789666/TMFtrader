@@ -4,7 +4,7 @@
 # 隔離手段(重要,避免與 live 互相干擾):
 #   - 入口用 scripts/start_paper.py(cmdline 不含 'scripts/start.py')→ 不被 live 的
 #     restart_day.sh(pkill -f 'scripts/start.py')殺掉、不被 watchdog_alert.sh 誤判。
-#   - Dashboard 用獨立 port 8890(live 是 8888)→ 不撞埠。
+#   - 無 dashboard(headless):省記憶體;進出場/止損/止盈/追蹤/盤末強平等事件走 TG。
 #   - 用 PIDFILE 精準 kill 自己上一輪(殺前再用 /proc/<pid>/environ 確認帶
 #     STRATEGY_TYPE=day_orb 才動手),**絕不** pkill -f。
 #   - 獨立 log:data/logs/day_orb_paper_YYYYMMDD.log。
@@ -42,7 +42,7 @@ export RECORD_TICKS=0   # paper 不錄 tick(live 已錄、避免寫進同一個 
 
 LOG="data/logs/day_orb_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs
-nohup "$PY" scripts/start_paper.py --no-browser --mode paper --port 8890 >> "$LOG" 2>&1 &
+nohup "$PY" scripts/start_paper.py --mode paper >> "$LOG" 2>&1 &
 NEW_PID=$!
 echo "$NEW_PID" > "$PIDFILE"
-echo "[$(date '+%F %T')] day_orb PAPER start_paper.py PID=$NEW_PID | TIMEFRAME=30 owner=day_orb mode=fade port=8890" >> "$LOG"
+echo "[$(date '+%F %T')] day_orb PAPER start_paper.py PID=$NEW_PID | TIMEFRAME=30 owner=day_orb mode=fade headless(TG-only)" >> "$LOG"

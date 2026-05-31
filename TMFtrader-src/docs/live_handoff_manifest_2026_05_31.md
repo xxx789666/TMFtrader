@@ -124,11 +124,11 @@ AFTER:
 | `night_v3` | **60** | 夜盤 ORB on 60m |
 
 選擇機制(已驗):engine 啟動時讀一次 `self.timeframe = int(os.getenv("TIMEFRAME","1"))`(L226)。每個 instrument 以 `_create_strategy(spec.strategy_type)`(L240)建策略,並在 `self.timeframe` 註冊主 kbar callback(L247-250)。驅動 TF 由 `TIMEFRAME` env 決定;策略類別由 `STRATEGY_TYPE` env 決定(2026-05-31 新增覆寫,未設時 fallback `spec.strategy_type`)。**paper 跑某策略不要去改 `INSTRUMENT_SPECS`(那會連 live 的 breakout 一起換掉),也不要直接用 `start.py`**
-(會與 live 同 cmdline → 被 live 的 `pkill -f scripts/start.py` 殺掉、且撞 dashboard 8888)。改用**隔離入口**
-`scripts/start_paper.py`(獨立 cmdline)+ 獨立 `--port` + env 覆寫,例如 day_orb →
+(會與 live 同 cmdline → 被 live 的 `pkill -f scripts/start.py` 殺掉)。改用**隔離 headless 入口**
+`scripts/start_paper.py`(獨立 cmdline、**不啟 dashboard、省記憶體、事件走 TG**)+ env 覆寫,例如 day_orb →
 > ```
-> TRADING_MODE=paper INSTRUMENTS=TMF TIMEFRAME=30 STRATEGY_TYPE=day_orb STRATEGY_OWNER=day_orb \
->   python scripts/start_paper.py --no-browser --mode paper --port 8890
+> RECORD_TICKS=0 TRADING_MODE=paper INSTRUMENTS=TMF TIMEFRAME=30 STRATEGY_TYPE=day_orb STRATEGY_OWNER=day_orb \
+>   python scripts/start_paper.py --mode paper
 > ```
 > 實務上由 `scripts/start_day_orb_paper.sh`(pidfile 隔離、絕不 pkill -f)包好,cron `40 0 * * 1-5`
 > (UTC=TST 08:40、晚 live 日盤 restart 5 分)。breakout_v7 → TIMEFRAME=5;night_v3 → TIMEFRAME=60。

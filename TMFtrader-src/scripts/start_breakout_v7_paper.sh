@@ -4,7 +4,7 @@
 # 隔離手段:
 #   - 入口用 scripts/start_paper.py(cmdline 不含 'scripts/start.py')→ 不被 live 的
 #     restart_day.sh(pkill -f 'scripts/start.py')/ watchdog 波及。
-#   - Dashboard 用獨立 port 8892(live=8888、day_orb=8890、night_v3=8891)。
+#   - 無 dashboard(headless):省記憶體;進出場/止損/止盈/追蹤/盤末強平等事件走 TG。
 #   - PIDFILE 精準 kill 自己(殺前用 /proc/<pid>/environ 確認帶 STRATEGY_TYPE=breakout_v7),絕不 pkill -f。
 #   - 獨立 log:data/logs/breakout_v7_paper_YYYYMMDD.log。
 #   - paper 持倉鎖走 data/active_position_paper.json(mode-scoped),不碰 live 的 active_position.json。
@@ -39,7 +39,7 @@ export RECORD_TICKS=0   # paper 不錄 tick(live 已錄、避免寫進同一個 
 
 LOG="data/logs/breakout_v7_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs
-nohup "$PY" scripts/start_paper.py --no-browser --mode paper --port 8892 >> "$LOG" 2>&1 &
+nohup "$PY" scripts/start_paper.py --mode paper >> "$LOG" 2>&1 &
 NEW_PID=$!
 echo "$NEW_PID" > "$PIDFILE"
-echo "[$(date '+%F %T')] breakout_v7 PAPER start_paper.py PID=$NEW_PID | TIMEFRAME=5 owner=breakout_v7 port=8892" >> "$LOG"
+echo "[$(date '+%F %T')] breakout_v7 PAPER start_paper.py PID=$NEW_PID | TIMEFRAME=5 owner=breakout_v7 headless(TG-only)" >> "$LOG"
