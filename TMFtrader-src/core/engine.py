@@ -415,6 +415,7 @@ class TradingEngine:
         self.performance = PerformanceTracker(
             data_dir=perf_dir,
             trading_mode=self.trading_mode,
+            instrument=",".join(self.instruments) if self.instruments else "TMF",
         )
         self.performance.starting_balance = initial_balance
 
