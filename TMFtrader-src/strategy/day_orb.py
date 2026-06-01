@@ -18,13 +18,18 @@ class DayORBStrategy(BaseStrategy):
                  min_adx: float = 0.0, sl_atr: float = 1.5, tp_atr: float = 4.0,
                  trail_trigger_atr: float = 1.0, trail_dist_atr: float = 1.2,
                  max_hold_bars: int = 24, max_loss_twd: float = 4000.0, point_value: float = 10.0,
-                 force_close: tuple = (13, 25)):
+                 force_close: tuple = (13, 25),
+                 session_start: tuple = (8, 30), session_end: tuple = (13, 45)):
         self.mode = mode; self.or_bars = or_bars; self.buf_atr = buf_atr
         self.min_or_atr = min_or_atr; self.max_or_atr = max_or_atr; self.min_adx = min_adx
         self.sl_atr = sl_atr; self.tp_atr = tp_atr
         self.trail_trigger_atr = trail_trigger_atr; self.trail_dist_atr = trail_dist_atr
         self.max_hold_bars = max_hold_bars; self.max_loss_twd = max_loss_twd
         self.point_value = point_value; self.force_close = time(*force_close)
+        # 日盤時段窗口:08:45 開盤落在 clock-aligned 的 08:30 30m bucket,故起點設 08:30。
+        # 盤外(夜盤/盤間)bar 不建 OR、不進場,避免 24h 餵 bar 時 OR 在半夜換日錨到夜盤。
+        self.session_start = time(*session_start)
+        self.session_end = time(*session_end)
         self.reset()
 
     @property
@@ -43,7 +48,16 @@ class DayORBStrategy(BaseStrategy):
     def on_kbar(self, kbar: KBar, snapshot: MarketSnapshot, **kw) -> Optional[Signal]:
         self._bar_time = kbar.datetime
         atr = snapshot.atr if snapshot.atr > 0 else 1.0
-        sess = kbar.datetime.date()                  # 日盤:session = 日曆日
+
+        # ── 日盤時段 gate ────────────────────────────────────────────
+        # 只處理日盤 08:30–13:45 的 bar;盤外 bar 一律忽略。這讓 OR 永遠
+        # 從日盤開盤起算,而非 24h 餵 bar 時在 00:00 換日錨到夜盤 bar。
+        # 日盤不跨午夜,故 gate 後用 date() 當 session key 即正確。
+        bt = kbar.datetime.time()
+        if bt < self.session_start or bt >= self.session_end:
+            return None
+
+        sess = kbar.datetime.date()                  # 日盤不跨午夜 → 日曆日即交易日
 
         if sess != self._cur_sess:
             self._cur_sess = sess
