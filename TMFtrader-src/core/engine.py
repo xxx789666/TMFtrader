@@ -548,6 +548,14 @@ class TradingEngine:
                         if not inst:
                             continue
 
+                        # owner-aware:多策略共用同一帳戶時,別領養「別支策略」開的倉
+                        # (否則本策略會用自己的 check_exit/安全停損平掉對方的單=平錯單)。
+                        # 只領養本 owner 持有或無主孤兒的倉;單策略 live 行為不變。
+                        _foreign = self._foreign_position_holder(inst)
+                        if _foreign:
+                            logger.info(f"[Sync] {inst} 真實持倉屬其他策略(owner={_foreign})、跳過不領養")
+                            continue
+
                         pos = self.position_manager.positions.get(inst)
                         if pos and not pos.is_flat:
                             continue  # 已有持倉，跳過
@@ -1144,6 +1152,16 @@ class TradingEngine:
         pipe = self.pipelines.get(instrument)
         st = getattr(pipe.spec, "strategy_type", None) if pipe else None
         return st or "breakout"
+
+    def _foreign_position_holder(self, instrument: str) -> Optional[str]:
+        """多策略共用同一帳戶時:若帳戶現有倉是「別支策略」開的(live 持倉鎖 holder != 本 owner),
+        回傳該 owner 字串;否則 None(自己持有、或無主孤兒鎖→可安全領養)。
+        用於啟動真實持倉同步:別領養別支策略的倉,否則會用本策略邏輯/安全停損平掉對方的單=平錯單。
+        單策略 live(holder 為 None 或等於本 owner)→ 永遠回 None、行為與修法前一致。"""
+        holder = position_lock.get_holder(mode="live")
+        if holder is not None and holder != self._position_owner(instrument):
+            return holder
+        return None
 
     def _execute_entry(self, instrument: str, signal: Signal):
         """執行進場（指定商品）"""
