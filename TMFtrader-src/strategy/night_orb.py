@@ -5,8 +5,8 @@
 - mode="fade":價突破 OR 緣→反向(均值回歸)。
 過濾:OR 寬度需落在 [min_or_atr, max_or_atr]×ATR(太窄=假突破多、太寬=已噴);ADX 門檻。
 每夜最多 1 筆(控頻率)。出場:ATR trail + 時間止損 + 金額硬停損 + 夜盤盤末強平。
-盤末區(預設 04:00 起)不開新倉並強平既有倉,避免裸抱過 05:00 收盤的隔夜缺口
-(盤末窗下緣設整點是為了讓 60m bar 也打得到;原 04:55 窗在 TF=60 下會被跳過)。
+盤末強平窗 [04:55,05:10] 比對 snapshot.timestamp(引擎每 tick 餵的當下時間),收盤前平掉
+既有倉,避免裸抱過 05:00 收盤被隔日撮合跳空掃損;與 TIMEFRAME 無關。
 
 session 感知:夜盤交易日 = 15:00 後算當日、午夜後算前一日(跨午夜歸同一夜)。
 """
@@ -24,7 +24,7 @@ class NightORBStrategy(BaseStrategy):
                  min_adx: float = 0.0, sl_atr: float = 1.5, tp_atr: float = 4.0,
                  trail_trigger_atr: float = 1.0, trail_dist_atr: float = 1.2,
                  max_hold_bars: int = 24, max_loss_twd: float = 4000.0, point_value: float = 10.0,
-                 force_close_after: tuple = (4, 0), force_close_until: tuple = (5, 10)):
+                 force_close_after: tuple = (4, 55), force_close_until: tuple = (5, 10)):
         self.mode = mode
         self.or_bars = or_bars
         self.buf_atr = buf_atr
@@ -38,9 +38,9 @@ class NightORBStrategy(BaseStrategy):
         self.max_hold_bars = max_hold_bars
         self.max_loss_twd = max_loss_twd
         self.point_value = point_value
-        # 夜盤盤末區(預設 04:00 起):此後不開新倉、且強平既有倉,避免裸抱過 05:00 收盤
-        # 到隔日 08:45 日盤開盤的無交易缺口被跳空掃損。下緣設整點(04:00)是為了讓
-        # 60m bar(時戳只落整點)也打得到——原 [04:55,05:10] 窗在 TF=60 下會被完全跳過。
+        # 夜盤盤末強平窗 [04:55, 05:10]:避免裸抱過 05:00 收盤 → 隔日 08:45 撮合吃跳空。
+        # 夜盤跨午夜,故用「有界窗」而非 >=（傍晚 20:00 數值上也 > 04:55）。窗在 check_exit
+        # 裡比對的是 snapshot.timestamp（引擎每 tick 餵的當下時間),不是 K 棒時間 → 與 TF 無關。
         self.force_close_after = time(*force_close_after)
         self.force_close_until = time(*force_close_until)
         self.reset()
@@ -83,8 +83,6 @@ class NightORBStrategy(BaseStrategy):
 
         if self._traded or not self._or_ready:
             return None
-        if kbar.datetime.time() >= self.force_close_after:   # 臨收盤不開新倉(無隔夜跑道)
-            return None
         orw = self._or_hi - self._or_lo
         if orw < self.min_or_atr * atr or orw > self.max_or_atr * atr:
             return None
@@ -125,9 +123,11 @@ class NightORBStrategy(BaseStrategy):
             if loss_pts > 0 and loss_pts * position.quantity * self.point_value >= self.max_loss_twd:
                 return close(f"金額止損 {loss_pts:.0f}pts")
 
-        if self._bar_time is not None:                   # 夜盤盤末強平(TF-robust)
-            bt = self._bar_time.time()
-            if self.force_close_after <= bt <= self.force_close_until:
+        # 夜盤盤末強平:用引擎每 tick 餵的當下時間(snapshot.timestamp),不可用 self._bar_time
+        # ——進場後 engine 只在無倉時呼叫 on_kbar,_bar_time 會凍結在進場 bar,時間型強平永不觸發。
+        if snapshot.timestamp is not None:
+            now_t = snapshot.timestamp.time()
+            if self.force_close_after <= now_t <= self.force_close_until:
                 return close("夜盤盤末強平")
 
         if position.bars_since_entry >= self.max_hold_bars:

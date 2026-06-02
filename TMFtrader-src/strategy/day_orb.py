@@ -112,7 +112,11 @@ class DayORBStrategy(BaseStrategy):
             loss_pts = (position.entry_price - price) if is_long else (price - position.entry_price)
             if loss_pts > 0 and loss_pts * position.quantity * self.point_value >= self.max_loss_twd:
                 return close(f"金額止損 {loss_pts:.0f}pts")
-        if self._bar_time is not None and self._bar_time.time() >= self.force_close:
+        # 盤末強平用引擎每 tick 餵的當下時間(snapshot.timestamp),不可用 self._bar_time。
+        # 進場後 engine 只在無倉時呼叫 on_kbar(_process_kbar L1118),_bar_time 會凍結在
+        # 進場那根 bar,時間型強平永不觸發 → 倉位裸抱過 13:45 收盤、漂到夜盤撮合吃跳空。
+        # 日盤同一日曆日,>= 即可(無跨午夜)。
+        if snapshot.timestamp is not None and snapshot.timestamp.time() >= self.force_close:
             return close("日盤盤末強平")
         if position.bars_since_entry >= self.max_hold_bars:
             return close(f"時間出場 {position.bars_since_entry}根")
