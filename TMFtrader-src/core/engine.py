@@ -410,8 +410,16 @@ class TradingEngine:
                 self._restore_strategy_state(inst)
 
         # ---- 績效追蹤 ----
-        perf_dir = str(self._paper_ns / "performance") if self.trading_mode == "paper" \
-            else str(PROJECT_ROOT / "data" / "performance")
+        # perf 目錄:有 STRATEGY_OWNER 的多策略部署 → owner-scope,避免三支 live 共用
+        # data/performance/ 互蓋 daily json。paper: data/paper/<o>;live: data/live/<o>;
+        # 舊單策略 live(無 owner): data/performance(向後相容)。
+        _owner_env = os.getenv("STRATEGY_OWNER", "").strip()
+        if self.trading_mode == "paper":
+            perf_dir = str(self._paper_ns / "performance")
+        elif _owner_env:
+            perf_dir = str(PROJECT_ROOT / "data" / "live" / _owner_env / "performance")
+        else:
+            perf_dir = str(PROJECT_ROOT / "data" / "performance")
         self.performance = PerformanceTracker(
             data_dir=perf_dir,
             trading_mode=self.trading_mode,
