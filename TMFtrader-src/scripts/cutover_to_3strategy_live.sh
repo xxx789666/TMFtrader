@@ -2,7 +2,7 @@
 # Cutover:現行單支 live breakout(start.py) → 三支 TMF live(breakout_v7/day_orb/night_v3,headless)。
 #
 # 預設 DRY-RUN(只印計劃、零動作)。真正執行需三道閘同時成立:
-#   ① 旗標 --apply   ② 環境 CONFIRM_LIVE_CUTOVER=YES   ③ 現在落在 05:00-08:30 平窗(盤平、無倉)
+#   ① 旗標 --apply  ② 環境 CONFIRM_LIVE_CUTOVER=YES  ③ 現在落在無交易死區(05:00-08:30 或 13:45-14:50)且無倉
 # idempotent:重跑安全(crontab 用 temp-file edit 非 pipe、不會踩自刪 race;已存在的行不重複加)。
 #
 # 動作:
@@ -46,8 +46,9 @@ fi
 # ---- APPLY 三道閘 ----
 if [ "${CONFIRM_LIVE_CUTOVER:-}" != "YES" ]; then
   echo "!! 缺 CONFIRM_LIVE_CUTOVER=YES(真實 live 切換確認)。中止。"; exit 1; fi
-if [ "$NOW_HM" -lt 0500 ] || [ "$NOW_HM" -gt 0830 ]; then
-  echo "!! 現在 $NOW_HM 不在 05:00-08:30 平窗(避免盤中/持倉中切換)。中止。"; exit 1; fi
+HM=$((10#$NOW_HM))   # 強制十進位(避免 0930/0830 被當八進位出錯)
+if ! { { [ "$HM" -ge 500 ] && [ "$HM" -le 830 ]; } || { [ "$HM" -ge 1345 ] && [ "$HM" -le 1450 ]; }; }; then
+  echo "!! 現在 $NOW_HM 不在平窗(05:00-08:30 或 13:45-14:50,皆無交易死區)。中止。"; exit 1; fi
 # 平窗仍須確認真的無持倉(避免切換時 live 帳戶有單)
 if [ -f data/active_position.json ]; then
   echo "!! data/active_position.json 存在(疑似有 live 持倉)。先確認平倉再切。中止。"; exit 1; fi
