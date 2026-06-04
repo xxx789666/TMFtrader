@@ -13,6 +13,8 @@ session 感知:夜盤交易日 = 15:00 後算當日、午夜後算前一日(跨�
 from datetime import time, timedelta
 from typing import Optional
 
+from loguru import logger
+
 from strategy.base import BaseStrategy, Signal, SignalDirection
 from core.market_data import KBar, MarketSnapshot
 from core.position import Position, Side
@@ -70,28 +72,39 @@ class NightORBStrategy(BaseStrategy):
         if sess != self._cur_sess:                       # 進入新的一夜:重置 OR
             self._cur_sess = sess
             self._or_hi, self._or_lo, self._or_n = kbar.high, kbar.low, 1
-            self._traded = self._or_ready = False
+            self._traded = self._or_ready = self._skip_logged = False
             return None
 
         if self._or_n < self.or_bars:                    # 累積開盤區間
             self._or_hi = max(self._or_hi, kbar.high)
             self._or_lo = min(self._or_lo, kbar.low)
             self._or_n += 1
-            if self._or_n >= self.or_bars:
+            if self._or_n >= self.or_bars:               # OR 剛建好:記寬度判決(每夜一次)
                 self._or_ready = True
+                w = self._or_hi - self._or_lo
+                lo_b, hi_b = self.min_or_atr * atr, self.max_or_atr * atr
+                verdict = "可交易" if lo_b <= w <= hi_b else ("太寬不交易" if w > hi_b else "太窄不交易")
+                logger.info(
+                    f"[NightORB] OR ready @ {kbar.datetime.strftime('%H:%M')}: "
+                    f"OR=[{self._or_lo:.0f},{self._or_hi:.0f}] 寬={w:.0f} ATR={atr:.0f} "
+                    f"合格範圍=[{self.min_or_atr},{self.max_or_atr}]xATR=[{lo_b:.0f},{hi_b:.0f}] -> {verdict}")
             return None
 
         if self._traded or not self._or_ready:
             return None
         orw = self._or_hi - self._or_lo
         if orw < self.min_or_atr * atr or orw > self.max_or_atr * atr:
-            return None
-        if snapshot.adx < self.min_adx:
-            return None
-
+            return None   # 寬度不符:已在 OR-ready 記過判決、此處不重複(避免每根 spam)
         price = snapshot.price
         up = price > self._or_hi + self.buf_atr * atr
         dn = price < self._or_lo - self.buf_atr * atr
+        if snapshot.adx < self.min_adx:
+            # 只在「有突破但被 ADX 擋」時記一次(每夜)
+            if (up or dn) and not self._skip_logged:
+                self._skip_logged = True
+                logger.info(f"[NightORB-skip] 突破但 ADX={snapshot.adx:.1f}<{self.min_adx}"
+                            f" | OR=[{self._or_lo:.0f},{self._or_hi:.0f}] price={price:.0f}")
+            return None
         sig = None
         if self.mode == "breakout":
             if up:
@@ -156,7 +169,7 @@ class NightORBStrategy(BaseStrategy):
         self._cur_sess = None
         self._or_hi = self._or_lo = 0.0
         self._or_n = 0
-        self._or_ready = self._traded = False
+        self._or_ready = self._traded = self._skip_logged = False
         self._entry_atr = self._trail_best = 0.0
         self._bar_time = None
 
