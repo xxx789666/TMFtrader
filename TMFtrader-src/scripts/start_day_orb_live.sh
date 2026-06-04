@@ -32,3 +32,15 @@ nohup "$PY" scripts/start_paper.py --mode live >> "$LOG" 2>&1 &
 NEW_PID=$!
 echo "$NEW_PID" > "$PIDFILE"
 echo "[$(date '+%F %T')] day_orb LIVE start_paper.py --mode live PID=$NEW_PID | TF=30 owner=day_orb headless 真實下單" >> "$LOG"
+
+# 推 TG:排程重啟通知(沿用 restart_day.sh 套路;失敗靜默)
+if [ -f .env ]; then
+  TG_TOKEN=$(grep '^TG_BOT_TOKEN=' .env | cut -d= -f2- | tr -d '"' | tr -d "'")
+  TG_CHAT=$(grep '^TG_CHAT_ID=' .env | cut -d= -f2- | tr -d '"' | tr -d "'")
+  [ -n "$TG_TOKEN" ] && [ -n "$TG_CHAT" ] && \
+    curl -sS --max-time 10 -o /dev/null \
+      "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+      --data-urlencode "chat_id=${TG_CHAT}" \
+      --data-urlencode "text=🔄 [Cron] day_orb LIVE 排程重啟 PID=$NEW_PID (TF30/日盤)
+時間: $(date '+%F %H:%M:%S')" 2>/dev/null || true
+fi
