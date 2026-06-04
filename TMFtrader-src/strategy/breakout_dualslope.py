@@ -13,6 +13,8 @@
 """
 from typing import Optional
 
+from loguru import logger
+
 from strategy.breakout import BreakoutTrendStrategy
 from strategy.base import SignalDirection
 from core.market_data import KBar, MarketSnapshot
@@ -53,34 +55,40 @@ class BreakoutDualSlopeStrategy(BreakoutTrendStrategy):
 
         sig = super().on_kbar(kbar, snapshot, **kw)
         if sig is None:
-            return None
+            return None   # base 無突破/回踩訊號(最常見、[Scan] 已涵蓋)→ 不記 log
 
-        # kill-A-short:砍 A-Squeeze 做空
+        # 以下兩道是 v7 專屬閘:base 有訊號、但被 v7 過濾掉時記 log(方便事後查「行情大動但 v7 沒進」)
+        # kill-A-short:砍 A-Squeeze 做空(結構性逆勢桶、PF 0.58 最大失血)
         if (self.kill_a_short and "A-Squeeze" in sig.reason
                 and sig.direction == SignalDirection.SELL):
             self._cooldown_bars = 0
+            logger.info(f"[v7-skip] kill-A-short｜base訊號={sig.reason}（A-Squeeze 做空、v7 砍）")
             return None
 
         # regime 閘(EMA200 斜率)+ 雙水平對齊(EMA60 同向)
-        if not self._regime_ok(snapshot):
+        rej = self._regime_reject(snapshot)
+        if rej is not None:
             self._cooldown_bars = 0
+            logger.info(f"[v7-skip] {rej}｜base訊號={sig.reason} dir={sig.direction.value}")
             return None
         return sig
 
-    def _regime_ok(self, snapshot: MarketSnapshot) -> bool:
+    def _regime_reject(self, snapshot: MarketSnapshot) -> Optional[str]:
+        """回傳「被哪道閘擋下」的原因字串;None = 通過。"""
         if len(self._ema200_hist) <= self.slope_lookback:
-            return False                                  # 暖機未滿 → 保守不交易
+            return "暖機未滿(EMA200 歷史不足)"            # 保守不交易
         atr = snapshot.atr if snapshot.atr > 0 else 1.0
         s200 = self._ema200_hist[-1] - self._ema200_hist[0]
-        if abs(s200) / self.slope_lookback / atr < self.slope_thr:
-            return False                                  # 斜率平坦(盤整)
+        slope200 = abs(s200) / self.slope_lookback / atr
+        if slope200 < self.slope_thr:
+            return f"EMA200 斜率閘 slope={slope200:.4f}<thr{self.slope_thr}(慢線太平/盤整)"
         if self.require_dual_slope:
             if len(self._ema60_hist) <= self.slope_lookback:
-                return False
+                return "暖機未滿(EMA60 歷史不足)"
             s60 = self._ema60_hist[-1] - self._ema60_hist[0]
             if (s200 > 0) != (s60 > 0):
-                return False                              # 中期與長期不同向
-        return True
+                return f"雙水平不同向 EMA200{'↑' if s200 > 0 else '↓'} vs EMA60{'↑' if s60 > 0 else '↓'}"
+        return None
 
     def reset(self):
         super().reset()
