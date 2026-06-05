@@ -118,7 +118,9 @@ class DayORBStrategy(BaseStrategy):
         # 進場那根 bar,時間型強平永不觸發 → 倉位裸抱過 13:45 收盤、漂到夜盤撮合吃跳空。
         # 日盤同一日曆日,>= 即可(無跨午夜)。
         if snapshot.timestamp is not None and snapshot.timestamp.time() >= self.force_close:
-            return close("日盤盤末強平")
+            # 同一類別供 day_orb(13:30 日盤)與 aft_orb(23:30 傍晚)共用 → reason 依 force_close 時間標,
+            # 別一律寫「日盤」(aft_orb 23:30 收會誤標日盤)。
+            return close("日盤盤末強平" if self.force_close.hour < 14 else "傍晚盤末強平")
         if position.bars_since_entry >= self.max_hold_bars:
             return close(f"時間出場 {position.bars_since_entry}根")
         # trail arming 用 latch:獲利「曾」達 trigger 即武裝(_trail_armed)、之後從最佳點反彈 dist
