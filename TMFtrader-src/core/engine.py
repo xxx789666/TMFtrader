@@ -1256,7 +1256,7 @@ class TradingEngine:
                 "take_profit": signal.take_profit,
             }
             self._broadcast("trade", {**signal_data, "reason": f"[PAPER] {signal.reason}"})
-            notify_entry("paper", instrument, action, price, qty, signal.stop_loss, signal.reason, signal.take_profit, signal.trail_dist_pts)
+            notify_entry("paper", instrument, action, price, qty, signal.stop_loss, signal.reason, signal.take_profit, signal.trail_dist_pts, owner=self._position_owner(instrument))
             # 取得跨策略持倉鎖
             position_lock.acquire(
                 owner=owner, side=action.lower(),
@@ -1322,7 +1322,7 @@ class TradingEngine:
 
         log_fill(action, fill_price, decision.quantity)
         self._save_strategy_state(instrument)
-        notify_entry("live", instrument, action, fill_price, decision.quantity, signal.stop_loss, signal.reason, signal.take_profit, signal.trail_dist_pts)
+        notify_entry("live", instrument, action, fill_price, decision.quantity, signal.stop_loss, signal.reason, signal.take_profit, signal.trail_dist_pts, owner=self._position_owner(instrument))
         # 取得跨策略持倉鎖（live）
         position_lock.acquire(
             owner=self._position_owner(instrument), side=action.lower(),
@@ -1443,7 +1443,7 @@ class TradingEngine:
 
             _exit_pnl = trade.net_pnl if trade else pnl
             _exit_pts = trade.pnl_points if trade else round((price - pos.entry_price) * (1 if pos.side == Side.LONG else -1), 1)
-            notify_exit("paper", instrument, pos.side.value, price, _exit_pnl, _exit_pts, signal.reason)
+            notify_exit("paper", instrument, pos.side.value, price, _exit_pnl, _exit_pts, signal.reason, owner=self._position_owner(instrument))
             # 釋放跨策略持倉鎖
             position_lock.release(owner, mode=self.trading_mode)
 
@@ -1512,7 +1512,7 @@ class TradingEngine:
 
         if trade:
             log_pnl(trade.net_pnl, f"[{instrument}] {signal.reason}")
-            notify_exit("live", instrument, trade.side, fill_price, trade.net_pnl, trade.pnl_points, signal.reason)
+            notify_exit("live", instrument, trade.side, fill_price, trade.net_pnl, trade.pnl_points, signal.reason, owner=self._position_owner(instrument))
             # 釋放跨策略持倉鎖（live）
             position_lock.release(owner, mode=self.trading_mode)
 

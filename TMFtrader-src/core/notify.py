@@ -43,7 +43,8 @@ def _now() -> str:
 
 
 def notify_entry(mode: str, instrument: str, action: str, price: float,
-                 qty: int, stop_loss: float, reason: str, take_profit: float = 0, trail_dist_pts: float = 0):
+                 qty: int, stop_loss: float, reason: str, take_profit: float = 0, trail_dist_pts: float = 0,
+                 owner: str = ""):
     direction = "做多 ▲" if action == "BUY" else "做空 ▼"
     sl_pts = abs(round(price - stop_loss))
     tp_line = ""
@@ -52,8 +53,9 @@ def notify_entry(mode: str, instrument: str, action: str, price: float,
     trail_line = ""
     if trail_dist_pts and trail_dist_pts > 0:
         trail_line = f"追蹤回落止盈: 高點回落 {trail_dist_pts:.0f}pt 出場\n"
+    _tag = ('[PAPER]' if mode == 'paper' else '[LIVE]') + (f"｜{owner}" if owner else "")
     tg(
-        f"{'[PAPER]' if mode == 'paper' else '[LIVE]'} 進場\n"
+        f"{_tag} 進場\n"
         f"{instrument} {direction} x{qty}\n"
         f"進場價: {price:.0f}\n"
         f"停損: {stop_loss:.0f}（{sl_pts}pt）\n"
@@ -65,11 +67,12 @@ def notify_entry(mode: str, instrument: str, action: str, price: float,
 
 
 def notify_exit(mode: str, instrument: str, side: str, price: float,
-                pnl: float, pnl_pts: float, reason: str):
+                pnl: float, pnl_pts: float, reason: str, owner: str = ""):
     emoji = "✅" if pnl >= 0 else "❌"
     sign  = "+" if pnl >= 0 else ""
+    _tag = ('[PAPER]' if mode == 'paper' else '[LIVE]') + (f"｜{owner}" if owner else "")
     tg(
-        f"{'[PAPER]' if mode == 'paper' else '[LIVE]'} 出場 {emoji}\n"
+        f"{_tag} 出場 {emoji}\n"
         f"{instrument} {'多' if side == 'long' else '空'}\n"
         f"出場價: {price:.0f}\n"
         f"損益: {sign}{pnl:.0f} 元（{sign}{pnl_pts:.1f}pt）\n"
