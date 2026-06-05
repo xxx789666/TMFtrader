@@ -313,6 +313,17 @@ class TradingEngine:
             # 未設時用 spec 預設（向後相容，現行 live 行為不變）。
             _stype = os.getenv("STRATEGY_TYPE", "").strip() or spec.strategy_type
             strategy = _create_strategy(_stype)
+            # 依商品 point_value 對齊策略金額層級(單一真相源 = instrument_config):
+            # _create_strategy 一律以 TMF(pv=10、max_loss=4000)建;這裡按 spec.point_value 縮放——
+            # TMF(pv10)不變;MXF(pv50)→ point_value=50、max_loss_twd ×5(4000→20000),使「資金止損
+            # 的點數門檻」跨商品等價(否則 MXF 50元/點會在 1/5 點數就被洗出)。launcher 只需 INSTRUMENTS=MXF。
+            if getattr(strategy, "point_value", 0) and spec.point_value != strategy.point_value:
+                _scale = spec.point_value / strategy.point_value
+                if getattr(strategy, "max_loss_twd", 0) > 0:
+                    strategy.max_loss_twd = strategy.max_loss_twd * _scale
+                strategy.point_value = spec.point_value
+                logger.info(f"[Pipeline] {code}: 依 spec 對齊 point_value={spec.point_value} "
+                            f"max_loss_twd={getattr(strategy, 'max_loss_twd', 0):.0f}")
             pipeline = InstrumentPipeline(
                 code=code,
                 spec=spec,

@@ -56,13 +56,15 @@ check_live(){
 check_live breakout_v7 813 820   # 08:15 cron 重啟
 check_live day_orb     813 821   # 08:16 cron 重啟
 check_live night_v3    1448 1455 # 14:50 cron 重啟
+check_live aft_orb     1450 1457 # 14:52 cron 重啟（2026-06-08 起 paper→MXF live 第4支）
 
 # ── 2. 凍結偵測（交易時段:日 08:45–13:45、夜 15:00–翌05:00;用最新 live log mtime）
 trading=0
 [ $HHMM -ge 845 ] && [ $HHMM -le 1345 ] && trading=1
 { [ $HHMM -ge 1500 ] || [ $HHMM -le 500 ]; } && trading=1
 if [ $trading -eq 1 ]; then
-  newest=$(ls -t "$LOG_DIR"/breakout_v7_live_$DAY.log "$LOG_DIR"/day_orb_live_$DAY.log "$LOG_DIR"/night_v3_live_$DAY.log 2>/dev/null | head -1)
+  # *_live_ 萬用前綴 → 同時抓 TMF(breakout_v7_live_…)與 MXF(breakout_v7_mxf_live_…)log
+  newest=$(ls -t "$LOG_DIR"/*_live_$DAY.log 2>/dev/null | head -1)
   if [ -n "$newest" ] && [ -f "$newest" ]; then
     age=$((EPOCH - $(stat -c %Y "$newest")))
     if [ $age -gt $FREEZE_MAX ]; then
