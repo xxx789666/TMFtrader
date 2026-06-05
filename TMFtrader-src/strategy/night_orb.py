@@ -92,6 +92,12 @@ class NightORBStrategy(BaseStrategy):
 
         if self._traded or not self._or_ready:
             return None
+        # 夜盤交易時段 gate:只在 15:00–05:00 進場。_sess_of 把 00:00–15:00 歸前一夜(供跨午夜
+        # 群組),但 OR ready 後若無此 gate,會在日盤(05:00–15:00)拿舊夜 OR 評估突破而誤進場
+        # (2026-06-05 事故:12:00 誤進 ORB-SHORT)。出場/盤末強平(check_exit)不受此限。
+        nt = kbar.datetime.time()
+        if not (nt >= time(15, 0) or nt <= time(5, 0)):
+            return None
         orw = self._or_hi - self._or_lo
         if orw < self.min_or_atr * atr or orw > self.max_or_atr * atr:
             return None   # 寬度不符:已在 OR-ready 記過判決、此處不重複(避免每根 spam)
