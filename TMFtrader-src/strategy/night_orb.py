@@ -126,6 +126,7 @@ class NightORBStrategy(BaseStrategy):
             self._traded = True
             self._entry_atr = atr
             self._trail_best = price
+            self._trail_armed = False
         return sig
 
     def check_exit(self, position: Position, snapshot: MarketSnapshot) -> Optional[Signal]:
@@ -152,18 +153,21 @@ class NightORBStrategy(BaseStrategy):
         if position.bars_since_entry >= self.max_hold_bars:
             return close(f"時間出場 {position.bars_since_entry}根")
 
+        # trail arming 用 latch:獲利「曾」達 trigger 即武裝(_trail_armed)、之後從最佳點反彈 dist
+        # 即出。原本用「當下」獲利≥trigger 判、未 latch → 反彈到出場線時當下獲利已縮回 <trigger →
+        # 等價於要 ≥(trigger+dist)×ATR 才可能觸發、trail 幾乎不動(2026-06-05 發現、DayORB 同病)。
         if is_long:
             self._trail_best = max(self._trail_best, price)
             if (price - position.entry_price) / atr >= self.trail_trigger_atr:
-                stop = self._trail_best - self.trail_dist_atr * atr
-                if price <= stop:
-                    return close(f"追蹤出場 {stop:.0f}")
+                self._trail_armed = True
+            if self._trail_armed and price <= self._trail_best - self.trail_dist_atr * atr:
+                return close(f"追蹤出場 {self._trail_best - self.trail_dist_atr * atr:.0f}")
         else:
             self._trail_best = min(self._trail_best, price)
             if (position.entry_price - price) / atr >= self.trail_trigger_atr:
-                stop = self._trail_best + self.trail_dist_atr * atr
-                if price >= stop:
-                    return close(f"追蹤出場 {stop:.0f}")
+                self._trail_armed = True
+            if self._trail_armed and price >= self._trail_best + self.trail_dist_atr * atr:
+                return close(f"追蹤出場 {self._trail_best + self.trail_dist_atr * atr:.0f}")
         return None
 
     def get_parameters(self) -> dict:
@@ -177,6 +181,7 @@ class NightORBStrategy(BaseStrategy):
         self._or_n = 0
         self._or_ready = self._traded = self._skip_logged = False
         self._entry_atr = self._trail_best = 0.0
+        self._trail_armed = False
         self._bar_time = None
 
 
