@@ -10,6 +10,9 @@
 # (否則會誤殺 day_orb/night_v3 的 live 進程)。
 set -u
 cd /home/xx/TMFtrader-src
+# 清 stale bytecode:rsync 保留來源 mtime 時 Python 會沿用舊 .pyc 跑到舊碼
+# (2026-06-05 night_v3 跑成 or_bars=6 事故根因)。每次重啟先清、保證載入當前 .py。
+find . -name '*.pyc' -not -path './.venv/*' -delete 2>/dev/null || true
 export TZ=Asia/Taipei
 PY=.venv/bin/python3
 PIDFILE=/tmp/TMFtrader_breakout_v7_live.pid

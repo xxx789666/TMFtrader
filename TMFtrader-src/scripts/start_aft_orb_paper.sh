@@ -5,6 +5,9 @@
 # headless、事件走 TG。精準 kill:PIDFILE + /proc/environ 確認 STRATEGY_OWNER=aft_orb,絕不 pkill -f。
 set -u
 cd /home/xx/TMFtrader-src
+# 清 stale bytecode:rsync 保留來源 mtime 時 Python 會沿用舊 .pyc 跑到舊碼
+# (2026-06-05 night_v3 跑成 or_bars=6 事故根因)。每次重啟先清、保證載入當前 .py。
+find . -name '*.pyc' -not -path './.venv/*' -delete 2>/dev/null || true
 export TZ=Asia/Taipei
 PY=.venv/bin/python3
 PIDFILE=/tmp/TMFtrader_aft_orb_paper.pid
