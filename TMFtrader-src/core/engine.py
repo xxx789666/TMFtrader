@@ -185,6 +185,25 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             max_loss_twd=4000.0,
             point_value=10.0,
         )
+    if strategy_type == "aft_orb":
+        # 傍晚 ORB(aft_orb v2 ablation seal、2026-06-05 研究)。= DayORBStrategy 套「傍晚窗」:
+        # OR 從 15:00 起算、進場窗 15:00–23:30、force_close 23:30、30m breakout。
+        # 沿用 DayORBStrategy 即自動帶 session gate(15:00-23:30)+ snapshot.timestamp 盤末強平。
+        # 凍結: or_bars=7/buf0.40/max_or6.5/sl1.5/min_adx17.5/min_or1.4(realism 7/7 年全正);勿在 live 調參。
+        return DayORBStrategy(
+            mode="breakout",
+            or_bars=7,
+            buf_atr=0.40,
+            max_or_atr=6.5,
+            sl_atr=1.5,
+            min_adx=17.5,
+            min_or_atr=1.4,
+            max_loss_twd=4000.0,
+            point_value=10.0,
+            session_start=(15, 0),
+            session_end=(23, 30),
+            force_close=(23, 30),
+        )
     return AdaptiveMomentumStrategy()
 
 

@@ -225,3 +225,19 @@ self.aggregator = TickAggregator(intervals=[1, 5, 15, 30, 60])
 - `breakout.py.__init__` 接受全部所需 kwargs(expand_ratio / trail_trigger_atr / trail_dist_atr / early_cut_bars / min_adx / afternoon_min_adx / squeeze_grace_bars / max_loss_twd / point_value ...);Signal `.reason` 含 'A-Squeeze' 子字串 → kill_a_short 依賴滿足。
 - **`will_import_clean = true`,無 collision、無 blocking issue、無 breaking verdict。**
 - ⚠️ **唯一阻斷項見 §0**:三個新 strategy_type 尚未在 `instrument_config.py INSTRUMENT_SPECS` 接線,未接前 `_create_strategy` 收不到新型別、會 fall through 到 `AdaptiveMomentumStrategy()`。
+
+---
+
+## 9. 🆕 aft_orb（傍晚 ORB）— 第 4 前推候選（2026-06-05 登記）
+
+> **登記性質**：**僅 paper 前推、不上 live**。現有 3 支正在 TMF live + 即將評估 MXF 放大；aft_orb 須先在 paper 證明 edge（≥6 月、夜盤類套 §3.1 n≥10）才談 live。連線：3 live + 1 aft_orb paper = 4/5（上限內）。
+
+- **是什麼**：夜盤「傍晚段」開盤區間突破（OR 從 15:00 起、進場窗 15:00–23:30、**force_close 23:30**、30m）。與 night_v3（晚段 23:00–05:00）互補。
+- **實作**：沿用 `DayORBStrategy`（套傍晚窗），**自動帶 live repo 的 session gate(15:00–23:30) + snapshot.timestamp 盤末強平**（不重蹈 day_orb/night_v3 的 frozen bug）。engine `strategy_type=="aft_orb"` 分支。
+- **凍結配置（v2 ablation seal，勿在 live/paper 調參）**：`mode=breakout / TF=30 / or_bars=7 / buf_atr=0.40 / max_or_atr=6.5 / sl_atr=1.5 / min_adx=17.5 / min_or_atr=1.4 / force_close=(23,30) / session=15:00–23:30`。
+- **回測基線（realism、slip=1，對照前推用）**：MXF PF **1.40** / DD **13.6%** / ~**10 筆/月**（TXF PF 1.35 / DD 14.5%）。**TMF 無 aft_30m 資料 → 基線為 MXF/TXF 代理**。
+- **證據亮點**：7/7 年全正（含 2020）；**2022 空頭年 MXF +66.4%**（動量突破空頭仍賺，回應 drift 疑慮）；滑價穩健（slip0→2 PF 1.43→1.37）。**最弱 2023 PF 1.14 仍正。**
+- **drift caveat**：MCPT raw 報酬含 drift（TXF 保漂移不顯著）→ 重點看前推**空頭/震盪年是否守住**，非絕對報酬。傍晚流動性較日盤薄、真實滑價/23:30 強平成交品質未模。
+- **前推起算日**：**2026-06-08（下週一）**起（本週五傍晚已過、週末休盤；paper 須 15:00 前啟動才乾淨建 OR，cron 14:52）。
+- **判定**：套 §3 門檻；因屬夜盤時段、**套 §3.1 n≥10 規則**（成交數 < 10 不憑早期樣本判生死）。
+- **launcher**：`scripts/start_aft_orb_paper.sh`（TF=30、owner=aft_orb、隔離 paper namespace）。
