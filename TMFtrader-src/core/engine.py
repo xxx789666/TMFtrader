@@ -1216,6 +1216,14 @@ class TradingEngine:
                 f"[Lock] {owner} 進場跳過：{blocker.get('owner')} 已持倉 "
                 f"({blocker.get('side')} {blocker.get('instrument')} @ {blocker.get('entry_price')})"
             )
+            # 被「同模式他策略」持鎖擋下 → 重置本策略「本 session 已交易」旗標。
+            # 否則 on_kbar 產訊號時已設 _traded=True(day_orb L97/night_orb L126),被擋後該旗標
+            # 殘留 → on_kbar 整 session return None → 鎖放開後仍永不進場
+            # (aft_orb 抱倉擋 night_v3 23:00 → night_v3 整夜不交班接手的 bug、2026-06-05)。
+            # 重置後鎖放開、若突破仍成立即可進場;每 session 實際成交仍≤1(被擋的嘗試未成交)。
+            _strat = self.pipelines[instrument].strategy
+            if getattr(_strat, "_traded", False):
+                _strat._traded = False
             return
 
         # 下單失敗冷卻中 → 跳過（所有模式適用）
