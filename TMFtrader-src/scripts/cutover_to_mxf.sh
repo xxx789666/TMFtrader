@@ -73,6 +73,20 @@ for o in breakout_v7 day_orb; do
   L=$(ls -t data/logs/${o}_mxf_live_*.log 2>/dev/null | head -1)
   [ -n "$L" ] && grep -aE "point_value|對齊|INSTRUMENTS|login OK|Engine. started" "$L" | tr -d '\033' | tail -4
 done
+echo "-- 🔑 權益守門(MXF 每口風控額 ~11,605;權益 <290K → 風控算 0 口=靜默不交易)--"
+BAL=$(grep -ah 'Account. balance' data/logs/*_mxf_live_*.log 2>/dev/null | tr -d '\033' | tail -1 | grep -oE '[0-9,]+' | tr -d ',' | tail -1)
+if [ -n "${BAL:-}" ]; then
+  if [ "$BAL" -lt 290000 ]; then
+    echo "  🚨🚨 帳戶權益 $BAL < 290,000 → MXF 會算出 0 口、整夜不進場!"
+    echo "       請補保證金到 60万後重啟 MXF 進程(bash scripts/start_*_mxf_live.sh),否則白切。"
+  elif [ "$BAL" -lt 580000 ]; then
+    echo "  ⚠️ 權益 $BAL(可跑、但未達 60万;<60万 時 MXF 口數可能 <2)"
+  else
+    echo "  ✅ 權益 $BAL ≥ 60万（MXF 典型 2 口、金額止損 200pt≈ATR-SL）"
+  fi
+else
+  echo "  (讀不到 [Account] balance、請手動確認啟動日誌)"
+fi
 echo
 echo "Rollback:pkill -f 'start_paper.py --mode live';crontab sed 反向換回 *_live.sh/_paper.sh;跑 3 支 *_live.sh + start_aft_orb_paper.sh。"
 echo "⚠️ night_v3/aft_orb 由 14:50/14:52 cron 起;若現在已過、想立即起:bash scripts/start_night_v3_mxf_live.sh && bash scripts/start_aft_orb_mxf_live.sh"
