@@ -75,7 +75,7 @@ class BreakoutTrendStrategy(BaseStrategy):
         # 時段
         session_start: tuple = (8, 45),  # 台指正常盤開盤
         session_end: tuple = (13, 15),   # 收盤前
-        force_close_time: tuple = (13, 25),  # 強制平倉時間
+        force_close_time: tuple = (13, 30),  # 日盤強制平倉時間(2026-06-05 user 指定 13:25→13:30)
     ):
         self.squeeze_ratio = squeeze_ratio
         self.expand_ratio = expand_ratio
@@ -417,14 +417,17 @@ class BreakoutTrendStrategy(BaseStrategy):
                 if loss_twd >= self.max_loss_twd:
                     return close_signal(f"金額止損 -{loss_twd:,.0f}TWD {loss_pts:.0f}pts")
 
-        # ── 強制盤末平倉（日盤 13:25 / 夜盤 04:55）
-        if self._current_bar_time is not None:
-            bar_time = self._current_bar_time.time()
+        # ── 強制盤末平倉（日盤 13:30 / 夜盤 04:55）
+        # 用 snapshot.timestamp(引擎每 tick 餵的當下時間),不可用 self._current_bar_time
+        # ——進場後 engine 只在無倉時呼叫 on_kbar,_current_bar_time 會凍結在進場 bar、
+        # 強平永不觸發(2026-06-05 發現,同 day_orb/night_orb 的 frozen bug)。
+        if snapshot.timestamp is not None:
+            now_t = snapshot.timestamp.time()
             night_force_close = time(4, 55)
-            in_day_session = time(8, 45) <= bar_time <= time(13, 45)
-            if in_day_session and bar_time >= self.force_close_time:
+            in_day_session = time(8, 45) <= now_t <= time(13, 45)
+            if in_day_session and now_t >= self.force_close_time:
                 return close_signal("日盤盤末強制平倉")
-            elif not in_day_session and bar_time >= night_force_close and bar_time <= time(5, 10):
+            elif not in_day_session and night_force_close <= now_t <= time(5, 10):
                 return close_signal("夜盤盤末強制平倉")
 
         # ── 時間出場

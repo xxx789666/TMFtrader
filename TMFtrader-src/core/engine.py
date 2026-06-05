@@ -166,7 +166,7 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             min_or_atr=1.3,
             max_loss_twd=4000.0,
             point_value=10.0,
-            force_close=(13, 25),
+            force_close=(13, 30),   # 日盤盤末強平(2026-06-05 user 指定 13:25→13:30)
         )
     if strategy_type == "night_v3":
         # NightORBStrategy — 夜盤開盤區間突破(不可動到既有 "orb" 分支)、60m。
