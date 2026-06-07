@@ -53,10 +53,9 @@ check_live(){
   if kill -0 "$pid" 2>/dev/null; then wlog "$owner live OK (pid $pid)"
   else alert "${owner}_live" "🚨 live $owner 不在了（pid $pid 已歿）@ $(date '+%m/%d %H:%M')"; fi
 }
-check_live breakout_v7 813 820   # 08:15 cron 重啟
-check_live day_orb     813 821   # 08:16 cron 重啟
-check_live night_v3    1448 1455 # 14:50 cron 重啟
-check_live aft_orb     1450 1457 # 14:52 cron 重啟（2026-06-08 起 paper→MXF live 第4支）
+# 2026-06-08 起 live 只 2 支:day_v7(=breakout_v7)+ night_v7（取代 night_v3;day_orb/aft_orb 已下架）
+check_live breakout_v7 813 820   # 08:15 cron 重啟（day_v7）
+check_live night_v7    1448 1455 # 14:50 cron 重啟（夜盤 30m 全夜盤）
 
 # ── 2. 凍結偵測（交易時段:日 08:45–13:45、夜 15:00–翌05:00;用最新 live log mtime）
 trading=0

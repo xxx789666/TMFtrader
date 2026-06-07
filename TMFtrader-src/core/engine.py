@@ -185,6 +185,26 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             max_loss_twd=4000.0,
             point_value=10.0,
         )
+    if strategy_type == "night_v7":
+        # NightORBStrategy — 夜盤突破「night_v7」(2026-06-06 凍結卡 strategy_night_v7.md)。
+        # 取代已判死的 night_v3:重篩 30m + or_bars 11 + min_adx 30 + 緊停損 sl1.0、max_hold 18。
+        # 全夜盤 15:00–05:00(NightORBStrategy 內建 gate)、04:55 盤末強平。TF 由 launcher 設 30。
+        # 邊緣/觀察級(PF~1.1、2026 已負)→ 小量前推、PF 持續<1.0 即退役;勿在 live 調參。
+        return NightORBStrategy(
+            mode="breakout",
+            or_bars=11,
+            buf_atr=0.35,
+            max_or_atr=6.5,
+            sl_atr=1.0,
+            tp_atr=4.0,
+            trail_trigger_atr=1.0,
+            trail_dist_atr=1.2,
+            max_hold_bars=18,
+            min_adx=30.0,
+            min_or_atr=2.4,
+            max_loss_twd=4000.0,
+            point_value=10.0,
+        )
     if strategy_type == "aft_orb":
         # 傍晚 ORB(aft_orb v2 ablation seal、2026-06-05 研究)。= DayORBStrategy 套「傍晚窗」:
         # OR 從 15:00 起算、進場窗 15:00–23:30、force_close 23:30、30m breakout。
