@@ -16,6 +16,8 @@
 
 set -u
 cd /home/xx/TMFtrader-src
+# 清 stale bytecode(rsync mtime → 沿用舊 .pyc 跑舊碼;2026-06-05 night_v3 or_bars=6 事故根因)。
+find . -name '*.pyc' -not -path './.venv/*' -delete 2>/dev/null || true
 export TZ=Asia/Taipei
 PY=.venv/bin/python3   # 明確用 venv python(不靠 activate/PATH,避免 cron 環境抓到系統 python)
 
@@ -39,6 +41,7 @@ export TIMEFRAME=30
 export STRATEGY_TYPE=day_orb
 export STRATEGY_OWNER=day_orb
 export RECORD_TICKS=0   # paper 不錄 tick(live 已錄、避免寫進同一個 data/ticks 檔)
+export RECORD_DECISIONS=1   # 錄決策帶(snapshot/OR/訊號)→ 日後 decision-tape 回測
 
 LOG="data/logs/day_orb_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs

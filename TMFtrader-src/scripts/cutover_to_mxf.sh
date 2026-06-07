@@ -1,27 +1,29 @@
 #!/bin/bash
-# Cutover:現行(3 TMF live + aft_orb paper)→ 2 支 MXF live:day_v7(=breakout_v7)+ night_v7。
-# 2026-06-08 起。下架 day_orb / aft_orb / night_v3(night_v3 已被 lab 判死、換 night_v7 30m)。
+# Cutover:現行(3 TMF live + aft_orb paper)→ 2 支 MXF live(day_v7=breakout_v7 + night_v7)
+#          + 2 支 paper(day_orb + aft_orb,錄 decision tape、不下真錢)。2026-06-08 起。
+#          night_v3 退役(lab 判死、換 night_v7 30m);day_orb 由 live 轉 paper。
 #
 # 預設 DRY-RUN(只印計劃、零動作)。真正執行需三道閘:
 #   ① 旗標 --apply  ② 環境 CONFIRM_MXF_CUTOVER=YES  ③ 落在無交易死區(05:00-08:30 或 13:45-14:50)且無倉
-# 建議「週一早上 05:00-08:30」跑:day_v7 趕在 08:45 開盤前起;night_v7 交給 14:50 cron(15:00 前建 OR)。
-# idempotent:crontab 用 sed 換 launcher + 移除下架策略行 + temp-file edit(不踩自刪 race)。
+# 建議「週一早上 05:00-08:30」跑:day_v7 趕在 08:45 開盤前起;night_v7 交給 14:50 cron;day_orb paper 08:16、aft paper 14:52。
+# idempotent:crontab 用 sed 換 launcher(live→mxf、night_v3→night_v7、day_orb→paper)+ temp-file edit(不踩自刪 race)。
 set -u
 cd /home/xx/TMFtrader-src
 export TZ=Asia/Taipei
 APPLY=0; [ "${1:-}" = "--apply" ] && APPLY=1
 NOW_HM=$(date +%H%M); NOW=$(date '+%F %T')
 
-# 換 launcher:breakout_v7→mxf(day_v7);night_v3→night_v7_mxf(夜盤改 30m)
+# 換 launcher:breakout_v7→mxf(day_v7);night_v3→night_v7_mxf(夜盤改 30m);day_orb live→paper。
+# day_orb + aft_orb 回 paper 跑(錄 decision tape、不下真錢);aft_orb cron 本來就是 paper、不動。
 SED=(
   "s|start_breakout_v7_live.sh|start_breakout_v7_mxf_live.sh|"
   "s|start_night_v3_live.sh|start_night_v7_mxf_live.sh|"
+  "s|start_day_orb_live.sh|start_day_orb_paper.sh|"
 )
-REMOVE='start_day_orb|start_aft_orb'   # 下架 day_orb + aft_orb 的 cron 行
 
 echo "== MXF Cutover 計劃(2 支:day_v7 + night_v7)@ $NOW =="
 echo "[1] 停 3 支 TMF live + aft_orb paper"
-echo "[2] crontab:breakout_v7→mxf、night_v3→night_v7_mxf、移除 day_orb+aft_orb 行"
+echo "[2] crontab:breakout_v7→mxf、night_v3→night_v7_mxf、day_orb→paper(aft_orb 維持 paper)"
 echo "[3] 立即起 day_v7(breakout_v7 MXF);night_v7 交給 14:50 cron"
 echo
 echo "-- 現況:live 進程 --"; ps -eo pid,cmd | grep 'start_paper.py --mode live' | grep -v grep || echo "  (無)"
@@ -51,9 +53,8 @@ sleep 3
 TMP=/tmp/ct_mxf_$$.txt
 crontab -l 2>/dev/null > "$TMP"
 for s in "${SED[@]}"; do sed -i "$s" "$TMP"; done
-grep -vE "$REMOVE" "$TMP" > "$TMP.2" && mv "$TMP.2" "$TMP"
 crontab "$TMP"; rm -f "$TMP"
-echo "  [2] crontab 已更新(day_v7+night_v7、移除 day_orb/aft_orb)"
+echo "  [2] crontab:day_v7+night_v7 = live MXF;day_orb+aft_orb = paper(錄 decision)"
 bash scripts/start_breakout_v7_mxf_live.sh
 echo "  [3] 已起 day_v7(breakout_v7 MXF);night_v7 等 14:50 cron"
 sleep 5
@@ -72,5 +73,5 @@ if [ -n "${BAL:-}" ]; then
   else echo "  ✅ 權益 $BAL ≥ 60万"; fi
 else echo "  (讀不到 balance、手動確認)"; fi
 echo
-echo "Rollback:pkill live;crontab 把 *_mxf_live 換回 *_live.sh、night_v7→night_v3、加回 day_orb/aft_orb 行;跑舊 launcher。"
+echo "Rollback:pkill live+paper;crontab 把 *_mxf_live 換回 *_live.sh、night_v7→night_v3、day_orb_paper→day_orb_live;跑舊 launcher。"
 echo "⚠️ night_v7 由 14:50 cron 起;想立即起:bash scripts/start_night_v7_mxf_live.sh"

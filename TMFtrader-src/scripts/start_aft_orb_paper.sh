@@ -28,6 +28,7 @@ export TIMEFRAME=30
 export STRATEGY_TYPE=aft_orb
 export STRATEGY_OWNER=aft_orb
 export RECORD_TICKS=0
+export RECORD_DECISIONS=1   # 錄決策帶(snapshot/OR/訊號)→ 日後 decision-tape 回測
 
 LOG="data/logs/aft_orb_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs
