@@ -26,6 +26,7 @@ export TIMEFRAME=5
 export STRATEGY_TYPE=breakout_v7
 export STRATEGY_OWNER=breakout_v7
 export RECORD_TICKS=1
+export RECORD_DECISIONS=1   # 錄決策帶(snapshot/OR/訊號)→ 日後回測逐筆對齊
 
 LOG="data/logs/breakout_v7_mxf_live_$(date +%Y%m%d).log"
 mkdir -p data/logs

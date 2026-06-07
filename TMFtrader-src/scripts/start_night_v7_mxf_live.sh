@@ -27,6 +27,7 @@ export TIMEFRAME=30
 export STRATEGY_TYPE=night_v7
 export STRATEGY_OWNER=night_v7
 export RECORD_TICKS=0
+export RECORD_DECISIONS=1   # 錄決策帶(snapshot/OR/訊號)→ 日後回測逐筆對齊
 
 LOG="data/logs/night_v7_mxf_live_$(date +%Y%m%d).log"
 mkdir -p data/logs

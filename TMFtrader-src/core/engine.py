@@ -36,6 +36,7 @@ from core.position import PositionManager, Position, Side
 from core.logger import setup_logger, log_trade, log_order, log_fill, log_pnl
 from core.notify import notify_entry, notify_exit, notify_exit_failed, tg
 from core import position_lock
+from core import decision_recorder
 from core.instrument_config import INSTRUMENT_SPECS, get_spec, InstrumentSpec
 from strategy.base import BaseStrategy, Signal, SignalDirection
 from strategy.momentum import AdaptiveMomentumStrategy
@@ -1187,6 +1188,9 @@ class TradingEngine:
                 snapshot_5m=pipeline.snapshot_5m,
                 snapshot_15m=pipeline.snapshot_15m,
             )
+            # 決策帶錄製(RECORD_DECISIONS=1 才寫):記下策略當下看到的 snapshot+OR 狀態+訊號,
+            # 供日後回測直接讀 live 真值、逐筆對齊(消除 indicator/暖身誤差)。失敗靜默。
+            decision_recorder.record(kbar, pipeline.snapshot, pipeline.strategy, entry_signal, instrument)
             if entry_signal:
                 self._execute_entry(instrument, entry_signal)
             else:
