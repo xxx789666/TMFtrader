@@ -15,12 +15,12 @@ except Exception:
 TARGETS = [("breakout_v7", "data/live/breakout_v7", "live"),
            ("day_orb", "data/live/day_orb", "live"),
            ("night_v3", "data/live/night_v3", "live"),
-           ("aft_orb", "data/paper/aft_orb", "paper")]
+           ("chips_exec", "data/paper/chips_exec", "paper")]   # 2026-06-09 取代 aft_orb:chips 真 tick paper
 today = datetime.now().strftime("%Y-%m-%d")
 yday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 # 各策略的「合法進場時段」(時:分),用於出窗檢查
-WIN = {"night_v3": ((15, 0), (5, 0)), "aft_orb": ((15, 0), (23, 30)),
+WIN = {"night_v3": ((15, 0), (5, 0)), "chips_exec": ((8, 45), (13, 45)),
        "breakout_v7": None, "day_orb": ((8, 45), (13, 45))}
 
 def in_window(hhmm_str, win):
@@ -104,7 +104,7 @@ def fmt_status(st):
         return f"待進 {st.get('trade_date','')} {side} combo{st.get('combo',0):+.2f}"
     return json.dumps(st, ensure_ascii=False)[:60]
 
-lines = [f"📋 [覆盤] {today} 早 — 昨夜 live x3 + aft_orb paper + CSV策略x2"]
+lines = [f"📋 [覆盤] {today} 早 — live + chips_exec paper(真tick) + CSV(chips-OHLC參考/maxpain)"]
 for name, base, mode in TARGETS:
     trades = load(base)
     if not trades:

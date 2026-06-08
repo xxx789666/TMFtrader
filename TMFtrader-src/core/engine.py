@@ -46,6 +46,7 @@ from strategy.orb import ORBStrategy
 from strategy.breakout_dualslope import BreakoutDualSlopeStrategy
 from strategy.day_orb import DayORBStrategy
 from strategy.night_orb import NightORBStrategy
+from strategy.chips_exec import ChipsExecStrategy
 from strategy.filters import MarketRegime, SessionManager, SessionPhase
 from risk.manager import RiskManager
 from core.performance import PerformanceTracker
@@ -224,6 +225,18 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             session_start=(15, 0),
             session_end=(23, 30),
             force_close=(23, 30),
+        )
+    if strategy_type == "chips_exec":
+        # chips_combo 訊號的引擎真 tick paper 執行載具(2026-06-09)。訊號計算在
+        # scripts/chips_combo_daily.py(cron、HTTP 籌碼)、寫 next_signal.json;這支只執行:
+        # 日盤開盤窗讀 side → 1 口進場(真 tick 成交)、−2% 引擎硬停、13:44 收盤強平、不過夜。
+        # 固定 1 口靠 launcher RISK_PROFILE=fixed1_paper;TF 須 ≥30(讓 −2% 停損過 8×ATR gate)。
+        return ChipsExecStrategy(
+            stop_pct=0.02,
+            point_value=10.0,
+            session_start=(8, 30),
+            entry_window_end=(9, 30),
+            force_close=(13, 44),
         )
     return AdaptiveMomentumStrategy()
 
