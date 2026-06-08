@@ -12,16 +12,17 @@ try:
 except Exception:
     def tg(m): pass
 
+# 2026-06-09 cutover 後現役:day_v7(breakout_v7)+ night_v7 兩支 live MXF + chips_exec paper。
+# 已退場:night_v3(被 night_v7 取代)、day_orb(暫停)、aft_orb(被 chips_exec 取代)。
 TARGETS = [("breakout_v7", "data/live/breakout_v7", "live"),
-           ("day_orb", "data/live/day_orb", "live"),
-           ("night_v3", "data/live/night_v3", "live"),
-           ("chips_exec", "data/paper/chips_exec", "paper")]   # 2026-06-09 取代 aft_orb:chips 真 tick paper
+           ("night_v7", "data/live/night_v7", "live"),
+           ("chips_exec", "data/paper/chips_exec", "paper")]
 today = datetime.now().strftime("%Y-%m-%d")
 yday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 # 各策略的「合法進場時段」(時:分),用於出窗檢查
-WIN = {"night_v3": ((15, 0), (5, 0)), "chips_exec": ((8, 45), (13, 45)),
-       "breakout_v7": None, "day_orb": ((8, 45), (13, 45))}
+WIN = {"night_v7": ((15, 0), (5, 0)), "chips_exec": ((8, 45), (13, 45)),
+       "breakout_v7": None}
 
 def in_window(hhmm_str, win):
     if not win or not hhmm_str or len(hhmm_str) < 16:
@@ -104,7 +105,7 @@ def fmt_status(st):
         return f"待進 {st.get('trade_date','')} {side} combo{st.get('combo',0):+.2f}"
     return json.dumps(st, ensure_ascii=False)[:60]
 
-lines = [f"📋 [覆盤] {today} 早 — live + chips_exec paper(真tick) + CSV(chips-OHLC參考/maxpain)"]
+lines = [f"📋 [覆盤] {today} 早 — live x2(day_v7/night_v7) + chips_exec paper(真tick) + CSV(chips-OHLC/maxpain)"]
 for name, base, mode in TARGETS:
     trades = load(base)
     if not trades:
