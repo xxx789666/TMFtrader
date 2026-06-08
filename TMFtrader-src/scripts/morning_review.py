@@ -1,8 +1,9 @@
 """早盤覆盤 — 夜盤收盤後(cron Tue-Sat 06:00 TST)推 TG。
 讀 3 支 live(owner-scoped data/live/<owner>/)+ aft_orb paper(data/paper/aft_orb/)的
 performance daily JSON(昨天+今天、夜盤跨午夜),彙整每支:筆數/淨損益/勝率/最近成交/出窗旗標。
-純讀取 + 推 TG。"""
-import os, sys, json
+另讀 CSV-tape 型 paper 策略(chips_combo / maxpain_v2,HTTP 資料、自己的 cron):累積
+PF/勝率 + 昨/今新成交 + 當前狀態(next_signal.json)。純讀取 + 推 TG。"""
+import os, sys, json, csv
 from datetime import datetime, timedelta
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 os.chdir(ROOT); sys.path.insert(0, ROOT)
@@ -47,7 +48,63 @@ def load(base):
                     pass
     return trades
 
-lines = [f"📋 [覆盤] {today} 早 — 昨夜 live x3 + aft_orb paper"]
+# ── CSV-tape 型 paper 策略(HTTP 資料、不過 engine、自己的 cron)──
+def _fnum(x):
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
+
+def csv_section(name, tape, status, date_col):
+    """回 lines:累積 PF/勝率 + 昨/今新成交 + 當前狀態。"""
+    rows = []
+    if os.path.exists(tape):
+        try:
+            with open(tape, encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+        except Exception:
+            rows = []
+    if not rows and not os.path.exists(status):
+        return [f"\n[{name}/paper-csv] 無資料"]
+    out = []
+    pnls = [v for v in (_fnum(r.get("pnl")) for r in rows) if v is not None]
+    if pnls:
+        n = len(pnls); wins = [x for x in pnls if x > 0]
+        gp = sum(wins); gl = -sum(x for x in pnls if x < 0)
+        pf = (gp / gl) if gl > 0 else float("inf")
+        out.append(f"\n[{name}/paper-csv] 累積{n}筆 淨{sum(pnls):+.0f}元 勝{len(wins)}/{n} PF{pf:.2f}")
+    else:
+        out.append(f"\n[{name}/paper-csv] 累積0筆")
+    fresh = [r for r in rows if str(r.get(date_col, ""))[:10] in (yday, today)]
+    for r in fresh[-3:]:
+        out.append(f"  新成交 {str(r.get(date_col,''))[:10]} {r.get('side','long')} "
+                   f"{_fnum(r.get('pnl')) or 0:+.0f} {str(r.get('exit_reason',''))[:16]}")
+    if not fresh and rows:
+        r = rows[-1]
+        out.append(f"  (昨/今無新成交;最近 {str(r.get(date_col,''))[:10]} "
+                   f"{r.get('side','long')} {_fnum(r.get('pnl')) or 0:+.0f})")
+    if os.path.exists(status):
+        try:
+            st = json.load(open(status, encoding="utf-8"))
+            out.append(f"  狀態: {fmt_status(st)}")
+        except Exception:
+            pass
+    return out
+
+def fmt_status(st):
+    s = st.get("state")
+    if s == "open":      # maxpain 持倉中
+        return f"持倉中 多 S1={st.get('S1')} 停={st.get('stop_at')} 抱到{st.get('ed')}結算"
+    if s == "signal_fired":
+        return f"訊號出 dist{st.get('dist',0):+.3f}、明開盤進多第1口(目標{st.get('ed')})"
+    if s == "flat":
+        return "無持倉(等下個訊號日)"
+    if "side" in st:     # chips_combo 待進場
+        side = st.get("side") or "flat"
+        return f"待進 {st.get('trade_date','')} {side} combo{st.get('combo',0):+.2f}"
+    return json.dumps(st, ensure_ascii=False)[:60]
+
+lines = [f"📋 [覆盤] {today} 早 — 昨夜 live x3 + aft_orb paper + CSV策略x2"]
 for name, base, mode in TARGETS:
     trades = load(base)
     if not trades:
@@ -62,6 +119,11 @@ for name, base, mode in TARGETS:
     bad = [t for t in trades if not in_window(t.get("entry_time", ""), WIN.get(name))]
     if bad:
         lines.append(f"  ⚠️ {len(bad)} 筆疑「出窗進場」(進場時間不在 {name} 交易時段)")
+
+lines += csv_section("chips_combo", "data/chips_combo/decisions.csv",
+                     "data/chips_combo/next_signal.json", "trade_date")
+lines += csv_section("maxpain_v2", "data/maxpain_v2/decisions.csv",
+                     "data/maxpain_v2/next_signal.json", "exit_date")
 
 msg = "\n".join(lines)
 print(msg)
