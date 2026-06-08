@@ -74,11 +74,17 @@ def fetch_foreign_netoi(start, end):
 
 
 def fetch_tx_ohlc(start, end):
-    """TX 期貨日 OHLC(近月,FinMind TaiwanFuturesDaily)。回 {date:{open,high,low,close}}。"""
+    """TX 期貨日 OHLC(近月日盤,FinMind TaiwanFuturesDaily)。回 {date:{open,high,low,close}}。
+    ⚠️ 必須只取 trading_session=='position' 日盤:chips 是日盤策略(開盤進、收盤出),
+    after_market(夜盤 15:00→05:00)與日盤背離大時會記錯 session(06-08 空單 −736 被夜盤誤記成
+    +2881)。另排除價差合約(contract_date 含 '/')、同日取最大量近月。"""
     rows = fetch_finmind("TaiwanFuturesDaily", "TX", start, end)
     out = {}
     for r in rows:
-        # 近月:trading_session=='position'/contract_date 最近;FinMind TX 含多合約,取成交量最大的當月
+        if r.get("trading_session") != "position":        # 只取日盤
+            continue
+        if "/" in str(r.get("contract_date", "")):         # 排除價差(calendar spread)合約
+            continue
         d = r["date"]
         try:
             o, h, l, c = float(r["open"]), float(r["max"]), float(r["min"]), float(r["close"])
@@ -88,7 +94,7 @@ def fetch_tx_ohlc(start, end):
         if o <= 0 or h <= 0:
             continue
         prev = out.get(d)
-        if prev is None or vol > prev["vol"]:
+        if prev is None or vol > prev["vol"]:              # 同日取最大量(近月)
             out[d] = {"open": o, "high": h, "low": l, "close": c, "vol": vol}
     return {d: {k: v[k] for k in ("open", "high", "low", "close")} for d, v in out.items()}
 
