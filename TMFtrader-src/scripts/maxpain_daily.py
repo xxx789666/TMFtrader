@@ -85,10 +85,17 @@ def fetch_opt_oi(date_iso):
 
 
 def fetch_tx_ohlc(start, end):
+    """每交易日的日盤(position)OHLC。進場 t+1 開盤、結算抱日盤收盤 → 一律用 position 場。
+    ⚠️ 不可用 after_market(夜盤,15:00→05:00):與日盤背離大時會記錯 session(chips_combo 06-08
+    踩過,空單 −736 被夜盤誤記成 +2881)。同時排除價差合約(contract_date 含 '/')、取最大量近月。"""
     rows = _finmind({"dataset": "TaiwanFuturesDaily", "data_id": "TX",
                      "start_date": start, "end_date": end}).get("data", [])
     out = {}
     for r in rows:
+        if r.get("trading_session") != "position":      # 只取日盤
+            continue
+        if "/" in str(r.get("contract_date", "")):       # 排除價差(calendar spread)合約
+            continue
         try:
             o, h, l, c, vol = float(r["open"]), float(r["max"]), float(r["min"]), float(r["close"]), float(r.get("volume", 0))
         except (KeyError, ValueError, TypeError):
@@ -96,7 +103,7 @@ def fetch_tx_ohlc(start, end):
         if o <= 0:
             continue
         d = r["date"]
-        if d not in out or vol > out[d]["vol"]:
+        if d not in out or vol > out[d]["vol"]:           # 同日取最大量(近月)
             out[d] = {"open": o, "high": h, "low": l, "close": c, "vol": vol}
     return {d: {k: v[k] for k in ("open", "high", "low", "close")} for d, v in out.items()}
 
