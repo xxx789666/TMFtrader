@@ -244,9 +244,9 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
         # 訊號在 scripts/maxpain_daily.py(cron、官網 OI)→ next_signal.json;這支執行:
         # t+1 開盤窗進第1口、+1% check_scale 加第2口、−2% 引擎硬停、結算日 13:30 強平。
         # 多日持倉跨重啟靠 _strategy_state(ed/S1/scaled)。固定第1口靠 RISK_PROFILE=fixed1_paper。
-        # 追蹤止盈 -1.25%(2026-06-09 forward 驗證:歷史 2020-2025/2020-2026 兩窗皆 in-sample 最高,
-        # 但對 trail 值高度敏感=疑過擬合;故不上 live、改在 paper 真 tick forward 累積 OOS。
-        # 可用 MAXPAIN_TRAIL_PCT 調(設 0 即回凍結無止盈)。)
+        # forward 驗證(2026-06-09):實際執行線 = 無止盈(trail_pct 預設 0),抱到結算/−2%硬停;
+        # 同時 maxpain_exec 內建 what-if 影子記錄器,每筆平行算 無止盈/−1.0/−1.25/−1.5% 各會如何
+        # (寫 data/maxpain_v2/whatif.csv),累積真 tick OOS 比較。要實際執行某 trail → 設 MAXPAIN_TRAIL_PCT。
         return MaxPainExecStrategy(
             stop_pct=0.02,
             scale_pct=0.01,
@@ -254,7 +254,7 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             session_start=(8, 30),
             entry_window_end=(9, 30),
             settle_close=(13, 30),
-            trail_pct=float(os.getenv("MAXPAIN_TRAIL_PCT", "0.0125")),
+            trail_pct=float(os.getenv("MAXPAIN_TRAIL_PCT", "0.0")),
             arm_pct=float(os.getenv("MAXPAIN_ARM_PCT", "0.01")),
         )
     return AdaptiveMomentumStrategy()
@@ -1596,6 +1596,15 @@ class TradingEngine:
 
             # 關鍵：Paper 模式也要關閉持倉，否則下次掃描又會觸發
             trade = self.position_manager.close_position(instrument, price, f"[PAPER] {signal.reason}")
+
+            # 平倉 hook（任何出場路徑都會到這:硬停/結算/強平/收盤）→ 通知策略收尾
+            # （maxpain_exec what-if 影子記錄器用;其他策略無此方法→跳過、零影響）
+            _pc = getattr(pipeline.strategy, "on_position_closed", None) if (pipeline := self.pipelines.get(instrument)) else None
+            if _pc:
+                try:
+                    _pc(price, signal.reason)
+                except Exception as _e:
+                    logger.warning(f"[{instrument}] on_position_closed hook 失敗: {_e}")
 
             self._broadcast("trade", {
                 "time": datetime.now().isoformat(),

@@ -15,6 +15,7 @@
 
 ⚠️ TF 須 ≥30(讓 −2% 停損 ≈3.5-5×ATR 過 risk_manager 8×ATR gate)。標的 MXF 小台(pv50)。
 """
+import csv
 import json
 from datetime import date, time
 from pathlib import Path
@@ -26,6 +27,12 @@ from core.position import Position, Side
 
 ROOT = Path(__file__).resolve().parent.parent
 SIGNAL_FILE = ROOT / "data" / "maxpain_v2" / "next_signal.json"
+
+# what-if 影子記錄:同一筆真實進場下,平行算多個出場變體會如何(無止盈=實際執行線、其餘為影子)。
+# 用「實際執行無止盈、抱最久 → 看得到所有 tick」的物理特性,把較早出場的 trail 變體一併算出。
+WF_VARIANTS = [("noTP", 0.0), ("trail1.0", 0.010), ("trail1.25", 0.0125), ("trail1.5", 0.015)]
+WF_PENDING = ROOT / "data" / "maxpain_v2" / "whatif_pending.json"   # 進行中持倉的影子狀態(跨重啟還原)
+WF_TAPE = ROOT / "data" / "maxpain_v2" / "whatif.csv"              # 已結束持倉的逐筆變體結果
 
 
 class MaxPainExecStrategy(BaseStrategy):
@@ -88,6 +95,7 @@ class MaxPainExecStrategy(BaseStrategy):
         self._mp_scaled = False
         self._mp_hi = price                           # 追蹤止盈:持有期最高點(從進場價起算)
         self._mp_armed = False
+        self._wf_start(signal_t, ed, price, kbar.datetime)
         return Signal(direction=SignalDirection.BUY, strength=0.7,
                       stop_loss=round(price * (1 - self.stop_pct), 1), take_profit=0.0,
                       reason=f"maxpain long dist{sig.get('dist')}", source=self.name)
@@ -114,8 +122,11 @@ class MaxPainExecStrategy(BaseStrategy):
         ts = snapshot.timestamp
         if ts is None or not self._mp_ed:
             return None
-        # 追蹤止盈(每 tick):更新最高點 → 漲過 +arm% 武裝 → 武裝後從高點回落 trail% 鎖利出場。
         px = snapshot.price
+        # what-if 影子:每 tick 推進所有變體(含實際執行的無止盈),較早出場者於此鎖定。
+        self._wf_tick(px, ts)
+        # 追蹤止盈(每 tick):更新最高點 → 漲過 +arm% 武裝 → 武裝後從高點回落 trail% 鎖利出場。
+        # 預設 trail_pct=0(實際執行無止盈)→ 此段跳過;設 >0 則實際執行該 trail。
         if self.trail_pct > 0 and self._mp_s1 > 0 and px > 0:
             if px > self._mp_hi:
                 self._mp_hi = px
@@ -138,6 +149,100 @@ class MaxPainExecStrategy(BaseStrategy):
                           reason="maxpain 週選結算強平", source=self.name)
         return None
 
+    # ---- what-if 影子記錄器(平行算多個出場變體;實際只執行 trail_pct 那條,預設無止盈)----
+    def _wf_start(self, signal_t: str, ed: str, price: float, dt) -> None:
+        self._wf = {
+            "signal_t": signal_t, "ed": ed, "s1": price, "scaled": False,
+            "entry_t": dt.isoformat(),
+            "v": {lab: {"hi": price, "armed": False, "done": False,
+                        "exit_px": None, "reason": None, "exit_t": None, "scaled": False}
+                  for lab, _ in WF_VARIANTS},
+        }
+        self._wf_save()
+
+    def _wf_tick(self, px: float, ts) -> None:
+        wf = getattr(self, "_wf", None)
+        if not wf or px <= 0:
+            return
+        s1 = wf["s1"]
+        if s1 <= 0:
+            return
+        if not wf["scaled"] and px >= s1 * (1 + self.scale_pct):   # 鏡像 +1% 加碼(影子用)
+            wf["scaled"] = True
+        stp = s1 * (1 - self.stop_pct)
+        changed = False
+        for lab, trail in WF_VARIANTS:
+            v = wf["v"][lab]
+            if v["done"]:
+                continue
+            if px > v["hi"]:
+                v["hi"] = px; changed = True
+            if not v["armed"] and px >= s1 * (1 + self.arm_pct):
+                v["armed"] = True; changed = True
+            if px <= stp:                                          # −2% 全停(所有變體共用)
+                v.update(done=True, exit_px=round(stp, 1), reason="stop",
+                         exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
+                continue
+            if trail > 0 and v["armed"] and px <= v["hi"] * (1 - trail):   # 追蹤止盈鎖利
+                v.update(done=True, exit_px=round(px, 1), reason="trail",
+                         exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
+        if changed:
+            self._wf_save()
+
+    def on_position_closed(self, exit_price: float, reason: str = "") -> None:
+        """引擎在任何出場路徑(硬停/結算/強平/收盤)平倉後呼叫 → 把尚未出場的變體
+        以實際出場價(無止盈線的出場)收尾,寫一列逐筆變體結果到 whatif.csv。"""
+        wf = getattr(self, "_wf", None)
+        if not wf:
+            return
+        for lab, _ in WF_VARIANTS:
+            v = wf["v"][lab]
+            if not v["done"]:
+                v.update(done=True, exit_px=round(exit_price, 1),
+                         reason=(reason or "settle"), exit_t="", scaled=wf["scaled"])
+        s1 = wf["s1"]; pv = self.point_value; s2 = s1 * (1 + self.scale_pct)
+        row = {"signal_t": wf["signal_t"], "entry_t": wf["entry_t"], "ed": wf["ed"], "s1": round(s1, 1)}
+        for lab, _ in WF_VARIANTS:
+            v = wf["v"][lab]; ex = v["exit_px"]
+            pnl = ((ex - s1) + ((ex - s2) if v["scaled"] else 0.0)) * pv
+            row[f"{lab}_px"] = ex
+            row[f"{lab}_reason"] = v["reason"]
+            row[f"{lab}_lots"] = 2 if v["scaled"] else 1
+            row[f"{lab}_pnl"] = round(pnl, 0)
+        self._wf_append(row)
+        self._wf = None
+        try:
+            WF_PENDING.unlink()
+        except OSError:
+            pass
+
+    def _wf_save(self) -> None:
+        if getattr(self, "_wf", None) is None:
+            return
+        try:
+            WF_PENDING.parent.mkdir(parents=True, exist_ok=True)
+            WF_PENDING.write_text(json.dumps(self._wf, ensure_ascii=False), encoding="utf-8")
+        except OSError:
+            pass
+
+    def _wf_load(self) -> None:
+        try:
+            self._wf = json.loads(WF_PENDING.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            self._wf = None
+
+    def _wf_append(self, row: dict) -> None:
+        try:
+            WF_TAPE.parent.mkdir(parents=True, exist_ok=True)
+            new = not WF_TAPE.exists()
+            with open(WF_TAPE, "a", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=list(row.keys()))
+                if new:
+                    w.writeheader()
+                w.writerow(row)
+        except OSError:
+            pass
+
     def get_parameters(self) -> dict:
         return {"stop_pct": self.stop_pct, "scale_pct": self.scale_pct,
                 "trail_pct": self.trail_pct, "arm_pct": self.arm_pct,
@@ -153,3 +258,4 @@ class MaxPainExecStrategy(BaseStrategy):
         self._mp_scaled = False
         self._mp_hi = 0.0
         self._mp_armed = False
+        self._wf_load()                # 重啟還原進行中的影子狀態(無則 None)
