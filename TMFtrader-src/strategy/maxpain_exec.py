@@ -31,10 +31,14 @@ SIGNAL_FILE = ROOT / "data" / "maxpain_v2" / "next_signal.json"
 class MaxPainExecStrategy(BaseStrategy):
     def __init__(self, stop_pct: float = 0.02, scale_pct: float = 0.01, point_value: float = 50.0,
                  session_start: tuple = (8, 30), entry_window_end: tuple = (9, 30),
-                 settle_close: tuple = (13, 30)):
+                 settle_close: tuple = (13, 30), trail_pct: float = 0.0125, arm_pct: float = 0.01):
         self.stop_pct = stop_pct
         self.scale_pct = scale_pct
         self.point_value = point_value
+        # 追蹤止盈(2026-06-09 forward 驗證版):獲利曾漲過 +arm_pct 後,從持有期最高點回落
+        # trail_pct → 鎖利出場。trail_pct=0 即停用(回到凍結「無止盈、抱到結算」)。
+        self.trail_pct = trail_pct
+        self.arm_pct = arm_pct
         self.session_start = time(*session_start)
         self.entry_window_end = time(*entry_window_end)
         self.settle_close = time(*settle_close)
@@ -82,6 +86,8 @@ class MaxPainExecStrategy(BaseStrategy):
         self._mp_ed = ed                              # ISO 字串(供引擎 _strategy_state 持久化)
         self._mp_s1 = price
         self._mp_scaled = False
+        self._mp_hi = price                           # 追蹤止盈:持有期最高點(從進場價起算)
+        self._mp_armed = False
         return Signal(direction=SignalDirection.BUY, strength=0.7,
                       stop_loss=round(price * (1 - self.stop_pct), 1), take_profit=0.0,
                       reason=f"maxpain long dist{sig.get('dist')}", source=self.name)
@@ -103,10 +109,23 @@ class MaxPainExecStrategy(BaseStrategy):
         return None
 
     def check_exit(self, position: Position, snapshot: MarketSnapshot) -> Optional[Signal]:
-        """−2% 由引擎硬停(stop_loss=S1×0.98);這裡只管結算日強平。ed 走 _strategy_state 跨重啟還原。"""
+        """−2% 由引擎硬停(stop_loss=S1×0.98);這裡管 追蹤止盈 + 結算日強平。
+        ed/最高點/武裝 走 _strategy_state 跨重啟還原。"""
         ts = snapshot.timestamp
         if ts is None or not self._mp_ed:
             return None
+        # 追蹤止盈(每 tick):更新最高點 → 漲過 +arm% 武裝 → 武裝後從高點回落 trail% 鎖利出場。
+        px = snapshot.price
+        if self.trail_pct > 0 and self._mp_s1 > 0 and px > 0:
+            if px > self._mp_hi:
+                self._mp_hi = px
+            if not self._mp_armed and px >= self._mp_s1 * (1 + self.arm_pct):
+                self._mp_armed = True
+            if self._mp_armed and px <= self._mp_hi * (1 - self.trail_pct):
+                return Signal(direction=SignalDirection.CLOSE, strength=1.0,
+                              stop_loss=px, take_profit=px,
+                              reason=f"maxpain 追蹤止盈 -{self.trail_pct*100:.2f}%"
+                                     f"(高{self._mp_hi:.0f}→{px:.0f})", source=self.name)
         try:
             ed = date.fromisoformat(self._mp_ed)
         except (ValueError, TypeError):
@@ -121,6 +140,7 @@ class MaxPainExecStrategy(BaseStrategy):
 
     def get_parameters(self) -> dict:
         return {"stop_pct": self.stop_pct, "scale_pct": self.scale_pct,
+                "trail_pct": self.trail_pct, "arm_pct": self.arm_pct,
                 "settle_close": str(self.settle_close)}
 
     def reset(self):
@@ -131,3 +151,5 @@ class MaxPainExecStrategy(BaseStrategy):
         self._mp_ed = None
         self._mp_s1 = 0.0
         self._mp_scaled = False
+        self._mp_hi = 0.0
+        self._mp_armed = False

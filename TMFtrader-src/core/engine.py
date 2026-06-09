@@ -244,6 +244,9 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
         # 訊號在 scripts/maxpain_daily.py(cron、官網 OI)→ next_signal.json;這支執行:
         # t+1 開盤窗進第1口、+1% check_scale 加第2口、−2% 引擎硬停、結算日 13:30 強平。
         # 多日持倉跨重啟靠 _strategy_state(ed/S1/scaled)。固定第1口靠 RISK_PROFILE=fixed1_paper。
+        # 追蹤止盈 -1.25%(2026-06-09 forward 驗證:歷史 2020-2025/2020-2026 兩窗皆 in-sample 最高,
+        # 但對 trail 值高度敏感=疑過擬合;故不上 live、改在 paper 真 tick forward 累積 OOS。
+        # 可用 MAXPAIN_TRAIL_PCT 調(設 0 即回凍結無止盈)。)
         return MaxPainExecStrategy(
             stop_pct=0.02,
             scale_pct=0.01,
@@ -251,6 +254,8 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             session_start=(8, 30),
             entry_window_end=(9, 30),
             settle_close=(13, 30),
+            trail_pct=float(os.getenv("MAXPAIN_TRAIL_PCT", "0.0125")),
+            arm_pct=float(os.getenv("MAXPAIN_ARM_PCT", "0.01")),
         )
     return AdaptiveMomentumStrategy()
 
@@ -1467,6 +1472,8 @@ class TradingEngine:
             "mp_ed": getattr(strategy, '_mp_ed', None),
             "mp_s1": getattr(strategy, '_mp_s1', 0.0),
             "mp_scaled": getattr(strategy, '_mp_scaled', False),
+            "mp_hi": getattr(strategy, '_mp_hi', 0.0),
+            "mp_armed": getattr(strategy, '_mp_armed', False),
         }
         pos._strategy_state = state
         self.position_manager._save_position(instrument, pos)
@@ -1492,8 +1499,11 @@ class TradingEngine:
             strategy._mp_ed = state.get("mp_ed")
             strategy._mp_s1 = state.get("mp_s1", 0.0)
             strategy._mp_scaled = state.get("mp_scaled", False)
+            strategy._mp_hi = state.get("mp_hi", strategy._mp_s1)
+            strategy._mp_armed = state.get("mp_armed", False)
             logger.info(f"[StrategyRestore] {instrument} maxpain ed={strategy._mp_ed} "
-                        f"S1={strategy._mp_s1:.0f} scaled={strategy._mp_scaled}")
+                        f"S1={strategy._mp_s1:.0f} scaled={strategy._mp_scaled} "
+                        f"hi={strategy._mp_hi:.0f} armed={strategy._mp_armed}")
         logger.info(
             f"[StrategyRestore] {instrument} entry_atr={strategy._entry_atr:.2f} "
             f"trail_best={strategy._trail_best:.1f}"
