@@ -183,6 +183,38 @@ def next_settle_wed(today):
     return d
 
 
+def _settle_pending():
+    """補結算上一筆 signal_fired(進場日 OHLC 當時還沒出 → 之後任何一次跑都用歷史 OHLC 補上、永遠正確)。
+    防止 Wed cron 在收盤資料公布前跑就漏結算(之後 next_settle_wed 會跳走、那筆會永遠卡住)。"""
+    if not NEXT.exists():
+        return
+    try:
+        o = json.loads(NEXT.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if o.get("state") != "signal_fired" or not o.get("take"):
+        return
+    try:
+        wed = date.fromisoformat(o["settle_wed"])
+    except (KeyError, ValueError):
+        return
+    ohlc = fetch_tx_ohlc((wed - timedelta(days=5)).isoformat(), (wed + timedelta(days=3)).isoformat())
+    wbar = ohlc.get(o["settle_wed"])
+    if not wbar:
+        return                                          # 結算日 OHLC 還沒出 → 下次再補
+    s = 1 if o["side"] == "long" else -1
+    pnl_pts = s * (wbar["close"] - wbar["open"]) - COST_PTS
+    settled = {"entry": wbar["open"], "exit": wbar["close"], "pnl_pts": round(pnl_pts, 1),
+               "pnl": round(pnl_pts * PV, 0),
+               "ret_pct": round((s * (wbar["close"] - wbar["open"]) / wbar["open"] - COST_PTS / wbar["open"]) * 100, 4)}
+    _append_tape(o["settle_wed"], o.get("signal_tue", ""), {"zsum": o.get("zsum", 0), "side": o["side"]},
+                 o.get("d_put_oi", 0), o.get("fx_dnet", 0), s, settled)
+    o.update(settled); o["state"] = "settled"
+    NEXT.write_text(json.dumps(o, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_report(o)
+    print(f"[settlement_v2] 補結算 {o['settle_wed']} {o['side']} {settled['pnl']:+.0f}元")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--wed", help="結算週三 YYYY-MM-DD(預設:今天起最近的週三)")
@@ -191,6 +223,8 @@ def main():
 
     if args.verify:
         return verify()
+
+    _settle_pending()                                   # 先補上一筆未結算的(用歷史 OHLC、永遠正確)
 
     wed = date.fromisoformat(args.wed) if args.wed else next_settle_wed(date.today())
     wed_iso = wed.isoformat()
