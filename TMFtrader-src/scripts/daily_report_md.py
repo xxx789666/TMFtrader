@@ -68,6 +68,20 @@ def _tape_stats(rows):
     return f"{n} 筆 淨 {sum(pnls):+,.0f} 元 勝 {len(wins)}/{n} PF {pf:.2f}"
 
 
+def _tape_period(rows, date_col):
+    """tape 的日期區間 'first ~ last（N 筆）'。"""
+    ds = sorted(str(r.get(date_col, ""))[:10] for r in rows if r.get(date_col))
+    if not ds:
+        return "無資料"
+    return f"{ds[0]} ~ {ds[-1]}"
+
+
+def _maxpain_lots(rows):
+    """maxpain:加碼(2口)筆數。"""
+    two = sum(1 for r in rows if str(r.get("lots", "")).strip() == "2")
+    return f"1-2 口含加碼（{two}/{len(rows)} 筆有加碼到 2 口）" if rows else "1-2 口含加碼"
+
+
 def _exec_pos(owner):
     p = ROOT / "data" / "paper" / owner / "active_position.json"
     d = _json(p)
@@ -164,7 +178,7 @@ def write_chips():
         L.append("- 無（空手或非交易日）")
     L += [
         "",
-        f"## 累積 tape（小台 pv50）\n- {_tape_stats(tape)}",
+        f"## 累積 tape（小台 pv50、固定 1 口、期間 {_tape_period(tape, 'trade_date')}）\n- {_tape_stats(tape)}",
         "",
         f"## 真 tick 執行（chips_exec）\n- {_exec_pos('chips_exec')}",
         "",
@@ -246,7 +260,7 @@ def write_maxpain():
         L.append("- 無（未到結算日或空手）")
     L += [
         "",
-        f"## 累積 tape（小台 pv50）\n- {_tape_stats(tape)}",
+        f"## 累積 tape（小台 pv50、{_maxpain_lots(tape)}、期間 {_tape_period(tape, 'signal_t')}）\n- {_tape_stats(tape)}",
         "",
         f"## 真 tick 執行（maxpain_exec）\n- {_exec_pos('maxpain_exec')}",
         "",
