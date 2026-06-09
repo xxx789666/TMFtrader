@@ -16,13 +16,14 @@ except Exception:
 # 已退場:night_v3(被 night_v7 取代)、day_orb(暫停)、aft_orb(被 chips_exec 取代)。
 TARGETS = [("breakout_v7", "data/live/breakout_v7", "live"),
            ("night_v7", "data/live/night_v7", "live"),
-           ("chips_exec", "data/paper/chips_exec", "paper")]
+           ("chips_exec", "data/paper/chips_exec", "paper"),
+           ("maxpain_exec", "data/paper/maxpain_exec", "paper")]   # 真 tick paper、多日持倉
 today = datetime.now().strftime("%Y-%m-%d")
 yday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
 # 各策略的「合法進場時段」(時:分),用於出窗檢查
 WIN = {"night_v7": ((15, 0), (5, 0)), "chips_exec": ((8, 45), (13, 45)),
-       "breakout_v7": None}
+       "breakout_v7": None, "maxpain_exec": None}   # maxpain 多日持倉、不做出窗檢查
 
 def in_window(hhmm_str, win):
     if not win or not hhmm_str or len(hhmm_str) < 16:
