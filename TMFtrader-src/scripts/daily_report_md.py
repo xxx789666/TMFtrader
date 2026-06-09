@@ -41,9 +41,15 @@ def _fnum(x):
 
 
 def _i(x):
-    """整數顯示(net_OI/flow)。"""
+    """有號整數(net_OI/flow,顯示方向)。"""
     v = _fnum(x)
     return f"{v:+,.0f}" if v is not None else str(x)
+
+
+def _n(x):
+    """無號整數(價格,不顯示 +)。"""
+    v = _fnum(x)
+    return f"{v:,.0f}" if v is not None else str(x)
 
 
 def _r(x, nd=4):
@@ -71,16 +77,52 @@ def _exec_pos(owner):
     return f"持倉 {side} x{qty} @ {px:.0f}"
 
 
+def _verdict(combo):
+    c = _fnum(combo)
+    if c is None:
+        return "資料不足"
+    if c > 0.5:
+        return f"**偏多 → 做多進場 ▲**（combo {c:+.2f} > +0.5）"
+    if c < -0.5:
+        return f"**偏空 → 做空進場 ▼**（combo {c:+.2f} < −0.5）"
+    lean = "略偏多" if c > 0 else ("略偏空" if c < 0 else "中性")
+    return f"**中性（{lean}）→ 空手不進場**（combo {c:+.2f} 在 −0.5~+0.5 之間）"
+
+
+def _zread(z, pos="偏多", neg="偏空"):
+    v = _fnum(z)
+    if v is None:
+        return "?", "?"
+    if v > 0.5:
+        return f"{v:+.2f}", f"明顯{pos}（高過60日均 {v:+.2f}σ）"
+    if v < -0.5:
+        return f"{v:+.2f}", f"明顯{neg}（低於60日均 {v:+.2f}σ）"
+    return f"{v:+.2f}", f"中性（{v:+.2f}σ）"
+
+
+def _delta(cur, prev):
+    a, b = _fnum(cur), _fnum(prev)
+    if a is None or b is None:
+        return "—"
+    return f"{a - b:+,.0f}"
+
+
+def _delta4(cur, prev):
+    a, b = _fnum(cur), _fnum(prev)
+    if a is None or b is None:
+        return "—"
+    return f"{a - b:+.4f}"
+
+
 def write_chips():
     sig = _json(CHIPS / "next_signal.json") or {}
     hist = _rows(CHIPS / "history.csv")
     tape = _rows(CHIPS / "decisions.csv")
-    last = hist[-1] if hist else {}
-
-    def px(k):
-        v = _fnum(last.get(k))
-        return f"{v:.0f}" if v is not None else "?"
-    side_zh = {"long": "做多 ▲", "short": "做空 ▼", "flat": "空手"}.get(sig.get("side"), sig.get("side", "?"))
+    cur = hist[-1] if hist else {}
+    prev = hist[-2] if len(hist) >= 2 else {}
+    d_cur, d_prev = cur.get("date", "最新"), prev.get("date", "前一日")
+    zf, zf_txt = _zread(sig.get("z_flow"))
+    zl, zl_txt = _zread(sig.get("z_lt"))
     today_trade = [r for r in tape if str(r.get("trade_date", ""))[:10] == TODAY]
 
     L = [
@@ -91,15 +133,26 @@ def write_chips():
         "---",
         f"# 籌碼日報 — chips_combo / {TODAY}",
         "",
-        "## 明日決策",
-        f"- combo **{sig.get('combo', '?')}** → **{side_zh}**"
-        f"(z_flow {sig.get('z_flow', '?')} / z_lt {sig.get('z_lt', '?')})",
-        f"- 交易日: {sig.get('trade_date', '?')}",
+        "## 📌 今日結論",
+        f"- 大盤籌碼:{_verdict(sig.get('combo'))}",
+        f"- 下一交易日({sig.get('trade_date','?')})動作:**"
+        + {"long": "做多 ▲", "short": "做空 ▼", "flat": "空手"}.get(sig.get("side"), "?") + "**",
         "",
-        "## 今日籌碼原料（history.csv 最新）",
-        f"- 外資淨OI: **{_i(last.get('net_OI'))}** | flow(Δ1d): **{_i(last.get('flow'))}** "
-        f"| 大戶 all_ratio: **{_r(last.get('all_ratio'))}**",
-        f"- 大台 TX 收盤: {px('close')}（OHLC {px('open')}/{px('high')}/{px('low')}/{px('close')}）",
+        "## 📊 籌碼明細（前一交易日 → 最新)",
+        f"| 指標 | {d_prev} | {d_cur} | 變化 |",
+        "|---|--:|--:|--:|",
+        f"| 外資淨OI(口) | {_i(prev.get('net_OI'))} | {_i(cur.get('net_OI'))} | "
+        f"**{_i(cur.get('flow'))}**(=flow) |",
+        f"| 大戶 all_ratio | {_r(prev.get('all_ratio'))} | {_r(cur.get('all_ratio'))} | "
+        f"{_delta4(cur.get('all_ratio'), prev.get('all_ratio'))} |",
+        f"| 大台 TX 收盤 | {_n(prev.get('close'))} | {_n(cur.get('close'))} | {_delta(cur.get('close'), prev.get('close'))} |",
+        "",
+        "## 🎯 訊號分數",
+        "| 因子 | 值 | 解讀 |",
+        "|---|--:|---|",
+        f"| z_flow(外資流) | {zf} | {zf_txt} |",
+        f"| z_lt(大戶) | {zl} | {zl_txt} |",
+        f"| **combo(合成)** | **{sig.get('combo','?')}** | (z_flow+z_lt)/2;>+0.5做多 / <−0.5做空 / 中間空手 |",
         "",
         "## 今日成交",
     ]
@@ -114,6 +167,13 @@ def write_chips():
         f"## 累積 tape（小台 pv50）\n- {_tape_stats(tape)}",
         "",
         f"## 真 tick 執行（chips_exec）\n- {_exec_pos('chips_exec')}",
+        "",
+        "## 📖 名詞解釋",
+        "- **外資淨OI**:外資台指期 多單−空單。負=整體偏空。這是「水位」。",
+        "- **flow(Δ1d)**:外資淨OI 今天−昨天 = 外資今天的「動作」。正=加多/減空。⭐策略看這個變化、不看水位。",
+        "- **大戶 all_ratio**:前十大交易人(前十大買−前十大賣)/全市場OI。負=大戶偏空。",
+        "- **z_flow / z_lt**:各自的「60日標準分數(σ)」=今天比過去60天平均高/低幾個標準差;>0偏多、<0偏空。",
+        "- **combo**:(z_flow+z_lt)/2 等權合成。**combo>+0.5→做多、<−0.5→做空、−0.5~+0.5→空手**。",
         "",
         "---",
         "相關: [[strategy_chips_combo_v1]]",
