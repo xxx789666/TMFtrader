@@ -1,5 +1,5 @@
 #!/bin/bash
-# 啟動 chips_exec（chips_combo 訊號的引擎真 tick paper 執行載具 / TMF / 30m）PAPER 前推進程。
+# 啟動 chips_exec（chips_combo 訊號的引擎真 tick paper 執行載具 / MXF 小台 / 30m）PAPER 前推進程。
 # 2026-06-09 起取代 aft_orb 那條永豐連線:訊號由 chips_combo_daily.py(cron 18:30)算、寫
 # data/chips_combo/next_signal.json;這支只在日盤開盤窗讀 side → 1 口真 tick 進場、-2% 引擎硬停、
 # 13:44 收盤強平。固定 1 口靠 RISK_PROFILE=fixed1_paper(max_contracts=1)。headless、事件走 TG。
@@ -24,7 +24,7 @@ if [ -f "$PIDFILE" ]; then
 fi
 
 export TRADING_MODE=paper
-export INSTRUMENTS=TMF
+export INSTRUMENTS=MXF       # 2026-06-09 由 TMF 微台改小台 MXF(引擎自動對齊 pv50;preset 仍鎖 1 口)
 export TIMEFRAME=30
 export STRATEGY_TYPE=chips_exec
 export STRATEGY_OWNER=chips_exec
@@ -37,4 +37,4 @@ mkdir -p data/logs
 nohup "$PY" scripts/start_paper.py --mode paper >> "$LOG" 2>&1 &
 NEW_PID=$!
 echo "$NEW_PID" > "$PIDFILE"
-echo "[$(date '+%F %T')] chips_exec PAPER start_paper.py PID=$NEW_PID | TF=30 owner=chips_exec INSTRUMENTS=TMF RISK=fixed1_paper 日盤開盤窗進1口/-2%硬停/13:44強平 headless(TG-only)" >> "$LOG"
+echo "[$(date '+%F %T')] chips_exec PAPER start_paper.py PID=$NEW_PID | TF=30 owner=chips_exec INSTRUMENTS=MXF(小台) RISK=fixed1_paper 日盤開盤窗進1口/-2%硬停/13:44強平 headless(TG-only)" >> "$LOG"

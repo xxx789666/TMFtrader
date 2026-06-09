@@ -34,7 +34,7 @@ TAPE = DDIR / "decisions.csv"        # 決策帶 + paper 單(HANDOFF §6)
 
 Z_WIN = 60
 THR = 0.5
-POINT_VALUE = 10.0   # 微台
+POINT_VALUE = 50.0   # 小台 MXF(2026-06-09 由微台 pv10 改小台;價格仍用大台 TX 軌跡、口徑×5)
 LOTS = 1
 STOP_PCT = 0.02
 
