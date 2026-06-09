@@ -184,14 +184,29 @@ def write_chips():
     print(f"寫 {out / (TODAY + '.md')}")
 
 
+def _mp_verdict(state, dist):
+    d = _fnum(dist)
+    if state == "open":
+        return "**持倉中** — 已做多,抱到該週選結算(中途 +1% 加第2口 / −2% 全停)"
+    if state == "signal_fired":
+        ds = f"(dist {d:+.3f} > 0)" if d is not None else ""
+        return f"**訊號已出 → 明日開盤做多第1口** {ds}"
+    # flat
+    if d is None:
+        return "**空手** — 無有效訊號"
+    if d > 0:
+        return f"**空手等下個訊號日** — 最近 dist {d:+.3f} > 0(MaxPain 在現價之上=偏多),到 ~6 DTE 訊號日才進"
+    return f"**空手不做多** — 最近 dist {d:+.3f} ≤ 0(MaxPain 在現價之下/相等),不符做多條件(只做多)"
+
+
 def write_maxpain():
     sig = _json(MAXP / "next_signal.json") or {}
     signals = _json(MAXP / "signals.json") or {}
     tape = _rows(MAXP / "decisions.csv")
     state = sig.get("state", "?")
-    state_zh = {"flat": "空手（等下個訊號日）", "signal_fired": "訊號已出、明日開盤進",
-                "open": "持倉中（抱到結算）"}.get(state, state)
-    latest_sig = signals.get(max(signals)) if signals else {}
+    latest = signals.get(max(signals)) if signals else {}
+    dist = _fnum(latest.get("dist"))
+    dist_pct = f"（{dist*100:+.1f}%）" if dist is not None else ""
     today_trade = [r for r in tape if str(r.get("exit_date", ""))[:10] == TODAY]
 
     L = [
@@ -202,22 +217,27 @@ def write_maxpain():
         "---",
         f"# 選擇權日報 — maxpain_v2 / {TODAY}",
         "",
-        "## 當前狀態",
-        f"- **{state_zh}**",
+        "## 📌 今日結論",
+        f"- {_mp_verdict(state, latest.get('dist'))}",
+        "",
+        "## 📊 Max Pain 明細（最近一次計算）",
+        "| 項目 | 值 | 說明 |",
+        "|---|--:|---|",
+        f"| 目標週選到期 | {latest.get('ed','?')} | ~6 DTE 那檔週選 |",
+        f"| **Max Pain** | **{_n(latest.get('maxpain'))}** | 選擇權「最大痛點」價,指數傾向往這靠 |",
+        f"| 現價(訊號日收盤) | {_n(latest.get('close'))} | 大台 TX |",
+        f"| **dist** | **{_r(latest.get('dist'), 3)} {dist_pct}** | (MaxPain−現價)/現價;**>0 才做多** |",
+        "",
+        "## 持倉狀態",
     ]
-    if state in ("signal_fired", "open"):
-        L.append(f"- 訊號日 {sig.get('signal_t','?')} | 目標到期 {sig.get('ed','?')} "
-                 f"| dist {sig.get('dist','?')} | MaxPain {sig.get('maxpain','?')}")
     if state == "open":
-        L.append(f"- S1 {sig.get('S1','?')} | 加碼線 {sig.get('scale_at','?')} | 停損線 {sig.get('stop_at','?')}")
-    L += [
-        "",
-        "## 最近一個 Max Pain（signals.json 最新）",
-        f"- 到期 {latest_sig.get('ed','?')} | MaxPain **{latest_sig.get('maxpain','?')}** "
-        f"| 現價 {latest_sig.get('close','?')} | dist **{latest_sig.get('dist','?')}**" if latest_sig else "- 無",
-        "",
-        "## 今日結算成交",
-    ]
+        L.append(f"- 持倉中:S1 {sig.get('S1','?')} | 加碼線(+1%) {sig.get('scale_at','?')} "
+                 f"| 停損線(−2%) {sig.get('stop_at','?')} | 目標抱到 {sig.get('ed','?')} 結算")
+    elif state == "signal_fired":
+        L.append(f"- 訊號已出:訊號日 {sig.get('signal_t','?')}、目標到期 {sig.get('ed','?')}、明日開盤進")
+    else:
+        L.append("- 空手(無持倉)")
+    L += ["", "## 今日結算成交"]
     if today_trade:
         for r in today_trade:
             L.append(f"- long 進 {r.get('S1','')} → 出 {r.get('exit_px','')} "
@@ -229,6 +249,15 @@ def write_maxpain():
         f"## 累積 tape（小台 pv50）\n- {_tape_stats(tape)}",
         "",
         f"## 真 tick 執行（maxpain_exec）\n- {_exec_pos('maxpain_exec')}",
+        "",
+        "## 📖 名詞解釋",
+        "- **Max Pain(最大痛點)**:由選擇權各履約價的買權/賣權未平倉量(OI)算出——指數若結算在這個價,"
+        "全體選擇權持有者「總損失最小」。理論上造市商/賣方有把指數拉向這裡的傾向(結算前靠攏)。",
+        "- **dist =(MaxPain − 現價)/ 現價**:現價離痛點多遠(%)。**dist>0(痛點在現價之上)→ 預期往上靠 → 做多;"
+        "dist≤0 → 不做多、空手**(此策略只做多、不做空)。",
+        "- **進出場(凍結規則)**:每週週選到期前 ~6 DTE(≈週四)算一次;dist>0 → 隔天開盤做多第1口,"
+        "盤中漲 +1% 加第2口、跌 −2% 全停,否則抱到該週選結算。",
+        "- **狀態**:空手(等下個訊號日)/ 訊號已出(明日開盤進)/ 持倉中(抱到結算)。",
         "",
         "---",
         "相關: [[strategy_maxpain_v2]]",
