@@ -38,7 +38,7 @@ WF_TAPE = ROOT / "data" / "maxpain_v2" / "whatif.csv"              # 已結束�
 class MaxPainExecStrategy(BaseStrategy):
     def __init__(self, stop_pct: float = 0.02, scale_pct: float = 0.01, point_value: float = 50.0,
                  session_start: tuple = (8, 30), entry_window_end: tuple = (9, 30),
-                 settle_close: tuple = (13, 30), trail_pct: float = 0.0, arm_pct: float = 0.01):
+                 settle_close: tuple = (13, 30), trail_pct: float = 0.0125, arm_pct: float = 0.01):
         self.stop_pct = stop_pct
         self.scale_pct = scale_pct
         self.point_value = point_value
@@ -126,10 +126,8 @@ class MaxPainExecStrategy(BaseStrategy):
         if ts is None or not self._mp_ed:
             return None
         px = snapshot.price
-        # what-if 影子:每 tick 推進所有變體(含實際執行的無止盈),較早出場者於此鎖定。
-        self._wf_tick(px, ts)
         # 追蹤止盈(每 tick):更新最高點 → 漲過 +arm% 武裝 → 武裝後從高點回落 trail% 鎖利出場。
-        # 預設 trail_pct=0(實際執行無止盈)→ 此段跳過;設 >0 則實際執行該 trail。
+        # 實際執行線 = trail_pct(預設 0.0125=V3 −1.25%)。影子各變體另由引擎每-tick wf_record_tick 推進。
         if self.trail_pct > 0 and self._mp_s1 > 0 and px > 0:
             if px > self._mp_hi:
                 self._mp_hi = px
@@ -152,8 +150,17 @@ class MaxPainExecStrategy(BaseStrategy):
                           reason="maxpain 週選結算強平", source=self.name)
         return None
 
-    # ---- what-if 影子記錄器(平行算多個出場變體;實際只執行 trail_pct 那條,預設無止盈)----
+    # ---- what-if 影子記錄器(每 tick 由引擎 wf_record_tick 驅動;與實際執行線獨立)----
+    # 實際執行 trail_pct(−1.25%)那條會較早平真倉,但影子的無止盈/−1.5% 出場更晚 → 靠引擎
+    # 每-tick(不管有無倉)呼叫 wf_record_tick,在真倉平掉後續追每個變體到各自出場,全到齊才寫一列。
     def _wf_start(self, signal_t: str, ed: str, price: float, dt) -> None:
+        if getattr(self, "_wf", None):                 # 前一筆影子未跑完(極端重疊)→ 現價強制收尾
+            for lab, _ in WF_VARIANTS:
+                v = self._wf["v"][lab]
+                if not v["done"]:
+                    v.update(done=True, exit_px=round(price, 1), reason="flush_new_entry",
+                             exit_t=dt.isoformat(), scaled=self._wf["scaled"])
+            self._wf_finalize()
         self._wf = {
             "signal_t": signal_t, "ed": ed, "s1": price, "scaled": False,
             "entry_t": dt.isoformat(),
@@ -163,9 +170,10 @@ class MaxPainExecStrategy(BaseStrategy):
         }
         self._wf_save()
 
-    def _wf_tick(self, px: float, ts) -> None:
+    def wf_record_tick(self, px: float, ts) -> None:
+        """引擎每 tick 呼叫(有無倉皆呼叫)。推進所有變體;全部出場後寫一列到 whatif.csv。"""
         wf = getattr(self, "_wf", None)
-        if not wf or px <= 0:
+        if not wf or px <= 0 or ts is None:
             return
         s1 = wf["s1"]
         if s1 <= 0:
@@ -173,6 +181,12 @@ class MaxPainExecStrategy(BaseStrategy):
         if not wf["scaled"] and px >= s1 * (1 + self.scale_pct):   # 鏡像 +1% 加碼(影子用)
             wf["scaled"] = True
         stp = s1 * (1 - self.stop_pct)
+        settle_hit = False                                         # 結算日 13:30 收盤平(未出場變體共用)
+        try:
+            ed = date.fromisoformat(wf["ed"]); d = ts.date()
+            settle_hit = (d > ed) or (d == ed and ts.time() >= self.settle_close)
+        except (ValueError, TypeError, KeyError):
+            pass
         changed = False
         for lab, trail in WF_VARIANTS:
             v = wf["v"][lab]
@@ -189,24 +203,24 @@ class MaxPainExecStrategy(BaseStrategy):
             if trail > 0 and v["armed"] and px <= v["hi"] * (1 - trail):   # 追蹤止盈鎖利
                 v.update(done=True, exit_px=round(px, 1), reason="trail",
                          exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
-        if changed:
+                continue
+            if settle_hit:                                         # 抱到結算日收盤平
+                v.update(done=True, exit_px=round(px, 1), reason="settle",
+                         exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
+        if all(wf["v"][lab]["done"] for lab, _ in WF_VARIANTS):
+            self._wf_finalize()
+        elif changed:
             self._wf_save()
 
-    def on_position_closed(self, exit_price: float, reason: str = "") -> None:
-        """引擎在任何出場路徑(硬停/結算/強平/收盤)平倉後呼叫 → 把尚未出場的變體
-        以實際出場價(無止盈線的出場)收尾,寫一列逐筆變體結果到 whatif.csv。"""
+    def _wf_finalize(self) -> None:
+        """所有變體出場後,計各自損益(含 +1% 加碼第2口)寫一列 whatif.csv,清 pending。"""
         wf = getattr(self, "_wf", None)
         if not wf:
             return
-        for lab, _ in WF_VARIANTS:
-            v = wf["v"][lab]
-            if not v["done"]:
-                v.update(done=True, exit_px=round(exit_price, 1),
-                         reason=(reason or "settle"), exit_t="", scaled=wf["scaled"])
         s1 = wf["s1"]; pv = self.point_value; s2 = s1 * (1 + self.scale_pct)
         row = {"signal_t": wf["signal_t"], "entry_t": wf["entry_t"], "ed": wf["ed"], "s1": round(s1, 1)}
         for lab, _ in WF_VARIANTS:
-            v = wf["v"][lab]; ex = v["exit_px"]
+            v = wf["v"][lab]; ex = v["exit_px"] if v["exit_px"] is not None else s1
             pnl = ((ex - s1) + ((ex - s2) if v["scaled"] else 0.0)) * pv
             row[f"{lab}_px"] = ex
             row[f"{lab}_reason"] = v["reason"]

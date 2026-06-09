@@ -30,9 +30,9 @@ export STRATEGY_OWNER=maxpain_exec
 export RISK_PROFILE=fixed1_paper
 export RECORD_TICKS=0
 export RECORD_DECISIONS=1
-# 實際執行線=無止盈(抱到結算/−2%硬停);what-if 影子記錄器平行算 無止盈/−1.0/−1.25/−1.5%
-# 各會如何(→ data/maxpain_v2/whatif.csv)。要實際執行某 trail 改這個值(如 0.0125)。
-export MAXPAIN_TRAIL_PCT=0.0
+# 實際執行線=V3 追蹤止盈 −1.25%(漲過+1%武裝後從高點回落1.25%鎖利;−2%硬停;否則抱到結算)。
+# what-if 影子記錄器每 tick 平行算 無止盈/−1.0/−1.25/−1.5% 各會如何(→ data/maxpain_v2/whatif.csv)。
+export MAXPAIN_TRAIL_PCT=0.0125
 
 LOG="data/logs/maxpain_exec_paper_$(date +%Y%m%d).log"
 mkdir -p data/logs
