@@ -47,6 +47,7 @@ from strategy.breakout_dualslope import BreakoutDualSlopeStrategy
 from strategy.day_orb import DayORBStrategy
 from strategy.night_orb import NightORBStrategy
 from strategy.chips_exec import ChipsExecStrategy
+from strategy.maxpain_exec import MaxPainExecStrategy
 from strategy.filters import MarketRegime, SessionManager, SessionPhase
 from risk.manager import RiskManager
 from core.performance import PerformanceTracker
@@ -237,6 +238,19 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             session_start=(8, 30),
             entry_window_end=(9, 30),
             force_close=(13, 44),
+        )
+    if strategy_type == "maxpain_exec":
+        # maxpain_v2 訊號的引擎真 tick paper 執行載具(完整 2 口含 +1% 加碼,2026-06-09)。
+        # 訊號在 scripts/maxpain_daily.py(cron、官網 OI)→ next_signal.json;這支執行:
+        # t+1 開盤窗進第1口、+1% check_scale 加第2口、−2% 引擎硬停、結算日 13:30 強平。
+        # 多日持倉跨重啟靠 _strategy_state(ed/S1/scaled)。固定第1口靠 RISK_PROFILE=fixed1_paper。
+        return MaxPainExecStrategy(
+            stop_pct=0.02,
+            scale_pct=0.01,
+            point_value=50.0,
+            session_start=(8, 30),
+            entry_window_end=(9, 30),
+            settle_close=(13, 30),
         )
     return AdaptiveMomentumStrategy()
 
@@ -1077,12 +1091,19 @@ class TradingEngine:
                 if exit_signal:
                     self._execute_exit(instrument, exit_signal, tick.price)
                 else:
-                    # 節流存盤 trail_best（每 30 秒一次）
-                    now_mono = __import__('time').monotonic()
-                    last = getattr(self, '_last_strategy_save', 0.0)
-                    if now_mono - last >= 30:
-                        self._last_strategy_save = now_mono
-                        self._save_strategy_state(instrument)
+                    # 持倉中加倉檢查（scale-in）：策略可回傳同向 Signal 要求加 N 口
+                    # （maxpain +1% 加第2口）。預設策略無 check_scale → 跳過、零影響。
+                    _cs = getattr(pipeline.strategy, "check_scale", None)
+                    scale_signal = _cs(pos, pipeline.snapshot) if _cs else None
+                    if scale_signal:
+                        self._execute_scale(instrument, scale_signal, tick.price)
+                    else:
+                        # 節流存盤 trail_best（每 30 秒一次）
+                        now_mono = __import__('time').monotonic()
+                        last = getattr(self, '_last_strategy_save', 0.0)
+                        if now_mono - last >= 30:
+                            self._last_strategy_save = now_mono
+                            self._save_strategy_state(instrument)
 
         # 廣播 Tick
         self._broadcast("tick", {
@@ -1442,6 +1463,10 @@ class TradingEngine:
             "trail_best": getattr(strategy, '_trail_best', 0.0),
             "breakeven_active": getattr(strategy, '_breakeven_active', False),
             "scaled_out": getattr(strategy, '_scaled_out', False),
+            # maxpain_exec 多日持倉狀態（跨重啟還原:結算日 ed、原始 S1、是否已加碼）
+            "mp_ed": getattr(strategy, '_mp_ed', None),
+            "mp_s1": getattr(strategy, '_mp_s1', 0.0),
+            "mp_scaled": getattr(strategy, '_mp_scaled', False),
         }
         pos._strategy_state = state
         self.position_manager._save_position(instrument, pos)
@@ -1462,10 +1487,66 @@ class TradingEngine:
             strategy._trail_best = state["trail_best"]
         strategy._breakeven_active = state.get("breakeven_active", False)
         strategy._scaled_out = state.get("scaled_out", False)
+        # maxpain_exec 多日持倉狀態還原(其他策略無此屬性、設了也無害)
+        if state.get("mp_ed") is not None:
+            strategy._mp_ed = state.get("mp_ed")
+            strategy._mp_s1 = state.get("mp_s1", 0.0)
+            strategy._mp_scaled = state.get("mp_scaled", False)
+            logger.info(f"[StrategyRestore] {instrument} maxpain ed={strategy._mp_ed} "
+                        f"S1={strategy._mp_s1:.0f} scaled={strategy._mp_scaled}")
         logger.info(
             f"[StrategyRestore] {instrument} entry_atr={strategy._entry_atr:.2f} "
             f"trail_best={strategy._trail_best:.1f}"
         )
+
+    def _execute_scale(self, instrument: str, signal: Signal, price: float):
+        """持倉中加倉（scale-in，maxpain +1% 加第2口）。同向才加、加 signal.close_quantity 口（預設1）。
+        ⚠️ stop_loss/take_profit 不動（maxpain 停損鎖原始第1口 S1×0.98）;entry_price 改均價
+        → 結算/停損總 P&L 自動正確 = 總口數 ×(出場價 − 均價)。Paper 用當前 tick 價、live 下市價單。"""
+        owner = self._position_owner(instrument)
+        pos = self.position_manager.positions.get(instrument)
+        if not pos or pos.is_flat:
+            return
+        is_buy = signal.is_buy
+        if (pos.side == Side.LONG) != is_buy:                 # 方向須與持倉一致
+            return
+        if self.risk_manager and not self.risk_manager.circuit_breaker.can_trade:
+            return                                            # 熔斷中不加
+        add_qty = max(1, int(getattr(signal, "close_quantity", 0) or 1))
+        action = "BUY" if is_buy else "SELL"
+
+        if self.trading_mode == "paper":
+            fill_price = price
+        else:
+            result = self.broker.place_order(action=action, quantity=add_qty,
+                                             price_type="MKT", instrument=instrument)
+            if not result.success:
+                logger.error(f"[Scale] [{instrument}] 加倉下單失敗: {result.message}")
+                return
+            fill_price = result.fill_price if result.fill_price > 0 else price
+
+        old_qty = pos.quantity
+        new_qty = old_qty + add_qty
+        pos.entry_price = (pos.entry_price * old_qty + fill_price * add_qty) / new_qty
+        pos.quantity = new_qty
+        self.position_manager._save_position(instrument, pos)
+        self._save_strategy_state(instrument)
+
+        logger.info(f"[Scale] [{instrument}] {action} +{add_qty} @ {fill_price:.0f} "
+                    f"→ 共 {new_qty} 口、均價 {pos.entry_price:.1f}")
+        _tag = ('[PAPER]' if self.trading_mode == 'paper' else '[LIVE]') + (f"｜{owner}" if owner else "")
+        tg(f"{_tag} 加碼 +{add_qty}\n{instrument} {'多' if is_buy else '空'} @ {fill_price:.0f}\n"
+           f"共 {new_qty} 口、均價 {pos.entry_price:.0f}\n原因: {signal.reason}")
+        position_lock.acquire(
+            owner=owner, side=action.lower(), entry_price=pos.entry_price,
+            instrument=instrument, quantity=new_qty,
+            mode=("paper" if self.trading_mode == "paper" else "live"), reason=signal.reason,
+        )
+        self._broadcast("trade", {
+            "time": datetime.now().isoformat(), "instrument": instrument,
+            "action": "scale_" + action.lower(), "price": fill_price,
+            "quantity": new_qty, "reason": f"加碼 {signal.reason}",
+        })
 
     def _execute_exit(self, instrument: str, signal: Signal, price: float):
         """執行出場（指定商品，線程安全）"""
