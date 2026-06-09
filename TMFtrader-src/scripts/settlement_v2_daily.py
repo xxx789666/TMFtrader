@@ -63,14 +63,14 @@ def _wed_contract_code(wed):
     return f"{wed.year}{wed.month:02d}W{n}"           # 週選 W1/W2/W4/W5
 
 
-def fetch_put_oi_total(date_iso, wed):
-    """FinMind TaiwanOptionDaily:回該日、當週到期(wed)的『總 Put OI』(position 場)。
+def fetch_put_oi_by_strike(date_iso, wed):
+    """FinMind TaiwanOptionDaily:回該日、當週到期(wed)的『各履約 Put OI』{strike: oi}(position 場)。
     用 FinMind 而非 TAIFEX HTML —— 後者欄位會漂(c[13] 非 OI),且 .5 小數證實抓到價格欄。
     已對帳:position 場 Put OI 算出的 d_put_oi 與研究 feature_history 完全一致。"""
     code = _wed_contract_code(wed)
     rows = _finmind({"dataset": "TaiwanOptionDaily", "data_id": "TXO",
                      "start_date": date_iso, "end_date": date_iso}).get("data", [])
-    total = 0.0
+    by = {}
     for r in rows:
         if str(r.get("contract_date")) != code:
             continue
@@ -79,10 +79,16 @@ def fetch_put_oi_total(date_iso, wed):
         if r.get("trading_session") != "position":    # 只取日盤 OI(after_market 為 0)
             continue
         try:
-            total += float(r.get("open_interest", 0) or 0)
+            k = float(r.get("strike_price", 0)); oi = float(r.get("open_interest", 0) or 0)
         except (TypeError, ValueError):
             continue
-    return total
+        if k > 0:
+            by[k] = by.get(k, 0.0) + oi
+    return by
+
+
+def fetch_put_oi_total(date_iso, wed):
+    return sum(fetch_put_oi_by_strike(date_iso, wed).values())
 
 
 def fetch_foreign_net(start, end):
@@ -237,18 +243,27 @@ def main():
         return
     fx_dnet = net[tue] - net[mon]
 
-    # Put OI(週二、週一,當週到期)
-    put_tue = fetch_put_oi_total(tue, wed)
+    # Put OI(週二、週一,當週到期,逐履約)
+    put_tue_by = fetch_put_oi_by_strike(tue, wed)
     time.sleep(0.3)
-    put_mon = fetch_put_oi_total(mon, wed)
+    put_mon_by = fetch_put_oi_by_strike(mon, wed)
+    put_tue = sum(put_tue_by.values())
+    put_mon = sum(put_mon_by.values())
     if put_tue <= 0:
-        print(f"[settlement_v2] {wed_iso}: 週二({tue}) Put OI 抓不到({expiry}) → 不進場")
+        print(f"[settlement_v2] {wed_iso}: 週二({tue}) Put OI 抓不到 → 不進場")
         NEXT.write_text(json.dumps({"state": "no_data", "settle_wed": wed_iso, "signal_tue": tue}, ensure_ascii=False, indent=2), encoding="utf-8")
         return
     d_put_oi = (put_tue - put_mon) / (put_tue + 1)
 
     ohlc = fetch_tx_ohlc((wed - timedelta(days=20)).isoformat(), wed_iso)
     tue_close = ohlc.get(tue, {}).get("close", 0.0)
+
+    # 賣權牆變化:逐履約 ΔPut OI(週二−週一),挑變厚 top(供報告看「厚在哪個價位區間」)
+    strikes = set(put_tue_by) | set(put_mon_by)
+    dOI = {k: put_tue_by.get(k, 0.0) - put_mon_by.get(k, 0.0) for k in strikes}
+    thick = sorted([(k, v) for k, v in dOI.items() if v > 0], key=lambda x: -x[1])[:6]
+    thin = sorted([(k, v) for k, v in dOI.items() if v < 0], key=lambda x: x[1])[:3]
+    wall_now = max(put_tue_by, key=put_tue_by.get) if put_tue_by else 0.0   # 週二最大 Put OI 履約(主牆)
 
     feat = load_feat()
     past = [r for r in feat if r["settle_wed"] < wed_iso]   # 只用過去
@@ -273,7 +288,9 @@ def main():
     out = {"state": state, "settle_wed": wed_iso, "signal_tue": tue, "prev": mon,
            "d_put_oi": round(d_put_oi, 6), "fx_dnet": round(fx_dnet, 1),
            "z_put": round(sig["z_put"], 3), "z_fx": round(sig["z_fx"], 3), "zsum": round(sig["zsum"], 3),
-           "side": sig["side"], "take": sig["take"], "tue_close": tue_close, "warm": sig["warm"]}
+           "side": sig["side"], "take": sig["take"], "tue_close": tue_close, "warm": sig["warm"],
+           "put_tue": round(put_tue), "put_mon": round(put_mon), "wall_strike": wall_now,
+           "thick": [[k, round(v)] for k, v in thick], "thin": [[k, round(v)] for k, v in thin]}
     if settled:
         out.update(settled)
     NEXT.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -333,6 +350,7 @@ def write_report(o):
     L += ["## 📊 籌碼明細(週二 vs 前一交易日)",
           "| 指標 | 值 | 說明 |", "|---|--:|---|",
           f"| d_put_oi | {o['d_put_oi']:+.4f} | 當週到期 TXO 總 Put OI 變化率(賣權牆變厚=正) |",
+          f"| 總 Put OI | {o.get('put_mon',0):,.0f} → {o.get('put_tue',0):,.0f} | 前日→週二(淨 {o.get('put_tue',0)-o.get('put_mon',0):+,.0f} 口) |",
           f"| fx_dnet | {o['fx_dnet']:+.0f} 口 | 外資 TX 期貨淨OI 當日變化(加多=正) |",
           f"| 週二收盤 | {o.get('tue_close',0):.0f} | 大台 TX |", "",
           "## 🎯 訊號分數(expanding-z)",
@@ -341,6 +359,20 @@ def write_report(o):
           f"| z(fx_dnet) | {o['z_fx']:+.2f} | 外資加減碼的標準分數 |",
           f"| **zsum** | **{o['zsum']:+.3f}** | z_put+z_fx;**\\|zsum\\|≥{ZTHR} 才下單**、方向=sign |",
           f"| 暖身樣本 | {o['warm']} 筆 | expanding 用的過去筆數(≥40 即足) |", ""]
+    spot = o.get("tue_close", 0) or 0
+    thick = o.get("thick", [])
+    if thick:
+        L += [f"## 🧱 賣權牆變厚在哪個價位(ΔPut OI 增加 top;現價 ~{spot:.0f})",
+              "| 履約價 | ΔPut OI(口) | 相對現價 |", "|---:|---:|---|"]
+        for k, v in thick:
+            rel = ("下方" if k < spot else "上方") + (f" {abs(k - spot) / spot * 100:.1f}%" if spot else "")
+            L.append(f"| {k:.0f} | +{v:,.0f} | {rel} |")
+        ks = [k for k, _ in thick]
+        below = [k for k in ks if k < spot]
+        L += ["", f"- **變厚區間 ≈ {min(ks):.0f}–{max(ks):.0f}**;主牆(週二最大 Put OI 履約)= **{o.get('wall_strike',0):.0f}**。",
+              f"- 解讀:賣權牆增厚{'多集中在現價下方 → 下檔支撐增強、偏多訊號之一' if len(below) >= len(ks) - 1 else '橫跨現價上下,需配合 fx 方向綜合看'}。", ""]
+        if o.get("thin"):
+            L += ["- 變薄(ΔPut OI 減少 top):" + "、".join(f"{k:.0f}({v:+,.0f})" for k, v in o["thin"]), ""]
     ts = _tape_summary()
     if ts:
         n, net, w, pf = ts
