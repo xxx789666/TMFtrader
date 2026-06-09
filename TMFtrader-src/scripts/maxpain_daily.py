@@ -3,7 +3,7 @@
 規格:deployed_strategies/maxpain_v2/HANDOFF_maxpain_v2_paper.md(凍結 2026-06-08)。
 Max Pain 做多+順勢加碼:每週週選 ~6 DTE(訊號日 t)用 t 盤後 TXO OI 算 Max Pain;
 dist=(MaxPain−S)/S>0 → t+1 開盤進多單 S1;盤中 +1%(S1×1.01)加第2口;−2%(S1×0.98)全停;
-否則抱到該週選結算(以日收盤近似)。只做多、最多 2 口、固定口、訊號用大台 TXO、執行載具微台 TMF。
+否則抱到該週選結算(以日收盤近似)。只做多、最多 2 口、固定口、訊號用大台 TXO、執行載具小台 MXF(pv50)。
 
 ⚠️ 時序鐵律(做錯全錯):combo/MaxPain 只用「訊號日 t 當天盤後 OI」,t+1 才進場(無 look-ahead)。
 ⚠️ 凍結:−2% 停損(HANDOFF §1,非參考腳本的 −3%)、+1% 加碼。勿調參。
@@ -34,7 +34,7 @@ SIGCACHE = DDIR / "signals.json"     # {signal_date: {ed, maxpain, close, dist}}
 NEXT = DDIR / "next_signal.json"
 TAPE = DDIR / "decisions.csv"
 
-PV = 10.0            # 微台 TMF
+PV = 50.0            # 小台 MXF(2026-06-09 由微台 pv10 改小台;價格仍用大台 TX 軌跡、口徑×5)
 SCALE = 0.01         # +1% 加第2口
 STOP = 0.02          # −2% 全停(凍結值,非參考腳本 −3%)
 FINMIND = "https://api.finmindtrade.com/api/v4/data"
