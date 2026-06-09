@@ -1188,7 +1188,10 @@ class TradingEngine:
 
         if phase == SessionPhase.CLOSING or (phase == SessionPhase.LAST_30 and minutes_left <= 5):
             pos = self.position_manager.positions.get(instrument)
-            if pos and not pos.is_flat:
+            # 跨夜/多日持倉策略(maxpain_exec 抱到週選結算)豁免每日盤末強平 —— 否則會被每天
+            # 13:40 default 盤末平掉、無法多日持倉。其出場由 check_exit(結算日)+ −2% tick 硬停管。
+            _holds_overnight = getattr(pipeline.strategy, 'holds_overnight', False)
+            if pos and not pos.is_flat and not _holds_overnight:
                 self._force_close(instrument, f"session close ({minutes_left}m left)")
             if minutes_left <= 2:
                 if not getattr(self, '_session_ended_today', '') == datetime.now().strftime("%Y-%m-%d"):

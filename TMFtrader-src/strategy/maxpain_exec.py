@@ -38,7 +38,7 @@ WF_TAPE = ROOT / "data" / "maxpain_v2" / "whatif.csv"              # 已結束�
 class MaxPainExecStrategy(BaseStrategy):
     def __init__(self, stop_pct: float = 0.02, scale_pct: float = 0.01, point_value: float = 50.0,
                  session_start: tuple = (8, 30), entry_window_end: tuple = (9, 30),
-                 settle_close: tuple = (13, 30), trail_pct: float = 0.0125, arm_pct: float = 0.01):
+                 settle_close: tuple = (13, 30), trail_pct: float = 0.0, arm_pct: float = 0.01):
         self.stop_pct = stop_pct
         self.scale_pct = scale_pct
         self.point_value = point_value
@@ -46,6 +46,9 @@ class MaxPainExecStrategy(BaseStrategy):
         # trail_pct → 鎖利出場。trail_pct=0 即停用(回到凍結「無止盈、抱到結算」)。
         self.trail_pct = trail_pct
         self.arm_pct = arm_pct
+        # 多日持倉:豁免引擎每日盤末強平(否則 MXF 用 default 盤別、每天 13:40 被平、無法抱到週選結算)。
+        # 出場由 check_exit(結算日 13:30)+ −2% tick 硬停管理。
+        self.holds_overnight = True
         self.session_start = time(*session_start)
         self.entry_window_end = time(*entry_window_end)
         self.settle_close = time(*settle_close)
