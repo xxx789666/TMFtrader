@@ -8,10 +8,10 @@ dist=(MaxPain−S)/S>0 → t+1 開盤進多單 S1;盤中 +1%(S1×1.01)加第2口
 ⚠️ 時序鐵律(做錯全錯):combo/MaxPain 只用「訊號日 t 當天盤後 OI」,t+1 才進場(無 look-ahead)。
 ⚠️ 凍結:−2% 停損(HANDOFF §1,非參考腳本的 −3%)、+1% 加碼。勿調參。
 ⚠️ paper 用日 OHLC 結算 = 無真實滑價/盤中序列;HANDOFF §6 預期值錨 OOS(Sharpe~0.5),非 in-sample 1.78。
-⚠️ 資料源:全 FinMind。OHLC=TaiwanFuturesDaily(TX);選擇權 OI=TaiwanOptionDaily(TXO,
-   只取 trading_session=='position' 日盤;after_market 場 OI 為 0)。
-⚠️ 到期代碼:ed_of 解 contract_date 的 YYYYMM(月選3rd-Wed)/ YYYYMMW#(週選);F# 是「週五」
-   日選/週選(經 TAIFEX 到期日欄證實 F1=次週五),本策略目標一律是週三週選 → F# 該丟、與 lab 一致。
+⚠️ 資料源:選擇權 OI = TAIFEX 官網一手 optDailyMarketReport(各履約 c[13]未沖銷契約量);
+   OHLC = FinMind TaiwanFuturesDaily(TX,只取 position 日盤)。2026-06-09 選擇權由 FinMind 改官網一手。
+⚠️ 到期配對:用官網的 c[2]=契約到期日(YYYYMMDD)直接比對目標週選日 → 免 ed_of、無 F#(週五契約)
+   代碼解析問題。OI 用官方總量(裁判:06-04 W2 算出 46200,對上 FinMind 46100、僅差一履約、更權威)。
 
 用法:
   python scripts/maxpain_daily.py              # 每日 cron:補近期完成的組 + 寫待進場 signal
@@ -38,22 +38,8 @@ PV = 10.0            # 微台 TMF
 SCALE = 0.01         # +1% 加第2口
 STOP = 0.02          # −2% 全停(凍結值,非參考腳本 −3%)
 FINMIND = "https://api.finmindtrade.com/api/v4/data"
+TAIFEX_OPT = "https://www.taifex.com.tw/cht/3/optDailyMarketReport"   # 選擇權每日行情(含各履約 OI)
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "").strip()
-
-
-def nw(y, m, n):
-    dd = date(y, m, 1)
-    return dd + timedelta(days=(2 - dd.weekday()) % 7 + 7 * (n - 1))
-
-
-def ed_of(code):
-    a = re.match(r"^(\d{4})(\d{2})$", code)
-    b = re.match(r"^(\d{4})(\d{2})W(\d)$", code)
-    if a:
-        return nw(int(a[1]), int(a[2]), 3)
-    if b:
-        return nw(int(b[1]), int(b[2]), int(b[3]))
-    return None   # F# 等:解不了
 
 
 def _finmind(params):
@@ -66,21 +52,28 @@ def _finmind(params):
 
 
 def fetch_opt_oi(date_iso):
-    """FinMind TaiwanOptionDaily 單日。只取 position 日盤、OI>0。回 [(contract_date, strike, call_put, oi)]。"""
-    j = _finmind({"dataset": "TaiwanOptionDaily", "data_id": "TXO",
-                  "start_date": date_iso, "end_date": date_iso})
+    """TAIFEX 官網 optDailyMarketReport 單日 TXO 各履約 OI(一手)。回 [(expiry_yyyymmdd, strike, cp, oi)]。
+    欄位(資料列固定 16 cell):c[2]=契約到期日YYYYMMDD c[3]=履約價 c[4]=Call/Put c[13]=未沖銷契約量(OI)。
+    用 c[2] 明確到期日配對目標週選(免 ed_of、無 F# 代碼問題)。OI 用官方總量(比 FinMind position 場權威)。"""
+    body = urllib.parse.urlencode({"queryType": "2", "marketCode": "1", "commodity_id": "TXO",
+                                   "queryDate": date_iso.replace("-", "/"), "MarketCode": "1",
+                                   "commodity_idt": "TXO", "button": "送出查詢"}).encode()
+    req = urllib.request.Request(TAIFEX_OPT, data=body, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        t = r.read().decode("utf-8", "replace")
     out = []
-    for r in j.get("data", []):
-        if r.get("trading_session") != "position":
-            continue
-        oi = r.get("open_interest") or 0
-        if oi <= 0:
+    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", t, re.S):
+        c = [re.sub(r"<[^>]+>", "", x).strip() for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S)]
+        if len(c) != 16 or c[0] != "TXO":
             continue
         try:
-            strike = int(float(r["strike_price"]))
-        except (KeyError, ValueError, TypeError):
+            strike = int(c[3])
+            oi = float(c[13].replace(",", ""))
+        except ValueError:
             continue
-        out.append((str(r["contract_date"]), strike, str(r["call_put"]).lower(), float(oi)))
+        if oi <= 0:
+            continue
+        out.append((c[2], strike, c[4], oi))   # c[2]=YYYYMMDD, c[4]=Call/Put
     return out
 
 
@@ -109,15 +102,15 @@ def fetch_tx_ohlc(start, end):
 
 
 def max_pain(oi_rows, target_ed):
-    """只用 ed_of(contract_date)==target_ed 的列算 Max Pain。回 maxpain_K(不足回 None)。"""
+    """只用「契約到期日 == target_ed」的列算 Max Pain(c[2] 明確到期日配對)。回 maxpain_K(不足回 None)。"""
+    target = target_ed.strftime("%Y%m%d")
     coi, poi = {}, {}
-    for code, strike, cp, oi in oi_rows:
-        ed = ed_of(code)
-        if ed is None or ed != target_ed:   # F# / 非目標到期 → 丟
+    for exp, strike, cp, oi in oi_rows:
+        if exp != target:               # 非目標到期 → 丟
             continue
-        if cp == "call":
+        if cp == "Call":
             coi[strike] = coi.get(strike, 0) + oi
-        elif cp == "put":
+        elif cp == "Put":
             poi[strike] = poi.get(strike, 0) + oi
     ks = sorted(set(coi) | set(poi))
     if len(ks) < 5:

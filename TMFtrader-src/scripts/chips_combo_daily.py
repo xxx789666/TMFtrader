@@ -40,6 +40,7 @@ STOP_PCT = 0.02
 
 FINMIND = "https://api.finmindtrade.com/api/v4/data"
 TAIFEX_LT = "https://www.taifex.com.tw/cht/3/largeTraderFutDown"
+TAIFEX_FUT = "https://www.taifex.com.tw/cht/3/futContractsDateDown"   # 三大法人-區分各期貨契約
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "").strip()
 
 
@@ -61,15 +62,24 @@ def fetch_finmind(dataset, data_id, start, end):
 
 
 def fetch_foreign_netoi(start, end):
-    """外資 TX net_OI[date] = long_oi_bal − short_oi_bal(身份=外資)。"""
-    rows = fetch_finmind("TaiwanFuturesInstitutionalInvestors", "TX", start, end)
+    """三大法人期貨「外資及陸資」TX net_OI[date] = 多方未平倉 − 空方未平倉。
+    來源:TAIFEX 官網 futContractsDateDown(一手、BIG5 CSV)。start/end 'YYYY-MM-DD'。
+    欄位(表頭):0日期 2身份別 9多方未平倉口數 11空方未平倉口數 13多空未平倉淨額。"""
+    body = urllib.parse.urlencode({"queryStartDate": start.replace("-", "/"),
+                                   "queryEndDate": end.replace("-", "/"),
+                                   "commodityId": "TXF"}).encode()
+    req = urllib.request.Request(TAIFEX_FUT, data=body, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        raw = r.read()
     out = {}
-    for r in rows:
-        if str(r.get("institutional_investors", "")).strip() != "外資":
+    for row in csv.reader(io.StringIO(raw.decode("big5", "replace"))):
+        if len(row) < 14 or "外資" not in row[2]:        # 「外資及陸資」
             continue
-        d = r["date"]
-        out[d] = float(r.get("long_open_interest_balance_volume", 0)) - \
-            float(r.get("short_open_interest_balance_volume", 0))
+        d = row[0].strip().replace("/", "-")
+        try:
+            out[d] = float(row[9].replace(",", "")) - float(row[11].replace(",", ""))
+        except ValueError:
+            continue
     return out
 
 
