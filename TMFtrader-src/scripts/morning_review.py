@@ -133,6 +133,46 @@ def whatif_section(tape, pending):
             pass
     return out
 
+def settlement_section():
+    """settlement_v2(週選結算 Tue/Wed)paper:累積 PF + 昨/今新結算 + 當前訊號狀態。"""
+    tape = "data/settlement_v2/decisions.csv"
+    status = "data/settlement_v2/next_signal.json"
+    rows = []
+    if os.path.exists(tape):
+        try:
+            with open(tape, encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+        except Exception:
+            rows = []
+    out = []
+    pnls = [v for v in (_fnum(r.get("pnl")) for r in rows) if v is not None]
+    if pnls:
+        n = len(pnls); wins = [x for x in pnls if x > 0]; gl = -sum(x for x in pnls if x < 0)
+        pf = (sum(wins) / gl) if gl > 0 else float("inf")
+        out.append(f"\n[settlement_v2/paper-csv] 累積{n}筆 淨{sum(pnls):+.0f}元 勝{len(wins)}/{n} PF{pf:.2f}")
+    else:
+        out.append("\n[settlement_v2/paper-csv] 累積0筆(前推剛起算)")
+    fresh = [r for r in rows if str(r.get("trade_date", ""))[:10] in (yday, today)]
+    for r in fresh[-2:]:
+        out.append(f"  新結算 {str(r.get('trade_date',''))[:10]} {r.get('side','')} "
+                   f"{_fnum(r.get('pnl')) or 0:+.0f}元(zsum{_fnum(r.get('zsum')) or 0:+.2f})")
+    if os.path.exists(status):
+        try:
+            st = json.load(open(status, encoding="utf-8"))
+            s = st.get("state")
+            if s == "signal_fired":
+                out.append(f"  狀態: 訊號出 → {st.get('side')} zsum{st.get('zsum',0):+.2f}、"
+                           f"週三{st.get('settle_wed')} 08:45開盤進(等收盤結算)")
+            elif s == "settled":
+                out.append(f"  狀態: 已結算 {st.get('settle_wed')} {st.get('side')} {_fnum(st.get('pnl')) or 0:+.0f}元")
+            elif s == "flat":
+                out.append(f"  狀態: 空手(|zsum|={abs(st.get('zsum',0)):.2f}<0.7、{st.get('settle_wed')}不進場)")
+            else:
+                out.append(f"  狀態: {s}")
+        except Exception:
+            pass
+    return out
+
 def fmt_status(st):
     s = st.get("state")
     if s == "open":      # maxpain 持倉中
@@ -146,7 +186,7 @@ def fmt_status(st):
         return f"待進 {st.get('trade_date','')} {side} combo{st.get('combo',0):+.2f}"
     return json.dumps(st, ensure_ascii=False)[:60]
 
-lines = [f"📋 [覆盤] {today} 早 — live x2(day_v7/night_v7) + chips_exec paper(真tick) + CSV(chips-OHLC/maxpain)"]
+lines = [f"📋 [覆盤] {today} 早 — live x2(day_v7/night_v7) + chips_exec paper(真tick) + CSV(chips/maxpain/settlement_v2)"]
 for name, base, mode in TARGETS:
     trades = load(base)
     if not trades:
@@ -167,6 +207,7 @@ lines += csv_section("chips_combo", "data/chips_combo/decisions.csv",
 lines += csv_section("maxpain_v2", "data/maxpain_v2/decisions.csv",
                      "data/maxpain_v2/next_signal.json", "exit_date")
 lines += whatif_section("data/maxpain_v2/whatif.csv", "data/maxpain_v2/whatif_pending.json")
+lines += settlement_section()
 
 msg = "\n".join(lines)
 print(msg)
