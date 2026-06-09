@@ -93,6 +93,46 @@ def csv_section(name, tape, status, date_col):
             pass
     return out
 
+def whatif_section(tape, pending):
+    """maxpain_exec 真 tick 四變體 forward 對照(無止盈/−1.0/−1.25執行/−1.5)。
+    每列=一筆完成持倉(四變體都出場才寫)。★=實際執行線。"""
+    out = []
+    rows = []
+    if os.path.exists(tape):
+        try:
+            with open(tape, encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+        except Exception:
+            rows = []
+    variants = [("noTP", "無止盈"), ("trail1.0", "−1.0%"),
+                ("trail1.25", "−1.25%★"), ("trail1.5", "−1.5%")]
+    if not rows:
+        out.append("\n[maxpain_exec/whatif] 真tick 四變體對照:尚無完成持倉")
+    else:
+        out.append(f"\n[maxpain_exec/whatif] 真tick 四變體對照 累積{len(rows)}筆(★=實際執行)")
+        for lab, disp in variants:
+            pnls = [v for v in (_fnum(r.get(f"{lab}_pnl")) for r in rows) if v is not None]
+            if not pnls:
+                continue
+            n = len(pnls); wins = [x for x in pnls if x > 0]
+            gl = -sum(x for x in pnls if x < 0)
+            pf = (sum(wins) / gl) if gl > 0 else float("inf")
+            out.append(f"  {disp:8} 淨{sum(pnls):+.0f}元 勝{len(wins)}/{n} PF{pf:.2f}")
+        for r in rows[-2:]:                     # 最近完成的 1-2 筆(maxpain 約週頻、不過濾日期)
+            out.append(f"  完成 進{str(r.get('entry_t',''))[:10]}: "
+                       f"執行−1.25%{_fnum(r.get('trail1.25_pnl')) or 0:+.0f} / "
+                       f"無止盈{_fnum(r.get('noTP_pnl')) or 0:+.0f} / "
+                       f"−1.5%{_fnum(r.get('trail1.5_pnl')) or 0:+.0f}")
+    if os.path.exists(pending):                  # 進行中持倉的影子狀態
+        try:
+            wf = json.load(open(pending, encoding="utf-8"))
+            done = sum(1 for lab in wf.get("v", {}).values() if lab.get("done"))
+            out.append(f"  進行中: 進場{str(wf.get('entry_t',''))[:10]} S1={wf.get('s1')} "
+                       f"目標{wf.get('ed')}結算、{done}/4 變體已出場")
+        except Exception:
+            pass
+    return out
+
 def fmt_status(st):
     s = st.get("state")
     if s == "open":      # maxpain 持倉中
@@ -126,6 +166,7 @@ lines += csv_section("chips_combo", "data/chips_combo/decisions.csv",
                      "data/chips_combo/next_signal.json", "trade_date")
 lines += csv_section("maxpain_v2", "data/maxpain_v2/decisions.csv",
                      "data/maxpain_v2/next_signal.json", "exit_date")
+lines += whatif_section("data/maxpain_v2/whatif.csv", "data/maxpain_v2/whatif_pending.json")
 
 msg = "\n".join(lines)
 print(msg)
