@@ -42,6 +42,22 @@ TAIFEX_OPT = "https://www.taifex.com.tw/cht/3/optDailyMarketReport"   # 選擇�
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "").strip()
 
 
+def _nw(y, m, n):
+    dd = date(y, m, 1)
+    return dd + timedelta(days=(2 - dd.weekday()) % 7 + 7 * (n - 1))
+
+
+def _ed_of(code):
+    """老格式(≤2025、無到期日欄)用代碼解到期日:YYYYMM(月選3rd-Wed)/ YYYYMMW#(週選)。F# 等回 None。"""
+    a = re.match(r"^(\d{4})(\d{2})$", code)
+    b = re.match(r"^(\d{4})(\d{2})W(\d)$", code)
+    if a:
+        return _nw(int(a[1]), int(a[2]), 3)
+    if b:
+        return _nw(int(b[1]), int(b[2]), int(b[3]))
+    return None
+
+
 def _finmind(params):
     q = dict(params)
     if FINMIND_TOKEN:
@@ -52,9 +68,11 @@ def _finmind(params):
 
 
 def fetch_opt_oi(date_iso):
-    """TAIFEX 官網 optDailyMarketReport 單日 TXO 各履約 OI(一手)。回 [(expiry_yyyymmdd, strike, cp, oi)]。
-    欄位(資料列固定 16 cell):c[2]=契約到期日YYYYMMDD c[3]=履約價 c[4]=Call/Put c[13]=未沖銷契約量(OI)。
-    用 c[2] 明確到期日配對目標週選(免 ed_of、無 F# 代碼問題)。OI 用官方總量(比 FinMind position 場權威)。"""
+    """TAIFEX 官網 optDailyMarketReport 單日 TXO 各履約 OI。回 [(expiry_yyyymmdd, strike, cp, oi)]。
+    **格式自動偵測**(TAIFEX 2026 改版):
+    - 16 cell(2026+):c[2]=契約到期日YYYYMMDD c[3]=履約 c[4]=Call/Put c[13]=未沖銷OI。到期=c[2]。
+    - 15 cell(≤2025):c[1]=代碼 c[2]=履約 c[3]=Call/Put c[12]=未沖銷OI。到期=_ed_of(c[1])(無到期日欄)。
+    兩者統一回 expiry=YYYYMMDD 字串,供 max_pain 用日期配對。"""
     body = urllib.parse.urlencode({"queryType": "2", "marketCode": "1", "commodity_id": "TXO",
                                    "queryDate": date_iso.replace("-", "/"), "MarketCode": "1",
                                    "commodity_idt": "TXO", "button": "送出查詢"}).encode()
@@ -64,16 +82,25 @@ def fetch_opt_oi(date_iso):
     out = []
     for row in re.findall(r"<tr[^>]*>(.*?)</tr>", t, re.S):
         c = [re.sub(r"<[^>]+>", "", x).strip() for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S)]
-        if len(c) != 16 or c[0] != "TXO":
+        if not c or c[0] != "TXO":
+            continue
+        if len(c) >= 16:                                  # 新格式
+            exp, si, cpi, oii = c[2], 3, 4, 13
+        elif len(c) == 15:                                # 老格式
+            ed = _ed_of(c[1])
+            if ed is None:                                # F#/不可解 → 丟
+                continue
+            exp, si, cpi, oii = ed.strftime("%Y%m%d"), 2, 3, 12
+        else:
             continue
         try:
-            strike = int(c[3])
-            oi = float(c[13].replace(",", ""))
-        except ValueError:
+            strike = int(c[si])
+            oi = float(c[oii].replace(",", ""))
+        except (ValueError, IndexError):
             continue
         if oi <= 0:
             continue
-        out.append((c[2], strike, c[4], oi))   # c[2]=YYYYMMDD, c[4]=Call/Put
+        out.append((exp, strike, c[cpi], oi))
     return out
 
 
@@ -169,9 +196,14 @@ def settle(S1, hold_days, ohlc, edx):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=45, help="回看交易日窗(預設45)")
+    ap.add_argument("--start", help="歷史回測窗起 YYYY-MM-DD(與 --end 並用)")
+    ap.add_argument("--end", help="歷史回測窗迄 YYYY-MM-DD(預設 today)")
     args = ap.parse_args()
-    today = date.today()
-    ohlc = fetch_tx_ohlc((today - timedelta(days=args.days * 2)).isoformat(), today.isoformat())
+    if args.start and args.end:                          # 歷史回測模式
+        ohlc = fetch_tx_ohlc(args.start, args.end)
+    else:                                                # 每日模式(從 today 回看)
+        today = date.today()
+        ohlc = fetch_tx_ohlc((today - timedelta(days=args.days * 2)).isoformat(), today.isoformat())
     tds = sorted(ohlc)   # 交易日(ISO str)
     if len(tds) < 10:
         print("OHLC 不足"); return

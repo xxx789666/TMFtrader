@@ -61,10 +61,26 @@ def fetch_finmind(dataset, data_id, start, end):
     return j.get("data", [])
 
 
+def _foreign_netoi_finmind(start, end):
+    """外資 net_OI 走 FinMind TaiwanFuturesInstitutionalInvestors(全史 2020+)。
+    歷史回測用(TAIFEX 官網 CSV 端點只 serve 近期、老資料回 HTML 錯誤頁)。與官網同一個數。"""
+    rows = fetch_finmind("TaiwanFuturesInstitutionalInvestors", "TX", start, end)
+    out = {}
+    for r in rows:
+        if str(r.get("institutional_investors", "")).strip() != "外資":
+            continue
+        out[r["date"]] = float(r.get("long_open_interest_balance_volume", 0)) - \
+            float(r.get("short_open_interest_balance_volume", 0))
+    return out
+
+
 def fetch_foreign_netoi(start, end):
     """三大法人期貨「外資及陸資」TX net_OI[date] = 多方未平倉 − 空方未平倉。
-    來源:TAIFEX 官網 futContractsDateDown(一手、BIG5 CSV)。start/end 'YYYY-MM-DD'。
-    欄位(表頭):0日期 2身份別 9多方未平倉口數 11空方未平倉口數 13多空未平倉淨額。"""
+    forward 預設:TAIFEX 官網 futContractsDateDown(一手、BIG5 CSV)。start/end 'YYYY-MM-DD'。
+    欄位(表頭):0日期 2身份別 9多方未平倉口數 11空方未平倉口數 13多空未平倉淨額。
+    ⚠️ 歷史回測設 CHIPS_FOREIGN_SRC=finmind → 改走 FinMind(官網 CSV 端點不 serve 老資料)。"""
+    if os.getenv("CHIPS_FOREIGN_SRC", "").lower() == "finmind":
+        return _foreign_netoi_finmind(start, end)
     body = urllib.parse.urlencode({"queryStartDate": start.replace("-", "/"),
                                    "queryEndDate": end.replace("-", "/"),
                                    "commodityId": "TXF"}).encode()
