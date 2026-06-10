@@ -20,6 +20,7 @@ class RiskPreset:
     max_consecutive_loss: int   # 連續虧損暫停門檻
     cooldown_minutes: int       # 暫停冷卻時間（分鐘）
     max_drawdown_pct: float     # 最大回撤比例（佔帳戶）
+    max_sl_mult: float = 8.0    # 停損距離上限 = max_sl_mult × ATR(預設8;固定%停損策略需放寬)
 
 
 # 三種風格預設
@@ -97,6 +98,9 @@ RISK_PRESETS = {
         max_consecutive_loss=20,
         cooldown_minutes=0,
         max_drawdown_pct=0.90,
+        # chips/maxpain 是固定 −2% 停損(≈880點@44k),低 ATR 日會 >8×ATR 被「停損距離過大」拒單。
+        # −2% 是設計停損(固定%、非ATR),放寬到 30×ATR 讓它一律過,同時仍擋真正異常(>30×ATR)的停損。
+        max_sl_mult=30.0,
     ),
 }
 

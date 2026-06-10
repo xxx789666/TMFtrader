@@ -206,8 +206,9 @@ class RiskManager:
                 )
 
         # 停損距離合理性檢查（危機模式停損倍數可達 6.5x，上限需配合）
+        # max_sl_mult 由 risk preset 設定(預設 8;chips/maxpain 固定 −2% 停損用 fixed1_paper=30 放寬)
         atr = snapshot.atr if snapshot.atr > 0 else 50
-        max_sl_mult = 8.0
+        max_sl_mult = getattr(self.position_sizer.preset, "max_sl_mult", 8.0)
         if stop_distance > atr * max_sl_mult:
             return RiskDecision(
                 approved=False,
