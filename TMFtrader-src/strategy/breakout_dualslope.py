@@ -11,6 +11,7 @@
    point_value 預設 10(money-stop 為寬鬆 backstop,真實 P&L 由 engine 的 instrument spec 算,
    與研究 OOS 口徑一致)。
 """
+from datetime import time
 from typing import Optional
 
 from loguru import logger
@@ -56,6 +57,13 @@ class BreakoutDualSlopeStrategy(BreakoutTrendStrategy):
         sig = super().on_kbar(kbar, snapshot, **kw)
         if sig is None:
             return None   # base 無突破/回踩訊號(最常見、[Scan] 已涵蓋)→ 不記 log
+
+        # v7 日盤限定(2026-06-10 修):base 繼承 24h、但 v7 OOS 僅日盤、且夜盤 realism 證明會虧
+        # → 擋掉夜盤(08:45–13:45 以外)進場。只擋進場,持倉出場仍由 check_exit 管理。
+        bt = kbar.datetime.time()
+        if not (time(8, 45) <= bt <= time(13, 45)):
+            logger.info(f"[v7-skip] 夜盤不進場(日盤限定)｜base訊號={sig.reason} dir={sig.direction.value}")
+            return None
 
         # 以下兩道是 v7 專屬閘:base 有訊號、但被 v7 過濾掉時記 log(方便事後查「行情大動但 v7 沒進」)
         # kill-A-short:砍 A-Squeeze 做空(結構性逆勢桶、PF 0.58 最大失血)
