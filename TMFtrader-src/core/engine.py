@@ -96,7 +96,6 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
         _deploy_dir = PROJECT_ROOT.parent / "deployed_strategies" / "tmf_orb_night"
         _model   = str(_deploy_dir / "orb_filter_b2.pkl")
         _feats   = str(_deploy_dir / "selected_features_b2.txt")
-        import os
         return ORBStrategy(
             orb_minutes=45,
             min_orb_width_atr=3.0,       # B1：ORB 寬度下限
