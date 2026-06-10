@@ -21,6 +21,7 @@ import json
 import os
 import re
 import statistics
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -42,6 +43,18 @@ WARMUP = 40
 FINMIND = "https://api.finmindtrade.com/api/v4/data"
 TAIFEX_OPT = "https://www.taifex.com.tw/cht/3/optDailyMarketReport"
 FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "").strip()
+
+
+def _tg(msg):
+    """推 TG(優雅降級:拿不到 core.notify 就只 print)。"""
+    try:
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        from core.notify import tg
+        tg(msg)
+    except Exception:
+        pass
+    print("[TG] " + msg)
 
 
 # ── 資料抓取(重用 maxpain_daily / chips_combo_daily 的同款邏輯,自包含)──
@@ -269,9 +282,15 @@ def main():
     past = [r for r in feat if r["settle_wed"] < wed_iso]   # 只用過去
     sig = compute_signal(wed_iso, past, d_put_oi, fx_dnet)
 
-    # 滾動 append 特徵(同一 settle_wed 不重複)
+    # 滾動 append 特徵(同一 settle_wed 不重複)→ 首次計算該結算日才推「訊號」TG
     if not any(r["settle_wed"] == wed_iso for r in feat):
         append_feat(wed_iso, tue, d_put_oi, fx_dnet, tue_close)
+        if sig["take"]:
+            _tg(f"[settlement_v2] 訊號 | 結算{wed_iso} 做{'多▲' if sig['side']=='long' else '空▼'} "
+                f"zsum{sig['zsum']:+.2f}(d_put_oi{d_put_oi:+.3f}/fx{fx_dnet:+.0f}) "
+                f"→ 週三開盤進1口MXF、收盤平、無止損")
+        else:
+            _tg(f"[settlement_v2] 結算{wed_iso} 空手(|zsum|{abs(sig['zsum']):.2f}<{ZTHR})")
 
     # 結算(若週三日盤 OHLC 已有)
     settled = None
@@ -315,6 +334,12 @@ def _append_tape(wed_iso, tue, sig, d_put_oi, fx_dnet, s, settled):
                     sig["side"], settled["entry"], settled["exit"], settled["pnl_pts"], settled["pnl"],
                     settled["ret_pct"], wed_iso[:4],
                     f"paper|v2|z|>={ZTHR}、Wed日OHLC開進收出、無止損、cost{COST_PTS}pt、MXF pv50"])
+    # 實際寫入(非重複)才推「結算」TG
+    ts = _tape_summary()
+    cum = f" | 累積{ts[0]}筆 淨{ts[1]:+.0f} PF{ts[3]:.2f}" if ts else ""
+    _tg(f"[settlement_v2] 結算 {wed_iso} 做{'多' if sig['side']=='long' else '空'} "
+        f"進{settled['entry']:.0f}→出{settled['exit']:.0f} {settled['pnl']:+.0f}元"
+        f"({settled['ret_pct']:+.2f}%) zsum{sig.get('zsum',0):+.2f}{cum}")
 
 
 def _tape_summary():
