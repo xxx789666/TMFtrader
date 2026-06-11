@@ -64,17 +64,20 @@ class MaxPainExecStrategy(BaseStrategy):
         except Exception:
             return None
 
-    def on_kbar(self, kbar: KBar, snapshot: MarketSnapshot, **kw) -> Optional[Signal]:
-        self._bar_time = kbar.datetime
-        today = kbar.datetime.date()
-        if today != self._cur_day:
-            self._cur_day = today
+    def _read_signal_cached(self) -> Optional[dict]:
+        """2s TTL 快取(tick 級進場每 tick 都會查;訊號檔前一晚 18:40 cron 寫好、盤中不變)。"""
+        import time as _t
+        now = _t.monotonic()
+        if now - getattr(self, "_sig_cache_at", 0.0) > 2.0:
+            self._sig_cache = self._read_signal()
+            self._sig_cache_at = now
+        return self._sig_cache
 
-        bt = kbar.datetime.time()
+    def _entry_decision(self, today, bt, price, dt) -> Optional[Signal]:
+        """進場判斷(on_kbar 與 check_entry_tick 共用;_acted_signal 防重複進場)。"""
         if bt < self.session_start or bt >= self.entry_window_end:
             return None
-
-        sig = self._read_signal()
+        sig = self._read_signal_cached()
         if not sig or sig.get("state") != "signal_fired" or sig.get("side") != "long":
             return None
         signal_t = sig.get("signal_t")
@@ -91,17 +94,34 @@ class MaxPainExecStrategy(BaseStrategy):
         if self._acted_signal == signal_t:            # 同一訊號已進過 → 不重進
             return None
 
-        price = snapshot.price
         self._acted_signal = signal_t
         self._mp_ed = ed                              # ISO 字串(供引擎 _strategy_state 持久化)
         self._mp_s1 = price
         self._mp_scaled = False
         self._mp_hi = price                           # 追蹤止盈:持有期最高點(從進場價起算)
         self._mp_armed = False
-        self._wf_start(signal_t, ed, price, kbar.datetime)
+        self._wf_start(signal_t, ed, price, dt)
         return Signal(direction=SignalDirection.BUY, strength=0.7,
                       stop_loss=round(price * (1 - self.stop_pct), 1), take_profit=0.0,
                       reason=f"maxpain long dist{sig.get('dist')}", source=self.name)
+
+    def check_entry_tick(self, snapshot: MarketSnapshot) -> Optional[Signal]:
+        """tick 級進場(引擎無倉時每 tick 呼叫):08:45 開盤第一筆 tick 就能進,
+        不必等首根 30m K 收盤(09:00)→ 更貼研究口徑(t+1 開盤價)。與 on_kbar 共用
+        _entry_decision/_acted_signal,tick 先進了 on_kbar 就不會重進。"""
+        ts = snapshot.timestamp
+        px = snapshot.price
+        if ts is None or px <= 0:
+            return None
+        return self._entry_decision(ts.date(), ts.time(), px, ts)
+
+    def on_kbar(self, kbar: KBar, snapshot: MarketSnapshot, **kw) -> Optional[Signal]:
+        self._bar_time = kbar.datetime
+        today = kbar.datetime.date()
+        if today != self._cur_day:
+            self._cur_day = today
+        # K 棒收盤路徑(備援;正常 tick 路徑已在 08:45 先進)
+        return self._entry_decision(today, kbar.datetime.time(), snapshot.price, kbar.datetime)
 
     def check_scale(self, position: Position, snapshot: MarketSnapshot) -> Optional[Signal]:
         """持倉中:漲到 S1×(1+scale_pct) 且尚未加碼 → 回傳加第2口的同向 Signal(引擎 _execute_scale 執行)。"""
@@ -269,6 +289,8 @@ class MaxPainExecStrategy(BaseStrategy):
         self._cur_day = None
         self._bar_time = None
         self._acted_signal = None
+        self._sig_cache = None
+        self._sig_cache_at = 0.0
         # 多日持倉狀態(引擎 _restore_strategy_state 會在重啟+持倉時覆寫還原)
         self._mp_ed = None
         self._mp_s1 = 0.0

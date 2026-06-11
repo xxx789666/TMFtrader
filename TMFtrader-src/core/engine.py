@@ -1118,6 +1118,22 @@ class TradingEngine:
                         if now_mono - last >= 30:
                             self._last_strategy_save = now_mono
                             self._save_strategy_state(instrument)
+        elif self.state == EngineState.RUNNING:
+            # tick 級進場 hook(opt-in、無倉時):exec 型策略(chips/maxpain)可在開盤第一筆
+            # tick(08:45)就進場,不必等首根 30m K 收盤(09:00)。指標/ATR 口徑不變(warmup
+            # 後 snapshot 已就緒、TF 照舊);走既有 _execute_entry(風控/鎖/冷卻全套用)。
+            # 預設策略無 check_entry_tick → 跳過、零影響(同 check_scale/wf_record_tick 模式)。
+            _ce = getattr(pipeline.strategy, "check_entry_tick", None)
+            if _ce:
+                pipeline.snapshot.price = tick.price
+                pipeline.snapshot.timestamp = tick.datetime
+                try:
+                    entry_signal = _ce(pipeline.snapshot)
+                except Exception as _e:
+                    logger.warning(f"[{instrument}] check_entry_tick 失敗: {_e}")
+                    entry_signal = None
+                if entry_signal:
+                    self._execute_entry(instrument, entry_signal)
 
         # 廣播 Tick
         self._broadcast("tick", {

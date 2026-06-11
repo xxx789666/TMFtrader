@@ -50,23 +50,28 @@ class ChipsExecStrategy(BaseStrategy):
         except Exception:
             return None
 
-    def on_kbar(self, kbar: KBar, snapshot: MarketSnapshot, **kw) -> Optional[Signal]:
-        self._bar_time = kbar.datetime
-        sess = kbar.datetime.date()              # 日盤不跨午夜 → 日曆日即交易日
+    def _read_signal_cached(self) -> Optional[dict]:
+        """2s TTL 快取(tick 級進場每 tick 都會查;訊號檔前一晚 18:30 cron 寫好、盤中不變)。"""
+        import time as _t
+        now = _t.monotonic()
+        if now - getattr(self, "_sig_cache_at", 0.0) > 2.0:
+            self._sig_cache = self._read_signal()
+            self._sig_cache_at = now
+        return self._sig_cache
+
+    def _entry_decision(self, sess, bt, price) -> Optional[Signal]:
+        """進場判斷(on_kbar 與 check_entry_tick 共用;_traded 防重複進場)。"""
         if sess != self._cur_sess:               # 換日重置
             self._cur_sess = sess
             self._traded = False
-
-        bt = kbar.datetime.time()
         if self._traded or bt < self.session_start or bt >= self.entry_window_end:
             return None
 
-        sig = self._read_signal()
+        sig = self._read_signal_cached()
         if not sig or sig.get("trade_date") != sess.isoformat():
             return None                          # 今天沒有對應訊號(非交易日/尚未算)
 
         side = sig.get("side")
-        price = snapshot.price
         if side == "long":
             direction = SignalDirection.BUY
             sl = price * (1 - self.stop_pct)
@@ -81,6 +86,21 @@ class ChipsExecStrategy(BaseStrategy):
         return Signal(direction=direction, strength=0.7, stop_loss=round(sl, 1),
                       take_profit=0.0, reason=f"chips {side} combo{sig.get('combo')}",
                       source=self.name)
+
+    def check_entry_tick(self, snapshot: MarketSnapshot) -> Optional[Signal]:
+        """tick 級進場(引擎無倉時每 tick 呼叫):08:45 開盤第一筆 tick 就能進,
+        不必等首根 30m K 收盤(09:00)→ 更貼研究口徑(T+1 開盤價)。與 on_kbar 共用
+        _entry_decision/_traded,tick 先進了 on_kbar 就不會重進。"""
+        ts = snapshot.timestamp
+        px = snapshot.price
+        if ts is None or px <= 0:
+            return None
+        return self._entry_decision(ts.date(), ts.time(), px)
+
+    def on_kbar(self, kbar: KBar, snapshot: MarketSnapshot, **kw) -> Optional[Signal]:
+        self._bar_time = kbar.datetime
+        # K 棒收盤路徑(備援;正常 tick 路徑已在 08:45 先進)
+        return self._entry_decision(kbar.datetime.date(), kbar.datetime.time(), snapshot.price)
 
     def check_exit(self, position: Position, snapshot: MarketSnapshot) -> Optional[Signal]:
         price = snapshot.price
@@ -107,3 +127,5 @@ class ChipsExecStrategy(BaseStrategy):
         self._cur_sess = None
         self._traded = False
         self._bar_time = None
+        self._sig_cache = None
+        self._sig_cache_at = 0.0
