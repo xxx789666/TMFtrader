@@ -105,7 +105,8 @@ def whatif_section(tape, pending):
         except Exception:
             rows = []
     variants = [("noTP", "無止盈"), ("trail1.0", "−1.0%"),
-                ("trail1.25", "−1.25%★"), ("trail1.5", "−1.5%")]
+                ("trail1.25", "−1.25%★"), ("trail1.5", "−1.5%"),
+                ("trail1.25be", "−1.25%地板")]   # 地板=成本價、不鎖虧(2026-06-11 加)
     if not rows:
         out.append("\n[maxpain_exec/whatif] 真tick 四變體對照:尚無完成持倉")
     else:

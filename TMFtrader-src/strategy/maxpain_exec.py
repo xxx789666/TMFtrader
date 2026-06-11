@@ -28,9 +28,11 @@ from core.position import Position, Side
 ROOT = Path(__file__).resolve().parent.parent
 SIGNAL_FILE = ROOT / "data" / "maxpain_v2" / "next_signal.json"
 
-# what-if 影子記錄:同一筆真實進場下,平行算多個出場變體會如何(無止盈=實際執行線、其餘為影子)。
-# 用「實際執行無止盈、抱最久 → 看得到所有 tick」的物理特性,把較早出場的 trail 變體一併算出。
-WF_VARIANTS = [("noTP", 0.0), ("trail1.0", 0.010), ("trail1.25", 0.0125), ("trail1.5", 0.015)]
+# what-if 影子記錄:同一筆真實進場下,平行算多個出場變體會如何(−1.25%=實際執行線、其餘為影子)。
+# (label, trail, be_floor):be_floor=True → trail 出場價須 ≥ 成本(均價);低於成本不鎖虧、
+# 交給 −2% 停損/結算(2026-06-11 加:回應「+1%武裝<1.25%回落 → 武裝即可能鎖小虧」+「加碼買頂吃滿」)。
+WF_VARIANTS = [("noTP", 0.0, False), ("trail1.0", 0.010, False), ("trail1.25", 0.0125, False),
+               ("trail1.5", 0.015, False), ("trail1.25be", 0.0125, True)]
 WF_PENDING = ROOT / "data" / "maxpain_v2" / "whatif_pending.json"   # 進行中持倉的影子狀態(跨重啟還原)
 WF_TAPE = ROOT / "data" / "maxpain_v2" / "whatif.csv"              # 已結束持倉的逐筆變體結果
 
@@ -175,9 +177,9 @@ class MaxPainExecStrategy(BaseStrategy):
     # 每-tick(不管有無倉)呼叫 wf_record_tick,在真倉平掉後續追每個變體到各自出場,全到齊才寫一列。
     def _wf_start(self, signal_t: str, ed: str, price: float, dt) -> None:
         if getattr(self, "_wf", None):                 # 前一筆影子未跑完(極端重疊)→ 現價強制收尾
-            for lab, _ in WF_VARIANTS:
-                v = self._wf["v"][lab]
-                if not v["done"]:
+            for lab, _t, _b in WF_VARIANTS:
+                v = self._wf["v"].get(lab)
+                if v is not None and not v["done"]:
                     v.update(done=True, exit_px=round(price, 1), reason="flush_new_entry",
                              exit_t=dt.isoformat(), scaled=self._wf["scaled"])
             self._wf_finalize()
@@ -186,7 +188,7 @@ class MaxPainExecStrategy(BaseStrategy):
             "entry_t": dt.isoformat(),
             "v": {lab: {"hi": price, "armed": False, "done": False,
                         "exit_px": None, "reason": None, "exit_t": None, "scaled": False}
-                  for lab, _ in WF_VARIANTS},
+                  for lab, _t, _b in WF_VARIANTS},
         }
         self._wf_save()
 
@@ -208,9 +210,9 @@ class MaxPainExecStrategy(BaseStrategy):
         except (ValueError, TypeError, KeyError):
             pass
         changed = False
-        for lab, trail in WF_VARIANTS:
-            v = wf["v"][lab]
-            if v["done"]:
+        for lab, trail, be in WF_VARIANTS:
+            v = wf["v"].get(lab)
+            if v is None or v["done"]:           # 舊 pending(部署前開的)沒有新變體 → 跳過
                 continue
             if px > v["hi"]:
                 v["hi"] = px; changed = True
@@ -221,13 +223,19 @@ class MaxPainExecStrategy(BaseStrategy):
                          exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
                 continue
             if trail > 0 and v["armed"] and px <= v["hi"] * (1 - trail):   # 追蹤止盈鎖利
-                v.update(done=True, exit_px=round(px, 1), reason="trail",
-                         exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
-                continue
+                # be_floor 變體:出場價須 ≥ 成本(均價;加碼後 = S1×(1+scale/2))。
+                # 低於成本不鎖虧 → 不出,交給 −2% 停損/結算。價回到成本上方且仍破 trail 線才出。
+                cost = s1 * (1 + self.scale_pct / 2) if wf["scaled"] else s1
+                if be and px < cost:
+                    pass
+                else:
+                    v.update(done=True, exit_px=round(px, 1), reason="trail",
+                             exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
+                    continue
             if settle_hit:                                         # 抱到結算日收盤平
                 v.update(done=True, exit_px=round(px, 1), reason="settle",
                          exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
-        if all(wf["v"][lab]["done"] for lab, _ in WF_VARIANTS):
+        if all((wf["v"].get(lab) or {"done": True})["done"] for lab, _t, _b in WF_VARIANTS):
             self._wf_finalize()
         elif changed:
             self._wf_save()
@@ -239,8 +247,13 @@ class MaxPainExecStrategy(BaseStrategy):
             return
         s1 = wf["s1"]; pv = self.point_value; s2 = s1 * (1 + self.scale_pct)
         row = {"signal_t": wf["signal_t"], "entry_t": wf["entry_t"], "ed": wf["ed"], "s1": round(s1, 1)}
-        for lab, _ in WF_VARIANTS:
-            v = wf["v"][lab]; ex = v["exit_px"] if v["exit_px"] is not None else s1
+        for lab, _t, _b in WF_VARIANTS:
+            v = wf["v"].get(lab)
+            if v is None:                          # 舊 pending 無此變體 → 欄位留空(維持固定 schema)
+                row[f"{lab}_px"] = ""; row[f"{lab}_reason"] = ""
+                row[f"{lab}_lots"] = ""; row[f"{lab}_pnl"] = ""
+                continue
+            ex = v["exit_px"] if v["exit_px"] is not None else s1
             pnl = ((ex - s1) + ((ex - s2) if v["scaled"] else 0.0)) * pv
             row[f"{lab}_px"] = ex
             row[f"{lab}_reason"] = v["reason"]
