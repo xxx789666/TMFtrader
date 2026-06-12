@@ -200,6 +200,23 @@ def write_chips():
     print(f"寫 {out / (TODAY + '.md')}")
 
 
+def _crash_dualcol(tape):
+    """暴跌後訊號(前5日≤−3%)雙欄對照(觀察級濾網,2026-06-13;只記錄、不動凍結)。"""
+    flagged = [r for r in tape if str(r.get("crash5d", "")).strip() in ("1", "True", "true")]
+    if not flagged:
+        return ""
+    def _pf(p):
+        gl = -sum(x for x in p if x < 0)
+        return (sum(x for x in p if x > 0) / gl) if gl > 0 else float("inf")
+    allp = [v for v in (_fnum(r.get("pnl")) for r in tape) if v is not None]
+    exp = [v for r in tape if str(r.get("crash5d", "")).strip() not in ("1", "True", "true")
+           for v in [_fnum(r.get("pnl"))] if v is not None]
+    if not allp or not exp:
+        return ""
+    return (f"\n- 雙欄(觀察級「暴跌後訊號」濾網):無濾 {len(allp)}筆 淨{sum(allp):+,.0f} PF{_pf(allp):.2f}"
+            f";剔「前5日≤−3%」後 {len(exp)}筆 淨{sum(exp):+,.0f} PF{_pf(exp):.2f}")
+
+
 def _mp_verdict(state, dist):
     d = _fnum(dist)
     if state == "open":
@@ -261,8 +278,13 @@ def write_maxpain():
               f"| 出場計畫 | 抱到 **{sig.get('ed','?')} 結算**;中途跌破停損線全平 |"]
         if sig.get("stop_hit"):
             L.append("- ⚠️ 持有期間日低已觸及停損線 → 結算時此筆將記為 stop 出場(日OHLC 回溯口徑)")
+        if sig.get("crash5d"):
+            L.append(f"- 🟠 觀察級警示:此訊號屬「暴跌後訊號」(訊號日前5日 {sig.get('ret5d',0)*100:+.1f}% ≤ −3%)"
+                     f" — 歷史此類 21 筆合計 −208,750(MCPT p=0.027),觀察中、不動凍結規則")
     elif state == "signal_fired":
         L.append(f"- 訊號已出:訊號日 {sig.get('signal_t','?')}、目標到期 {sig.get('ed','?')}、明日開盤進")
+        if sig.get("crash5d"):
+            L.append(f"- 🟠 觀察級警示:暴跌後訊號(前5日 {sig.get('ret5d',0)*100:+.1f}% ≤ −3%、歷史此類偏虧)")
     else:
         L.append("- 空手(無持倉)")
     L += ["", "## 今日結算成交"]
@@ -274,7 +296,8 @@ def write_maxpain():
         L.append("- 無（未到結算日或空手）")
     L += [
         "",
-        f"## 累積 tape（小台 pv50、{_maxpain_lots(tape)}、期間 {_tape_period(tape, 'signal_t')}）\n- {_tape_stats(tape)}",
+        f"## 累積 tape（小台 pv50、{_maxpain_lots(tape)}、期間 {_tape_period(tape, 'signal_t')}）\n- {_tape_stats(tape)}"
+        + _crash_dualcol(tape),
         "",
         f"## 真 tick 執行（maxpain_exec）\n- {_exec_pos('maxpain_exec')}"
         + ("\n- ⚠️ 紙上帳持倉中、但引擎無倉 → divergence(對帳時標註;如基礎設施事故/漏單)"

@@ -166,8 +166,22 @@ def append_tape(rec):
         w = csv.writer(f)
         if new:
             w.writerow(["signal_t", "expiry_ed", "maxpain", "S_close", "dist", "entry_t1", "S1",
-                        "added", "S2", "exit_reason", "exit_date", "exit_px", "pnl_pts", "pnl", "lots", "note"])
+                        "added", "S2", "exit_reason", "exit_date", "exit_px", "pnl_pts", "pnl", "lots", "note",
+                        "ret5d", "crash5d"])
         w.writerow(rec)
+
+
+def _ret5d(tds, ohlc, t_iso):
+    """訊號日收盤 vs 前5交易日收盤(進場前動能)。≤−3% = 「暴跌後訊號」觀察級濾網候選
+    (2026-06-13:in-sample 剔掉 21 筆 −208,750、MCPT p=0.0267;但門檻斷崖+年度不一致 →
+    只雙欄記錄、不動凍結;真 OOS 驗證交 lab 2015-2019 週選資料)。"""
+    try:
+        i = tds.index(t_iso)
+    except ValueError:
+        return None
+    if i < 5 or tds[i - 5] not in ohlc or t_iso not in ohlc:
+        return None
+    return ohlc[t_iso]["close"] / ohlc[tds[i - 5]]["close"] - 1
 
 
 def settle(S1, hold_days, ohlc, edx):
@@ -264,11 +278,14 @@ def main():
         fu = [x for x in tds_d if x >= ed]
         edx = fu[0] if fu else None          # 結算交易日(首個 >= ed)
 
+        rv = _ret5d(tds, ohlc, t_iso)
+        crash = bool(rv is not None and rv <= -0.03)
         if t1 is None:
             # 訊號剛出、進場日(明天開盤)尚未到 → 待進場
             status = {"state": "signal_fired", "as_of": last_td.isoformat(), "signal_t": t_iso,
                       "ed": sig["ed"], "side": "long", "dist": sig["dist"], "maxpain": sig["maxpain"],
-                      "S_close": sig["close"], "note": "明日開盤進多單第1口"}
+                      "S_close": sig["close"], "ret5d": (round(rv, 4) if rv is not None else None),
+                      "crash5d": crash, "note": "明日開盤進多單第1口"}
             continue
         if edx is None:
             # 已進場(t1<=last_td)但結算日(ed)仍在未來 → 持倉中
@@ -289,6 +306,7 @@ def main():
                       "avg_cost": round((S1 + scale_lvl) / 2, 1) if added else round(S1, 1),
                       "last_close": last_close, "unreal_pnl": unreal, "stop_hit": stop_hit,
                       "days_held": len(hold_so_far),
+                      "ret5d": (round(rv, 4) if rv is not None else None), "crash5d": crash,
                       "note": f"持倉中、目標抱到 {sig['ed']} 結算"}
             continue
         if t1 > edx:
@@ -300,10 +318,12 @@ def main():
         r = settle(ohlc[t1.isoformat()]["open"], [x.isoformat() for x in hold], ohlc, edx.isoformat())
         append_tape([t_iso, ed.isoformat(), sig["maxpain"], sig["close"], sig["dist"], t1.isoformat(),
                      ohlc[t1.isoformat()]["open"], r["added"], r["S2"], r["reason"], r["exit_d"],
-                     r["exit_px"], r["pts"], r["pnl"], r["lots"], "paper、日OHLC結算、無實滑價"])
+                     r["exit_px"], r["pts"], r["pnl"], r["lots"], "paper、日OHLC結算、無實滑價",
+                     (round(rv, 4) if rv is not None else ""), (1 if crash else 0)])
         recorded.add(t_iso)
         new_rec += 1
-        print(f"  記錄 訊號{t_iso}→進{t1.isoformat()} dist{sig['dist']:+.3f} {r['reason']} {r['pnl']:+.0f}元 (lots{r['lots']})")
+        print(f"  記錄 訊號{t_iso}→進{t1.isoformat()} dist{sig['dist']:+.3f} {r['reason']} {r['pnl']:+.0f}元 (lots{r['lots']})"
+              + (f" ⚠️暴跌後訊號(前5日{rv*100:+.1f}%)" if crash else ""))
 
     NEXT.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"本次新記錄 {new_rec} 筆 | 狀態={status['state']}"
@@ -314,22 +334,26 @@ def main():
 def _summarize_tape():
     if not TAPE.exists():
         return
-    pnl = []
+    pnl, pnl_ex = [], []
     with open(TAPE, encoding="utf-8") as f:
         for r in csv.DictReader(f):
             try:
-                pnl.append(float(r["pnl"]))
+                v = float(r["pnl"])
             except (KeyError, ValueError):
-                pass
+                continue
+            pnl.append(v)
+            if str(r.get("crash5d", "")).strip() not in ("1", "True", "true"):
+                pnl_ex.append(v)
+
+    def _line(p):
+        n = len(p); w = [x for x in p if x > 0]; gl = -sum(x for x in p if x < 0)
+        pf = (sum(w) / gl) if gl > 0 else float("inf")
+        return f"{n}筆 淨{sum(p):+,.0f}元 勝率{len(w)/n*100:.0f}% PF{pf:.2f}" if n else "0筆"
     if not pnl:
         return
-    n = len(pnl)
-    wins = [x for x in pnl if x > 0]
-    gp = sum(wins)
-    gl = -sum(x for x in pnl if x < 0)
-    pf = (gp / gl) if gl > 0 else float("inf")
-    print(f"  [tape] {n}筆 淨{sum(pnl):+,.0f}元 勝率{len(wins)/n*100:.0f}% PF{pf:.2f}"
-          f"(注意:paper、日OHLC無滑價、樣本含 2026-H1 melt-up regime,前推預期錨 OOS Sharpe~0.5)")
+    print(f"  [tape] {_line(pnl)}(paper、日OHLC無滑價、含 2026 melt-up,前推錨 OOS Sharpe~0.5)")
+    if len(pnl_ex) != len(pnl):
+        print(f"  [tape|剔暴跌後訊號(前5日≤−3%、觀察級)] {_line(pnl_ex)}")
 
 
 if __name__ == "__main__":
