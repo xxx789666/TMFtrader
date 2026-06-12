@@ -44,7 +44,7 @@ WF_TAPE = ROOT / "data" / "maxpain_v2" / "whatif.csv"              # 已結束�
 class MaxPainExecStrategy(BaseStrategy):
     def __init__(self, stop_pct: float = 0.02, scale_pct: float = 0.01, point_value: float = 50.0,
                  session_start: tuple = (8, 45), entry_window_end: tuple = (9, 30),
-                 settle_close: tuple = (13, 30), trail_pct: float = 0.0125, arm_pct: float = 0.01):
+                 settle_close: tuple = (13, 30), trail_pct: float = 0.0, arm_pct: float = 0.01):
         self.stop_pct = stop_pct
         self.scale_pct = scale_pct
         self.point_value = point_value

@@ -243,9 +243,10 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
         # 訊號在 scripts/maxpain_daily.py(cron、官網 OI)→ next_signal.json;這支執行:
         # t+1 開盤窗進第1口、+1% check_scale 加第2口、−2% 引擎硬停、結算日 13:30 強平。
         # 多日持倉跨重啟靠 _strategy_state(ed/S1/scaled)。固定第1口靠 RISK_PROFILE=fixed1_paper。
-        # forward 驗證(2026-06-09):實際執行線 = V3 追蹤止盈 −1.25%(MAXPAIN_TRAIL_PCT 預設 0.0125);
-        # 同時 what-if 影子記錄器每 tick 平行算 無止盈/−1.0/−1.25/−1.5% 各會如何(寫 data/maxpain_v2/whatif.csv),
-        # 較晚出場的影子(無止盈/−1.5%)靠引擎每-tick wf_record_tick 在真倉平掉後續追到各自出場。
+        # 執行線 = frozen(−2% 24h 硬停、無止盈、抱到結算;MAXPAIN_TRAIL_PCT 預設 0)。
+        # 2026-06-12 從 trail −1.25% 改回:全天5m(含夜盤)修正回測顯示 trail 依據是日盤盲區假象
+        # (frozen +675k/PF1.45 > trail1.25 +413k/1.40;noSL +1.036M/1.80 最強但 78% 靠 2026 melt-up)。
+        # what-if 影子(noTP/trail1.0/1.25/1.5/1.25be/noSL)每 tick 照記 → data/maxpain_v2/whatif.csv。
         return MaxPainExecStrategy(
             stop_pct=0.02,
             scale_pct=0.01,
@@ -253,7 +254,7 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             session_start=(8, 45),   # 08:45=日盤真開盤;08:30-08:45 是試撮(模擬撮合 tick、不可成交,2026-06-12 漏單教訓)
             entry_window_end=(9, 30),
             settle_close=(13, 30),
-            trail_pct=float(os.getenv("MAXPAIN_TRAIL_PCT", "0.0125")),
+            trail_pct=float(os.getenv("MAXPAIN_TRAIL_PCT", "0.0")),
             arm_pct=float(os.getenv("MAXPAIN_ARM_PCT", "0.01")),
         )
     return AdaptiveMomentumStrategy()
