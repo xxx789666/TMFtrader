@@ -83,12 +83,14 @@ def _maxpain_lots(rows):
 
 
 def _exec_pos(owner):
+    """引擎真 tick 持倉:有倉時給精確進場時間(到秒)/價/口數(取自引擎持倉鎖)。"""
     p = ROOT / "data" / "paper" / owner / "active_position.json"
     d = _json(p)
     if not d or d.get("owner") != owner:
         return "無倉"
     side = d.get("side", "?"); qty = d.get("quantity", "?"); px = d.get("entry_price", 0)
-    return f"持倉 {side} x{qty} @ {px:.0f}"
+    et = str(d.get("entry_time", ""))[:19].replace("T", " ")
+    return f"持倉 {side} x{qty} @ {px:.0f}(進場 {et}、{d.get('instrument','MXF')})"
 
 
 def _verdict(combo):
@@ -245,8 +247,20 @@ def write_maxpain():
         "## 持倉狀態",
     ]
     if state == "open":
-        L.append(f"- 持倉中:S1 {sig.get('S1','?')} | 加碼線(+1%) {sig.get('scale_at','?')} "
-                 f"| 停損線(−2%) {sig.get('stop_at','?')} | 目標抱到 {sig.get('ed','?')} 結算")
+        lots = sig.get("lots") or 1
+        added = bool(sig.get("added"))
+        unreal = _fnum(sig.get("unreal_pnl"))
+        L += ["| 項目 | 值 |", "|---|--:|",
+              f"| 進場日/時間 | **{sig.get('entry_t1','?')} 開盤(08:45)**(日OHLC紙上口徑=開盤價) |",
+              f"| 進場價 S1 | **{_n(sig.get('S1'))}**(大台 TX 開盤) |",
+              f"| **目前口數** | **{lots} 口**" + ("(已 +1% 加碼第2口 @ " + str(sig.get('S2')) + ")" if added else "(尚未加碼;漲到 " + str(sig.get('scale_at','?')) + " 加第2口)") + " |",
+              f"| 均價 | {_n(sig.get('avg_cost', sig.get('S1')))} |",
+              f"| 停損線(−2%) | {sig.get('stop_at','?')} |",
+              f"| 最新收盤 | {_n(sig.get('last_close'))}(已持有 {sig.get('days_held','?')} 個交易日) |",
+              f"| 未實現損益 | **{unreal:+,.0f} 元**(小台 pv50、紙上) |" if unreal is not None else "| 未實現損益 | ? |",
+              f"| 出場計畫 | 抱到 **{sig.get('ed','?')} 結算**;中途跌破停損線全平 |"]
+        if sig.get("stop_hit"):
+            L.append("- ⚠️ 持有期間日低已觸及停損線 → 結算時此筆將記為 stop 出場(日OHLC 回溯口徑)")
     elif state == "signal_fired":
         L.append(f"- 訊號已出:訊號日 {sig.get('signal_t','?')}、目標到期 {sig.get('ed','?')}、明日開盤進")
     else:
@@ -262,7 +276,9 @@ def write_maxpain():
         "",
         f"## 累積 tape（小台 pv50、{_maxpain_lots(tape)}、期間 {_tape_period(tape, 'signal_t')}）\n- {_tape_stats(tape)}",
         "",
-        f"## 真 tick 執行（maxpain_exec）\n- {_exec_pos('maxpain_exec')}",
+        f"## 真 tick 執行（maxpain_exec）\n- {_exec_pos('maxpain_exec')}"
+        + ("\n- ⚠️ 紙上帳持倉中、但引擎無倉 → divergence(對帳時標註;如基礎設施事故/漏單)"
+           if state == "open" and _exec_pos('maxpain_exec') == "無倉" else ""),
         "",
         "## 📖 名詞解釋",
         "- **Max Pain(最大痛點)**:由選擇權各履約價的買權/賣權未平倉量(OI)算出——指數若結算在這個價,"

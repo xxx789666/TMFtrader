@@ -263,11 +263,24 @@ def main():
             continue
         if edx is None:
             # 已進場(t1<=last_td)但結算日(ed)仍在未來 → 持倉中
+            # 補持倉細節(供日報):從進場日到今天的 OHLC 推「是否已加碼(口數)/已觸停/未實現損益」。
             S1 = ohlc[t1.isoformat()]["open"]
+            scale_lvl, stop_lvl = S1 * (1 + SCALE), S1 * (1 - STOP)
+            hold_so_far = [x.isoformat() for x in tds_d if t1 <= x <= last_td]
+            added = any(ohlc[d]["high"] >= scale_lvl for d in hold_so_far if d in ohlc)
+            stop_hit = any(ohlc[d]["low"] <= stop_lvl for d in hold_so_far if d in ohlc)
+            lots = 2 if added else 1
+            last_close = ohlc[last_td.isoformat()]["close"] if last_td.isoformat() in ohlc else S1
+            unreal = round(((last_close - S1) + ((last_close - scale_lvl) if added else 0.0)) * PV, 0)
             status = {"state": "open", "as_of": last_td.isoformat(), "signal_t": t_iso,
-                      "entry_t1": t1.isoformat(), "S1": S1, "scale_at": round(S1 * (1 + SCALE), 1),
-                      "stop_at": round(S1 * (1 - STOP), 1), "ed": sig["ed"], "side": "long",
-                      "dist": sig["dist"], "maxpain": sig["maxpain"], "note": f"持倉中、目標抱到 {sig['ed']} 結算"}
+                      "entry_t1": t1.isoformat(), "S1": S1, "scale_at": round(scale_lvl, 1),
+                      "stop_at": round(stop_lvl, 1), "ed": sig["ed"], "side": "long",
+                      "dist": sig["dist"], "maxpain": sig["maxpain"],
+                      "lots": lots, "added": added, "S2": (round(scale_lvl, 1) if added else None),
+                      "avg_cost": round((S1 + scale_lvl) / 2, 1) if added else round(S1, 1),
+                      "last_close": last_close, "unreal_pnl": unreal, "stop_hit": stop_hit,
+                      "days_held": len(hold_so_far),
+                      "note": f"持倉中、目標抱到 {sig['ed']} 結算"}
             continue
         if t1 > edx:
             continue                          # 進場已晚於結算(極端),跳過
