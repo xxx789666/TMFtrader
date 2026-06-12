@@ -213,7 +213,7 @@ def _crash_dualcol(tape):
            for v in [_fnum(r.get("pnl"))] if v is not None]
     if not allp or not exp:
         return ""
-    return (f"\n- 雙欄(觀察級「暴跌後訊號」濾網):無濾 {len(allp)}筆 淨{sum(allp):+,.0f} PF{_pf(allp):.2f}"
+    return (f"\n- 雙欄(「暴跌後訊號」純記錄;濾網已被 2015-19 OOS 否決):無濾 {len(allp)}筆 淨{sum(allp):+,.0f} PF{_pf(allp):.2f}"
             f";剔「前5日≤−3%」後 {len(exp)}筆 淨{sum(exp):+,.0f} PF{_pf(exp):.2f}")
 
 
@@ -279,12 +279,12 @@ def write_maxpain():
         if sig.get("stop_hit"):
             L.append("- ⚠️ 持有期間日低已觸及停損線 → 結算時此筆將記為 stop 出場(日OHLC 回溯口徑)")
         if sig.get("crash5d"):
-            L.append(f"- 🟠 觀察級警示:此訊號屬「暴跌後訊號」(訊號日前5日 {sig.get('ret5d',0)*100:+.1f}% ≤ −3%)"
-                     f" — 歷史此類 21 筆合計 −208,750(MCPT p=0.027),觀察中、不動凍結規則")
+            L.append(f"- ℹ️ 純資訊:暴跌後訊號(前5日 {sig.get('ret5d',0)*100:+.1f}% ≤ −3%)。此濾網已被"
+                     f" 2015-19 真 OOS 否決(剔掉組反而 PF1.34、p=0.60)— 僅長期記錄、無操作含義")
     elif state == "signal_fired":
         L.append(f"- 訊號已出:訊號日 {sig.get('signal_t','?')}、目標到期 {sig.get('ed','?')}、明日開盤進")
         if sig.get("crash5d"):
-            L.append(f"- 🟠 觀察級警示:暴跌後訊號(前5日 {sig.get('ret5d',0)*100:+.1f}% ≤ −3%、歷史此類偏虧)")
+            L.append(f"- ℹ️ 純資訊:暴跌後訊號(前5日 {sig.get('ret5d',0)*100:+.1f}% ≤ −3%;濾網已被 OOS 否決、僅記錄)")
     else:
         L.append("- 空手(無持倉)")
     L += ["", "## 今日結算成交"]

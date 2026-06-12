@@ -172,9 +172,10 @@ def append_tape(rec):
 
 
 def _ret5d(tds, ohlc, t_iso):
-    """訊號日收盤 vs 前5交易日收盤(進場前動能)。≤−3% = 「暴跌後訊號」觀察級濾網候選
-    (2026-06-13:in-sample 剔掉 21 筆 −208,750、MCPT p=0.0267;但門檻斷崖+年度不一致 →
-    只雙欄記錄、不動凍結;真 OOS 驗證交 lab 2015-2019 週選資料)。"""
+    """訊號日收盤 vs 前5交易日收盤(進場前動能)。≤−3% = 「暴跌後訊號」旗標。
+    🪦 濾網已被 2015-19 真 OOS 否決(剔掉組反而 +18,297/PF1.34、MCPT p=0.60、倒U不重現、
+    plateau 全翻號;2020+ regime 品第五例,verdict 2026-06-13)。僅長期雙欄記錄、無操作含義;
+    forward 50+ 筆若 crash 組顯著爛再回拋 lab。教訓:過 in-sample MCPT ≠ 跨 regime。"""
     try:
         i = tds.index(t_iso)
     except ValueError:
@@ -323,7 +324,7 @@ def main():
         recorded.add(t_iso)
         new_rec += 1
         print(f"  記錄 訊號{t_iso}→進{t1.isoformat()} dist{sig['dist']:+.3f} {r['reason']} {r['pnl']:+.0f}元 (lots{r['lots']})"
-              + (f" ⚠️暴跌後訊號(前5日{rv*100:+.1f}%)" if crash else ""))
+              + (f" ℹ️暴跌後訊號(純記錄;前5日{rv*100:+.1f}%)" if crash else ""))
 
     NEXT.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"本次新記錄 {new_rec} 筆 | 狀態={status['state']}"
@@ -353,7 +354,7 @@ def _summarize_tape():
         return
     print(f"  [tape] {_line(pnl)}(paper、日OHLC無滑價、含 2026 melt-up,前推錨 OOS Sharpe~0.5)")
     if len(pnl_ex) != len(pnl):
-        print(f"  [tape|剔暴跌後訊號(前5日≤−3%、觀察級)] {_line(pnl_ex)}")
+        print(f"  [tape|剔暴跌後訊號(純記錄;OOS已否決濾網)] {_line(pnl_ex)}")
 
 
 if __name__ == "__main__":
