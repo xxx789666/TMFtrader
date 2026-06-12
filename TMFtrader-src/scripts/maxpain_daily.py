@@ -231,7 +231,16 @@ def main():
         cands = [(x, (ed - x).days) for x in tds_d if 5 <= (ed - x).days <= 8]
         if not cands:
             continue
-        t = min(cands, key=lambda z: abs(z[1] - 6))[0]
+        # 同 ed 只進一次(2026-06-12):每日增量跑會讓同一結算日在 DTE7(週三晚)與 DTE6(週四晚)
+        # 各 fire 一次 → 兩筆重疊單(如 ed=6/17 的 6/10+6/11 雙訊號)。此 ed 已有 fired(dist>0)
+        # 訊號 → 沿用最早那個 t,不再評估新訊號日。dist≤0/skip 的不鎖(隔天可重評=「四沒訊號就五」)。
+        prior_ts = sorted(k for k, v in cache.items()
+                          if isinstance(v, dict) and v.get("ed") == ed.isoformat()
+                          and not v.get("skip") and v.get("dist", -1) > 0)
+        if prior_ts:
+            t = date.fromisoformat(prior_ts[0])
+        else:
+            t = min(cands, key=lambda z: abs(z[1] - 6))[0]
         t_iso = t.isoformat()
         # 算/取 Max Pain(快取)
         if t_iso not in cache:
