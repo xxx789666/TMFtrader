@@ -234,7 +234,7 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
         return ChipsExecStrategy(
             stop_pct=0.02,
             point_value=10.0,
-            session_start=(8, 30),
+            session_start=(8, 45),   # 08:45=日盤真開盤;08:30-08:45 是試撮(模擬撮合 tick、不可成交,2026-06-12 漏單教訓)
             entry_window_end=(9, 30),
             force_close=(13, 44),
         )
@@ -250,7 +250,7 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             stop_pct=0.02,
             scale_pct=0.01,
             point_value=50.0,
-            session_start=(8, 30),
+            session_start=(8, 45),   # 08:45=日盤真開盤;08:30-08:45 是試撮(模擬撮合 tick、不可成交,2026-06-12 漏單教訓)
             entry_window_end=(9, 30),
             settle_close=(13, 30),
             trail_pct=float(os.getenv("MAXPAIN_TRAIL_PCT", "0.0125")),

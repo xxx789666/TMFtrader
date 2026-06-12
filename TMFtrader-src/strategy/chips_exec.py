@@ -30,7 +30,7 @@ SIGNAL_FILE = ROOT / "data" / "chips_combo" / "next_signal.json"
 
 class ChipsExecStrategy(BaseStrategy):
     def __init__(self, stop_pct: float = 0.02, point_value: float = 10.0,
-                 session_start: tuple = (8, 30), entry_window_end: tuple = (9, 30),
+                 session_start: tuple = (8, 45), entry_window_end: tuple = (9, 30),
                  force_close: tuple = (13, 44), max_loss_twd: float = 0.0):
         self.stop_pct = stop_pct
         self.point_value = point_value
