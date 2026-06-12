@@ -323,7 +323,12 @@ def main():
     if cb:
         combo, zf, zl = cb
         side = side_of(combo)
-        nxt = (date.fromisoformat(rows[-1]["date"]) + timedelta(days=1)).isoformat()
+        # 下一「交易日」:跳週末(否則週五會寫週六、chips_exec 週一對不上日期跳單)。
+        # 國定假日無法預知 → chips_exec 端另有 ≤2 天容忍。
+        nxt_d = date.fromisoformat(rows[-1]["date"]) + timedelta(days=1)
+        while nxt_d.weekday() >= 5:
+            nxt_d += timedelta(days=1)
+        nxt = nxt_d.isoformat()
         SIGNAL.write_text(json.dumps(dict(trade_date=nxt, side=side, combo=round(combo, 3),
                                           z_flow=round(zf, 3), z_lt=round(zl, 3)), ensure_ascii=False, indent=2),
                           encoding="utf-8")

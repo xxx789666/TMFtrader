@@ -68,8 +68,17 @@ class ChipsExecStrategy(BaseStrategy):
             return None
 
         sig = self._read_signal_cached()
-        if not sig or sig.get("trade_date") != sess.isoformat():
-            return None                          # 今天沒有對應訊號(非交易日/尚未算)
+        if not sig:
+            return None
+        # 訊號日期配對:今天 == trade_date,或 trade_date 在 ≤2 天前(容忍假日位移:訊號寫的
+        # 「下一交易日」若撞國定假日,實際首個交易日會晚 1-2 天)。絕不提前交易(sess < td 跳過)。
+        try:
+            from datetime import date as _date
+            td = _date.fromisoformat(str(sig.get("trade_date", "")))
+        except ValueError:
+            return None
+        if sess < td or (sess - td).days > 2:
+            return None                          # 今天沒有對應訊號(非交易日/尚未算/訊號過期)
 
         side = sig.get("side")
         if side == "long":
