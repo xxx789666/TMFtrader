@@ -29,10 +29,14 @@ ROOT = Path(__file__).resolve().parent.parent
 SIGNAL_FILE = ROOT / "data" / "maxpain_v2" / "next_signal.json"
 
 # what-if 影子記錄:同一筆真實進場下,平行算多個出場變體會如何(−1.25%=實際執行線、其餘為影子)。
-# (label, trail, be_floor):be_floor=True → trail 出場價須 ≥ 成本(均價);低於成本不鎖虧、
-# 交給 −2% 停損/結算(2026-06-11 加:回應「+1%武裝<1.25%回落 → 武裝即可能鎖小虧」+「加碼買頂吃滿」)。
-WF_VARIANTS = [("noTP", 0.0, False), ("trail1.0", 0.010, False), ("trail1.25", 0.0125, False),
-               ("trail1.5", 0.015, False), ("trail1.25be", 0.0125, True)]
+# (label, trail, be_floor, use_stop):
+#   be_floor=True → trail 出場價須 ≥ 成本(均價);低於成本不鎖虧(2026-06-11 加)。
+#   use_stop=False → 連 −2% 停損都不設、純抱到結算(noSL,2026-06-12 加:6/11 該筆 −2% 停在
+#   −107k、不停損抱到 6/12 反彈變賺;全史掃 130 筆無停損 +1.085M/PF1.84 vs 凍結 +574k/1.35,
+#   且最大單筆反而較小 —— gap 穿停損時停損版照樣吃滿、回頭單卻被砍。in-sample,先影子驗)。
+WF_VARIANTS = [("noTP", 0.0, False, True), ("trail1.0", 0.010, False, True),
+               ("trail1.25", 0.0125, False, True), ("trail1.5", 0.015, False, True),
+               ("trail1.25be", 0.0125, True, True), ("noSL", 0.0, False, False)]
 WF_PENDING = ROOT / "data" / "maxpain_v2" / "whatif_pending.json"   # 進行中持倉的影子狀態(跨重啟還原)
 WF_TAPE = ROOT / "data" / "maxpain_v2" / "whatif.csv"              # 已結束持倉的逐筆變體結果
 
@@ -177,7 +181,7 @@ class MaxPainExecStrategy(BaseStrategy):
     # 每-tick(不管有無倉)呼叫 wf_record_tick,在真倉平掉後續追每個變體到各自出場,全到齊才寫一列。
     def _wf_start(self, signal_t: str, ed: str, price: float, dt) -> None:
         if getattr(self, "_wf", None):                 # 前一筆影子未跑完(極端重疊)→ 現價強制收尾
-            for lab, _t, _b in WF_VARIANTS:
+            for lab, *_ in WF_VARIANTS:
                 v = self._wf["v"].get(lab)
                 if v is not None and not v["done"]:
                     v.update(done=True, exit_px=round(price, 1), reason="flush_new_entry",
@@ -188,7 +192,7 @@ class MaxPainExecStrategy(BaseStrategy):
             "entry_t": dt.isoformat(),
             "v": {lab: {"hi": price, "armed": False, "done": False,
                         "exit_px": None, "reason": None, "exit_t": None, "scaled": False}
-                  for lab, _t, _b in WF_VARIANTS},
+                  for lab, *_ in WF_VARIANTS},
         }
         self._wf_save()
 
@@ -210,7 +214,7 @@ class MaxPainExecStrategy(BaseStrategy):
         except (ValueError, TypeError, KeyError):
             pass
         changed = False
-        for lab, trail, be in WF_VARIANTS:
+        for lab, trail, be, use_stop in WF_VARIANTS:
             v = wf["v"].get(lab)
             if v is None or v["done"]:           # 舊 pending(部署前開的)沒有新變體 → 跳過
                 continue
@@ -218,7 +222,7 @@ class MaxPainExecStrategy(BaseStrategy):
                 v["hi"] = px; changed = True
             if not v["armed"] and px >= s1 * (1 + self.arm_pct):
                 v["armed"] = True; changed = True
-            if px <= stp:                                          # −2% 全停(所有變體共用)
+            if use_stop and px <= stp:                             # −2% 停損(noSL 變體關閉)
                 v.update(done=True, exit_px=round(stp, 1), reason="stop",
                          exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
                 continue
@@ -235,7 +239,7 @@ class MaxPainExecStrategy(BaseStrategy):
             if settle_hit:                                         # 抱到結算日收盤平
                 v.update(done=True, exit_px=round(px, 1), reason="settle",
                          exit_t=ts.isoformat(), scaled=wf["scaled"]); changed = True
-        if all((wf["v"].get(lab) or {"done": True})["done"] for lab, _t, _b in WF_VARIANTS):
+        if all((wf["v"].get(lab) or {"done": True})["done"] for lab, *_ in WF_VARIANTS):
             self._wf_finalize()
         elif changed:
             self._wf_save()
@@ -247,7 +251,7 @@ class MaxPainExecStrategy(BaseStrategy):
             return
         s1 = wf["s1"]; pv = self.point_value; s2 = s1 * (1 + self.scale_pct)
         row = {"signal_t": wf["signal_t"], "entry_t": wf["entry_t"], "ed": wf["ed"], "s1": round(s1, 1)}
-        for lab, _t, _b in WF_VARIANTS:
+        for lab, *_ in WF_VARIANTS:
             v = wf["v"].get(lab)
             if v is None:                          # 舊 pending 無此變體 → 欄位留空(維持固定 schema)
                 row[f"{lab}_px"] = ""; row[f"{lab}_reason"] = ""
