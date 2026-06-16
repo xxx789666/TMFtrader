@@ -11,7 +11,9 @@
    point_value 預設 10(money-stop 為寬鬆 backstop,真實 P&L 由 engine 的 instrument spec 算,
    與研究 OOS 口徑一致)。
 """
-from datetime import time
+import json
+import os
+from datetime import time, date
 from typing import Optional
 
 from loguru import logger
@@ -20,6 +22,13 @@ from strategy.breakout import BreakoutTrendStrategy
 from strategy.base import SignalDirection
 from core.market_data import KBar, MarketSnapshot
 from core.position import Position, Side
+
+
+def _default_guard_state_path() -> Optional[str]:
+    """只有 live 進程(launcher 設 STRATEGY_OWNER)才落地 guard 狀態;
+    回測/replay/單測無此 env → 回 None = 純記憶體、零污染。"""
+    owner = os.getenv("STRATEGY_OWNER")
+    return f"data/state/dir_guard_{owner}.json" if owner else None
 
 # v7 確認配置(進場閾值=各 OOS 窗最佳值中位數;其餘=釘死消融值)
 V7_DEFAULTS = dict(
@@ -34,17 +43,23 @@ class BreakoutDualSlopeStrategy(BreakoutTrendStrategy):
     """v7:kill-A-short + 事前 EMA200 斜率閘 + EMA60/EMA200 雙水平對齊。日盤限定。"""
 
     def __init__(self, slope_lookback: int = 48, slope_thr: float = 0.015,
-                 kill_a_short: bool = True, require_dual_slope: bool = True, **kw):
+                 kill_a_short: bool = True, require_dual_slope: bool = True,
+                 state_path: Optional[str] = None, **kw):
         self.slope_lookback = slope_lookback
         self.slope_thr = slope_thr
         self.kill_a_short = kill_a_short
         self.require_dual_slope = require_dual_slope
         self._ema200_hist: list[float] = []
         self._ema60_hist: list[float] = []
-        # 同方向當天限一次(2026-06-16):記錄「今天已實際持倉過的方向」
+        # 同方向當天限一次(2026-06-16):記錄「今天已實際持倉過的方向」。
+        # state_path 給定(或 live env 解析到)則落地→盤中重啟可載回;None=純記憶體。
         self._entered_dirs_today: set = set()
         self._entered_day = None
+        self._state_path = state_path
         super().__init__(**{**V7_DEFAULTS, **kw})   # kw 可覆寫(如 max_loss_twd / point_value)
+        if self._state_path is None:               # 放 super 後載回(避免 init 期間被清)
+            self._state_path = _default_guard_state_path()
+        self._load_guard_state()
 
     @property
     def name(self) -> str:
@@ -108,15 +123,48 @@ class BreakoutDualSlopeStrategy(BreakoutTrendStrategy):
         if d != self._entered_day:
             self._entered_day = d
             self._entered_dirs_today = set()
+            self._save_guard_state()
 
     def _record_held_direction(self, position: Position, dt) -> None:
         self._roll_day(dt)
+        before = len(self._entered_dirs_today)
         self._entered_dirs_today.add(
             SignalDirection.BUY if position.side == Side.LONG else SignalDirection.SELL)
+        if len(self._entered_dirs_today) != before:   # check_exit 每 tick 呼叫→僅變動時才寫檔
+            self._save_guard_state()
 
     def _same_dir_already_done(self, direction: SignalDirection, dt) -> bool:
         self._roll_day(dt)
         return direction in self._entered_dirs_today
+
+    # ── guard 狀態落地(盤中重啟可載回;env-gated,回測/測試=None 不落地) ──────
+    def _load_guard_state(self) -> None:
+        if not self._state_path or not os.path.exists(self._state_path):
+            return
+        try:
+            with open(self._state_path, encoding="utf-8") as f:
+                d = json.load(f)
+            self._entered_day = date.fromisoformat(d["date"]) if d.get("date") else None
+            self._entered_dirs_today = {SignalDirection(v) for v in d.get("dirs", [])}
+            logger.info(f"[v7-guard] 載回當日已進方向 date={self._entered_day} "
+                        f"dirs={[x.value for x in self._entered_dirs_today]}")
+        except Exception as e:
+            logger.warning(f"[v7-guard] 狀態載入失敗(改空集合): {e}")
+            self._entered_day = None
+            self._entered_dirs_today = set()
+
+    def _save_guard_state(self) -> None:
+        if not self._state_path:
+            return
+        try:
+            os.makedirs(os.path.dirname(self._state_path), exist_ok=True)
+            tmp = self._state_path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"date": self._entered_day.isoformat() if self._entered_day else None,
+                           "dirs": [d.value for d in self._entered_dirs_today]}, f)
+            os.replace(tmp, self._state_path)          # atomic
+        except Exception as e:
+            logger.warning(f"[v7-guard] 狀態寫入失敗(忽略): {e}")
 
     def _regime_reject(self, snapshot: MarketSnapshot) -> Optional[str]:
         """回傳「被哪道閘擋下」的原因字串;None = 通過。"""
@@ -141,3 +189,4 @@ class BreakoutDualSlopeStrategy(BreakoutTrendStrategy):
         self._ema60_hist = []
         self._entered_dirs_today = set()
         self._entered_day = None
+        self._save_guard_state()
