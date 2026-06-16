@@ -19,6 +19,7 @@ from loguru import logger
 from strategy.breakout import BreakoutTrendStrategy
 from strategy.base import SignalDirection
 from core.market_data import KBar, MarketSnapshot
+from core.position import Position, Side
 
 # v7 確認配置(進場閾值=各 OOS 窗最佳值中位數;其餘=釘死消融值)
 V7_DEFAULTS = dict(
@@ -40,6 +41,9 @@ class BreakoutDualSlopeStrategy(BreakoutTrendStrategy):
         self.require_dual_slope = require_dual_slope
         self._ema200_hist: list[float] = []
         self._ema60_hist: list[float] = []
+        # 同方向當天限一次(2026-06-16):記錄「今天已實際持倉過的方向」
+        self._entered_dirs_today: set = set()
+        self._entered_day = None
         super().__init__(**{**V7_DEFAULTS, **kw})   # kw 可覆寫(如 max_loss_twd / point_value)
 
     @property
@@ -79,7 +83,40 @@ class BreakoutDualSlopeStrategy(BreakoutTrendStrategy):
             self._cooldown_bars = 0
             logger.info(f"[v7-skip] {rej}｜base訊號={sig.reason} dir={sig.direction.value}")
             return None
+
+        # 同方向當天限一次(2026-06-16):回測證據顯示「同天同方向再進」無 edge
+        # (6 年樣本 n=1 且虧),且 live 比回測更常觸發 → 擋掉當天已實際做過的方向。
+        # 記錄綁在 check_exit(只有真持倉才會被引擎呼叫)→ 訊號被單池鎖/風控擋掉未成交者
+        # 不會誤記、當天第一筆仍可重試。只擋進場;反向(多↔空)不受影響。
+        if self._same_dir_already_done(sig.direction, kbar.datetime):
+            logger.info(f"[v7-skip] 同方向當天已做過 dir={sig.direction.value}"
+                        f"(同方向限一次/日)｜base訊號={sig.reason}")
+            return None
         return sig
+
+    def check_exit(self, position: Position, snapshot: MarketSnapshot):
+        # 只有實際持倉時引擎才會呼叫 → 在此記錄「今天此方向已真的進場」,供 on_kbar 擋同向再進。
+        self._record_held_direction(position, snapshot.timestamp)
+        return super().check_exit(position, snapshot)
+
+    # ── 同方向當天限一次:輔助方法(抽出以利單元測試) ──────────────────────
+    def _roll_day(self, dt) -> None:
+        """跨日就清空當天已進方向集合(v7 日盤限定、不跨午夜)。"""
+        if dt is None:
+            return
+        d = dt.date()
+        if d != self._entered_day:
+            self._entered_day = d
+            self._entered_dirs_today = set()
+
+    def _record_held_direction(self, position: Position, dt) -> None:
+        self._roll_day(dt)
+        self._entered_dirs_today.add(
+            SignalDirection.BUY if position.side == Side.LONG else SignalDirection.SELL)
+
+    def _same_dir_already_done(self, direction: SignalDirection, dt) -> bool:
+        self._roll_day(dt)
+        return direction in self._entered_dirs_today
 
     def _regime_reject(self, snapshot: MarketSnapshot) -> Optional[str]:
         """回傳「被哪道閘擋下」的原因字串;None = 通過。"""
@@ -102,3 +139,5 @@ class BreakoutDualSlopeStrategy(BreakoutTrendStrategy):
         super().reset()
         self._ema200_hist = []
         self._ema60_hist = []
+        self._entered_dirs_today = set()
+        self._entered_day = None
