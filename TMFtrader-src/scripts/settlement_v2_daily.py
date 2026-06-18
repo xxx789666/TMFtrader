@@ -330,6 +330,7 @@ def main():
     if settled:
         out.update(settled)
     NEXT.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    out["veto_md"] = _veto_sidecar(out)   # 純加法旁欄(在 NEXT 寫完後算,不污染 next_signal.json)
     write_report(out)
     print(f"[settlement_v2] {wed_iso} 訊號=tue {tue} d_put_oi={d_put_oi:+.4f} fx_dnet={fx_dnet:+.0f} "
           f"zsum={sig['zsum']:+.3f} → {sig['side']}" + (f" | 結算 {settled['pnl']:+.0f}元" if settled else ""))
@@ -374,6 +375,44 @@ def _tape_summary():
     n = len(pnls); wins = [x for x in pnls if x > 0]; gl = -sum(x for x in pnls if x < 0)
     pf = (sum(wins) / gl) if gl > 0 else float("inf")
     return n, sum(pnls), len(wins), pf
+
+
+FORWARD_DIR = ROOT / "data" / "forward"
+REALIZED = FORWARD_DIR / "settlement_v2_realized.csv"   # 權威實際點數(給 veto 雙欄 eval 對帳)
+
+
+def _veto_sidecar(o):
+    """逆勢降險旁欄(2026-06-18 加;純加法、不動 v2 凍結邏輯)。回報告用 markdown 區塊或 ''。
+    ① 波浪三度數 veto(TAIEX 日線、因果)→ 逆勢建議 SKIP → append log。
+    ② 本筆已結算 → 把實際 pnl_pts 寫進 settlement_v2_realized.csv(eval 權威值、閉環,免每週手動)。
+    任何失敗都吞掉(絕不影響 v2 主流程/結算)。"""
+    md = ""
+    try:
+        import sys as _sys
+        _sd = str(Path(__file__).resolve().parent)
+        if _sd not in _sys.path:
+            _sys.path.insert(0, _sd)
+        import settlement_v2_wave_veto as _veto
+        if o.get("side") in ("long", "short"):
+            r = _veto.decide(o["signal_tue"], o["side"])
+            _veto.append_log(o["signal_tue"], o["side"], r)
+            md = _veto.md_block(o["signal_tue"], o["side"], r)
+    except Exception as e:
+        print(f"[settlement_v2/veto] 旁欄略過: {e}")
+    try:
+        if o.get("state") == "settled" and o.get("pnl_pts") is not None:
+            FORWARD_DIR.mkdir(parents=True, exist_ok=True)
+            rows = []
+            if REALIZED.exists():
+                with open(REALIZED, encoding="utf-8-sig") as f:
+                    rows = [r for r in csv.DictReader(f) if r.get("trade_date") != o["settle_wed"]]
+            rows.append({"trade_date": o["settle_wed"], "pnl_pts": o["pnl_pts"]})
+            with open(REALIZED, "w", newline="", encoding="utf-8-sig") as f:
+                w = csv.DictWriter(f, fieldnames=["trade_date", "pnl_pts"])
+                w.writeheader(); w.writerows(rows)
+    except Exception as e:
+        print(f"[settlement_v2/realized] 寫入略過: {e}")
+    return md
 
 
 def write_report(o):
@@ -437,6 +476,8 @@ def write_report(o):
         n, net, w, pf = ts
         L += ["## 累積 paper tape(小台 pv50、1口、無止損、cost 4pt)",
               f"- {n} 筆 淨 {net:+.0f} 元 勝 {w}/{n} PF {pf:.2f}", ""]
+    if o.get("veto_md"):
+        L += [o["veto_md"], ""]
     L += ["## 📖 名詞解釋",
           "- **d_put_oi**:當週到期賣權(Put)總未平倉量,週二相對前日的變化率。賣權牆變厚(正)常代表下檔支撐/偏多訊號之一。",
           "- **fx_dnet**:外資台指期(TX)淨未平倉(多−空)當日變化。正=外資加多。",
