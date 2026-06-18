@@ -31,8 +31,8 @@ INSTRUMENT_SPECS = {
         code="TMF",
         name="微型台指期貨",
         point_value=10.0,      # 1 點 = 10 元
-        margin=28900,          # 期交所現行（2026-06 查證、統一期貨保證金表；舊值 20600 已過時）
-        maintenance_margin=22150,
+        margin=31800,          # 期交所現行（2026-06-18 查證、國票+統一期貨保證金表一致、標「近期調高」；前值 28900）
+        maintenance_margin=24400,
         commission=18.0,
         tax=7.0,
         strategy_type="breakout",
@@ -44,8 +44,8 @@ INSTRUMENT_SPECS = {
         code="MXF",
         name="小型台指期貨",
         point_value=50.0,      # 1 點 = 50 元
-        margin=144500,         # 期交所現行（2026-06 查證、統一期貨保證金表；= TMF×5；隨波動調整、以永豐帳戶為準）
-        maintenance_margin=110750,
+        margin=159000,         # 期交所現行（2026-06-18 查證、國票+統一一致、標「近期調高」；= TMF×5；前值 144500；以永豐帳戶為準）
+        maintenance_margin=122000,
         commission=18.0,
         tax=7.0,
         strategy_type="breakout",   # 實際由各 launcher 的 STRATEGY_TYPE env 覆寫
