@@ -29,6 +29,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+try:
+    from dotenv import load_dotenv
+    load_dotenv(ROOT / ".env", override=False)   # 載入 WAVE_DATA_API_KEY 等(cron 不會自動帶 .env)
+except Exception:
+    pass
 from strategy.wave_filter import dir_full, dir_c1  # noqa: E402
 
 CHIPS_SIGNAL = ROOT / "data" / "chips_combo" / "next_signal.json"
@@ -189,6 +194,17 @@ def main():
         wd, c1, asof = None, 0, ""
     else:
         wd, c1, asof = wave_dir_for(entry, g)
+        # 防呆:asof(波浪定格 bar)若距進場日 >5 天 = 抓取失敗用到陳舊 parquet → 視為資料不足、
+        # 不可拿幾週前的波浪當今天訊號(2026-06-18 數據金鑰未載入時實際踩到:用到 5/27 的波浪)。
+        try:
+            import pandas as _pd
+            stale_days = (_pd.Timestamp(entry).normalize() - _pd.Timestamp(asof).normalize()).days
+            if stale_days > 5:
+                print(f"⚠️ 波浪定格 {asof} 距進場日 {entry} 已 {stale_days} 天 = 資料陳舊(抓取可能失敗)"
+                      f"→ 視為資料不足、濾網 fail-open;勿信此波浪方向。")
+                wd, c1 = None, 0
+        except Exception:
+            pass
 
     side, decA, decB, decC = decide(combo, wd)
     dirmap = {1: "多", -1: "空", 0: "空手"}

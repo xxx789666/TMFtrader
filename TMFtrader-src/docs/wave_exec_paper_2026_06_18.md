@@ -32,12 +32,12 @@ start_wave_exec_paper.sh (cron pre-open ~08:22)  ── 引擎讀 side ──┘
 2. **.env 數據金鑰**(producer 抓 kbar 用、唯讀):VPS `.env` 需有
    `WAVE_DATA_API_KEY` / `WAVE_DATA_SECRET_KEY`(或既有 `SHIOAJI_DATA_*`;最後 fallback 引擎主金鑰)。
    來源 = 本機 `vps api.txt` 的「數據」段。**無金鑰 → 波浪 fail-open 退化成純 chips(政策A)、印警告**。
-3. **cron**(TST;務必用 `crontab -l > /tmp/ct.bak; 編輯; crontab /tmp/ct.bak`,**絕不**用 `crontab -l|grep -v|crontab -` 自刪 pattern,2026-05-28 landmine):
+3. **cron**(VPS crontab 用 **UTC**、TST=UTC+8;務必 `crontab -l > /tmp/ct.bak; 編輯; crontab /tmp/ct.bak`,**絕不**用 `crontab -l|grep -v|crontab -` 自刪 pattern,2026-05-28 landmine):
    ```
-   0  7  * * 1-5  cd /home/xx/TMFtrader-src && TZ=Asia/Taipei .venv/bin/python3 scripts/wave_fade_daily.py >> data/logs/wave_fade_daily_$(date +\%Y\%m\%d).log 2>&1
-   22 8  * * 1-5  /home/xx/TMFtrader-src/scripts/start_wave_exec_paper.sh
+   5  0  * * 1-5  cd /home/xx/TMFtrader-src && TZ=Asia/Taipei .venv/bin/python3 scripts/wave_fade_daily.py >> data/logs/wave_fade_daily.log 2>&1   # 00:05 UTC = 08:05 TST
+   23 0  * * 1-5  /home/xx/TMFtrader-src/scripts/start_wave_exec_paper.sh                                                                          # 00:23 UTC = 08:23 TST
    ```
-   (producer 07:00 在 chips 18:30 之後、夜盤 05:00 收之後、開盤 08:45 之前;launcher 08:22 在 producer 之後)
+   (producer 08:05 TST 在 chips 18:30、夜盤 05:00 收之後、launcher 08:23 之前;launcher 在 producer 之後、開盤 08:45 之前。producer 用 .env 隔離數據金鑰登入,不撞 live 主金鑰連線。)
 4. **不手動重啟既有進程**(memory `vps_deploy_without_restart`);wave_exec 是新進程,首次靠 08:22 cron 起。
 5. 連線預算:現 4 條(day_v7/night_v7/chips_exec/maxpain_exec)+ wave_exec = **5 條 = 上限**。
    producer 的 kbar 抓取是短暫登入(抓完 logout)、非常駐連線。
