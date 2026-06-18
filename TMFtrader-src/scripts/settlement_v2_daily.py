@@ -399,6 +399,13 @@ def _veto_sidecar(o):
             md = _veto.md_block(o["signal_tue"], o["side"], r)
     except Exception as e:
         print(f"[settlement_v2/veto] 旁欄略過: {e}")
+    # 雙欄濾網參數/績效區塊(v2 vs v2+skip;每日都附,讓報告看得到濾網的參數與track-record)
+    try:
+        import settlement_v2_veto_eval as _veto_eval
+        o["veto_perf_md"] = _veto_eval.report_block()
+    except Exception as e:
+        print(f"[settlement_v2/veto] 雙欄參數區塊略過: {e}")
+        o["veto_perf_md"] = ""
     try:
         if o.get("state") == "settled" and o.get("pnl_pts") is not None:
             FORWARD_DIR.mkdir(parents=True, exist_ok=True)
@@ -478,6 +485,8 @@ def write_report(o):
               f"- {n} 筆 淨 {net:+.0f} 元 勝 {w}/{n} PF {pf:.2f}", ""]
     if o.get("veto_md"):
         L += [o["veto_md"], ""]
+    if o.get("veto_perf_md"):
+        L += [o["veto_perf_md"], ""]
     L += ["## 📖 名詞解釋",
           "- **d_put_oi**:當週到期賣權(Put)總未平倉量,週二相對前日的變化率。賣權牆變厚(正)常代表下檔支撐/偏多訊號之一。",
           "- **fx_dnet**:外資台指期(TX)淨未平倉(多−空)當日變化。正=外資加多。",
