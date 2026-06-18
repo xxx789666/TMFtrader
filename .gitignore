@@ -57,3 +57,8 @@ kronos_experiment/
 optimizer/results*/*.csv
 deployed_strategies/
 SECURITY_SCAN_*.md
+
+# [2026-06-18] settlement_v2 veto / forward 產物 + 大盤行情 seed(VPS + 冷備份,不入 git;API 同意書條9 行情禁傳)
+TMFtrader-src/data/forward/
+TMFtrader-src/data/taiex_daily.csv
+TMFtrader-src/data/backtest_history/
