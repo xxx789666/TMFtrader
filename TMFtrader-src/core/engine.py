@@ -48,6 +48,7 @@ from strategy.day_orb import DayORBStrategy
 from strategy.night_orb import NightORBStrategy
 from strategy.chips_exec import ChipsExecStrategy
 from strategy.maxpain_exec import MaxPainExecStrategy
+from strategy.wave_exec import WaveExecStrategy
 from strategy.filters import MarketRegime, SessionManager, SessionPhase
 from risk.manager import RiskManager
 from core.performance import PerformanceTracker
@@ -256,6 +257,20 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             settle_close=(13, 30),
             trail_pct=float(os.getenv("MAXPAIN_TRAIL_PCT", "0.0")),
             arm_pct=float(os.getenv("MAXPAIN_ARM_PCT", "0.01")),
+        )
+    if strategy_type == "wave_exec":
+        # chips_combo × 波浪 fade 濾網 訊號的引擎真 tick paper 執行載具(2026-06-18)。
+        # 決策(combo + 波浪方向 → 政策B 同向跳)在 scripts/wave_fade_daily.py(cron ~07:00、
+        # shioaji 唯讀數據金鑰抓 MXFR1 + dir_full 波浪)→ data/wave_fade/next_signal.json;
+        # 這支只執行:日盤開盤窗讀 side(已套濾網)→ 1 口進場(真 tick)、−2% 引擎硬停、13:44 強平、
+        # 不過夜。固定 1 口靠 launcher RISK_PROFILE=fixed1_paper;標的 MXF 小台(引擎自動對齊 pv50)。
+        # ⚠️ forward 候選非確認 edge(無 2015-19 OOS、設定搜出)→ paper-only、不放大、≥1 年才終審。
+        return WaveExecStrategy(
+            stop_pct=0.02,
+            point_value=10.0,
+            session_start=(8, 45),   # 08:45=日盤真開盤;08:30-08:45 是試撮(不可成交,2026-06-12 漏單教訓)
+            entry_window_end=(9, 30),
+            force_close=(13, 44),
         )
     return AdaptiveMomentumStrategy()
 
