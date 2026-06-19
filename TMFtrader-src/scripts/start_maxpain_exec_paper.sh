@@ -7,6 +7,12 @@
 # 精準 kill:PIDFILE + /proc/environ 確認 STRATEGY_OWNER=maxpain_exec,絕不 pkill -f。
 set -u
 cd /home/xx/TMFtrader-src
+# 市場休市日不啟動(無行情→假連線中斷迴圈+TG洗版;2026-06-19 端午事故)。週末已由 cron Mon-Fri 排除。
+if grep -qx "$(TZ=Asia/Taipei date +%F)" scripts/market_holidays.txt 2>/dev/null; then
+  mkdir -p data/logs
+  echo "[$(date '+%F %T')] $(TZ=Asia/Taipei date +%F) 市場休市 → 跳過 maxpain_exec 啟動" >> data/logs/holiday_skip.log
+  exit 0
+fi
 find . -name '*.pyc' -not -path './.venv/*' -delete 2>/dev/null || true
 export TZ=Asia/Taipei
 PY=.venv/bin/python3

@@ -5,6 +5,12 @@
 # 須在 15:00 前啟動才能從 15:00 乾淨建 OR(cron 14:50)。精準 kill:PIDFILE + /proc/environ。
 set -u
 cd /home/xx/TMFtrader-src
+# 市場休市日不啟動(無行情→假連線中斷迴圈+TG洗版;2026-06-19 端午事故)。週末已由 cron Mon-Fri 排除。
+if grep -qx "$(TZ=Asia/Taipei date +%F)" scripts/market_holidays.txt 2>/dev/null; then
+  mkdir -p data/logs
+  echo "[$(date '+%F %T')] $(TZ=Asia/Taipei date +%F) 市場休市 → 跳過 night_v7 啟動" >> data/logs/holiday_skip.log
+  exit 0
+fi
 # 清 stale bytecode(rsync mtime → 沿用舊 .pyc 跑舊碼;2026-06-05 night_v3 or_bars=6 事故根因)。
 find . -name '*.pyc' -not -path './.venv/*' -delete 2>/dev/null || true
 export TZ=Asia/Taipei
