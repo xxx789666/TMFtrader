@@ -25,6 +25,11 @@ HHMM=$((10#$(date +%H%M)))   # 0905 → 905（避免 08 被當八進位）
 EPOCH=$(date +%s)
 wlog(){ echo "[$(date '+%F %T')] $*" >> "$WLOG"; }
 
+# 市場休市日:引擎本就不啟動(launcher 休市 guard)→ 跳過所有檢查,不誤報 down/凍結(2026-06-19 端午)。
+if grep -qx "$(date +%F)" "$PROJ/scripts/market_holidays.txt" 2>/dev/null; then
+  wlog "市場休市 → 跳過看門狗檢查"; exit 0
+fi
+
 TG_TOKEN=$(grep '^TG_BOT_TOKEN=' "$PROJ/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
 TG_CHAT=$(grep '^TG_CHAT_ID='  "$PROJ/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
 send_tg(){
