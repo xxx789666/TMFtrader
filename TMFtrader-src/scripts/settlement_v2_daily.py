@@ -379,6 +379,41 @@ def _tape_summary():
 
 FORWARD_DIR = ROOT / "data" / "forward"
 REALIZED = FORWARD_DIR / "settlement_v2_realized.csv"   # 權威實際點數(給 veto 雙欄 eval 對帳)
+VETO_LOG = FORWARD_DIR / "settlement_v2_veto_log.csv"   # 逆勢濾網 forward skip 決定(signal_date,...,action)
+
+
+def _veto_actions():
+    """讀逆勢濾網 log → {signal_date: action}(TAKE/SKIP)。無檔=空(全 TAKE)。"""
+    m = {}
+    if VETO_LOG.exists():
+        with open(VETO_LOG, encoding="utf-8-sig") as f:
+            for r in csv.DictReader(f):
+                sd = (r.get("signal_date") or "").strip()
+                if sd:
+                    m[sd] = (r.get("action") or "").strip().upper()
+    return m
+
+
+def _tape_summary_filtered():
+    """有濾網(v2+逆勢skip)forward 累計:把 veto_log 標 SKIP 的訊號日從 decisions.csv 剔除。"""
+    if not TAPE.exists():
+        return None
+    actions = _veto_actions()
+    pnls = []
+    with open(TAPE, encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            sd = (r.get("signal_date") or "").strip()
+            if actions.get(sd) == "SKIP":
+                continue
+            try:
+                pnls.append(float(r["pnl"]))
+            except (KeyError, ValueError):
+                pass
+    if not pnls:
+        return None
+    n = len(pnls); wins = [x for x in pnls if x > 0]; gl = -sum(x for x in pnls if x < 0)
+    pf = (sum(wins) / gl) if gl > 0 else float("inf")
+    return n, sum(pnls), len(wins), pf
 
 
 def _veto_sidecar(o):
@@ -482,7 +517,16 @@ def write_report(o):
     if ts:
         n, net, w, pf = ts
         L += ["## 累積 paper tape(小台 pv50、1口、無止損、cost 4pt)",
-              f"- {n} 筆 淨 {net:+.0f} 元 勝 {w}/{n} PF {pf:.2f}", ""]
+              "| 口徑 | 筆數 | 淨損益(元) | 勝率 | PF |",
+              "|---|--:|--:|--:|--:|",
+              f"| 無濾網(v2,現行 live 口徑) | {n} | {net:+.0f} | {w}/{n} | {pf:.2f} |"]
+        tsf = _tape_summary_filtered()
+        if tsf:
+            fn, fnet, fw, fpf = tsf
+            L += [f"| 有濾網(v2+逆勢skip,僅觀察未上線) | {fn} | {fnet:+.0f} | {fw}/{fn} | {fpf:.2f} |",
+                  "",
+                  f"- 差異:濾網 skip 掉 {n - fn} 筆逆勢單 → 損益差 {fnet - net:+.0f} 元(正=濾網少虧/多賺)"]
+        L += [""]
     if o.get("veto_md"):
         L += [o["veto_md"], ""]
     if o.get("veto_perf_md"):
