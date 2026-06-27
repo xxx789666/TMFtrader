@@ -20,6 +20,7 @@ from datetime import time
 from pathlib import Path
 from typing import Optional
 
+from loguru import logger
 from strategy.base import BaseStrategy, Signal, SignalDirection
 from core.market_data import KBar, MarketSnapshot
 from core.position import Position, Side
@@ -64,23 +65,38 @@ class ChipsExecStrategy(BaseStrategy):
         if sess != self._cur_sess:               # 換日重置
             self._cur_sess = sess
             self._traded = False
+            self._logged_sess = None
+
+        def _log_once(msg):
+            # 每 session 只印一次(此函式每 tick 被呼叫,避免洗版);只在進場窗內印
+            if getattr(self, "_logged_sess", None) != sess and self.session_start <= bt < self.entry_window_end:
+                self._logged_sess = sess
+                logger.info(f"[chips_exec] {sess} 訊號讀取 → {msg}")
+
         if self._traded or bt < self.session_start or bt >= self.entry_window_end:
             return None
 
         sig = self._read_signal_cached()
         if not sig:
+            _log_once("無 next_signal.json → 跳過")
             return None
         # 訊號日期配對:今天 == trade_date,或 trade_date 在 ≤2 天前(容忍假日位移:訊號寫的
         # 「下一交易日」若撞國定假日,實際首個交易日會晚 1-2 天)。絕不提前交易(sess < td 跳過)。
+        _sd, _cb, _tdraw = sig.get("side"), sig.get("combo"), sig.get("trade_date", "")
         try:
             from datetime import date as _date
-            td = _date.fromisoformat(str(sig.get("trade_date", "")))
+            td = _date.fromisoformat(str(_tdraw))
         except ValueError:
+            _log_once(f"trade_date 格式錯({_tdraw}) → 跳過")
             return None
-        if sess < td or (sess - td).days > 2:
-            return None                          # 今天沒有對應訊號(非交易日/尚未算/訊號過期)
+        if sess < td:
+            _log_once(f"trade_date={td} side={_sd} combo={_cb} → 未到交易日、跳過")
+            return None
+        if (sess - td).days > 2:
+            _log_once(f"trade_date={td} side={_sd} combo={_cb} → 訊號過期({(sess - td).days}天>2)、跳過")
+            return None
 
-        side = sig.get("side")
+        side = _sd
         if side == "long":
             direction = SignalDirection.BUY
             sl = price * (1 - self.stop_pct)
@@ -88,9 +104,11 @@ class ChipsExecStrategy(BaseStrategy):
             direction = SignalDirection.SELL
             sl = price * (1 + self.stop_pct)
         else:                                    # flat:今天不交易,標記避免整段重讀
+            _log_once(f"trade_date={td} side=flat combo={_cb} → 空手不進場")
             self._traded = True
             return None
 
+        _log_once(f"trade_date={td} side={side} combo={_cb} → 進場 {side} @ {price:.0f} 停損 {round(sl,1)}")
         self._traded = True
         return Signal(direction=direction, strength=0.7, stop_loss=round(sl, 1),
                       take_profit=0.0, reason=f"chips {side} combo{sig.get('combo')}",
@@ -138,3 +156,4 @@ class ChipsExecStrategy(BaseStrategy):
         self._bar_time = None
         self._sig_cache = None
         self._sig_cache_at = 0.0
+        self._logged_sess = None

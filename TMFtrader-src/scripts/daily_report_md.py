@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CHIPS = ROOT / "data" / "chips_combo"
 MAXP = ROOT / "data" / "maxpain_v2"
 REPORTS = ROOT / "data" / "reports"
-TODAY = date.today().isoformat()
+TODAY = os.environ.get("REPORT_DATE") or date.today().isoformat()   # 可用 REPORT_DATE 補產任一天
 
 
 def _json(p):
@@ -221,6 +221,8 @@ def _mp_verdict(state, dist):
     d = _fnum(dist)
     if state == "open":
         return "**持倉中** — 已做多,抱到該週選結算(中途 +1% 加第2口 / −2% 全停)"
+    if state == "stopped":
+        return "**已停損出場** — 持倉中途觸 −2% 停損全平(此筆已入帳 tape、現空手等下個訊號)"
     if state == "signal_fired":
         ds = f"(dist {d:+.3f} > 0)" if d is not None else ""
         return f"**訊號已出 → 明日開盤做多第1口** {ds}"
@@ -281,6 +283,14 @@ def write_maxpain():
         if sig.get("crash5d"):
             L.append(f"- ℹ️ 純資訊:暴跌後訊號(前5日 {sig.get('ret5d',0)*100:+.1f}% ≤ −3%)。此濾網已被"
                      f" 2015-19 真 OOS 否決(剔掉組反而 PF1.34、p=0.60)— 僅長期記錄、無操作含義")
+    elif state == "stopped":
+        rp = _fnum(sig.get("realized_pnl"))
+        L += ["| 項目 | 值 |", "|---|--:|",
+              f"| 進場日 | {sig.get('entry_t1','?')} 開盤 @ {_n(sig.get('S1'))} |",
+              f"| 停損線(−2%) | {sig.get('stop_at','?')} |",
+              f"| **已停損出場** | **{sig.get('exit_d','?')} @ {_n(sig.get('exit_px'))}**(中途跌破停損線全平、未抱到結算) |",
+              (f"| **已實現損益** | **{rp:+,.0f} 元**({sig.get('lots',1)} 口、小台 pv50、已入帳 tape) |"
+               if rp is not None else "| 已實現損益 | ? |")]
     elif state == "signal_fired":
         L.append(f"- 訊號已出:訊號日 {sig.get('signal_t','?')}、目標到期 {sig.get('ed','?')}、明日開盤進")
         if sig.get("crash5d"):

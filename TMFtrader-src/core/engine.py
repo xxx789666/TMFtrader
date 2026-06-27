@@ -49,6 +49,8 @@ from strategy.night_orb import NightORBStrategy
 from strategy.chips_exec import ChipsExecStrategy
 from strategy.maxpain_exec import MaxPainExecStrategy
 from strategy.wave_exec import WaveExecStrategy
+from strategy.astruct import AStructStrategy
+from strategy.astruct_nightgate import AStructNightgateStrategy
 from strategy.filters import MarketRegime, SessionManager, SessionPhase
 from risk.manager import RiskManager
 from core.performance import PerformanceTracker
@@ -271,6 +273,31 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             session_start=(8, 45),   # 08:45=日盤真開盤;08:30-08:45 是試撮(不可成交,2026-06-12 漏單教訓)
             entry_window_end=(9, 30),
             force_close=(13, 44),
+        )
+    if strategy_type == "astruct":
+        # A_struct 日內早盤波浪 0-1-2 做多 + 日線 EMA250 牛熊濾網(lab 交接 2026-06-22)。
+        # ⚠️ 盤中即時策略:08:45–09:45 用 5m K 即時跑因果 zigzag、浪2 確認當根收盤市價做多;
+        # 結構停利=浪2+1.618×L1、結構停損=浪2×(1−0.15%)(引擎 tick 級硬停/硬利)、13:45 強平。
+        # 牛熊前置濾讀 data/taiex_daily.csv(cron 14:30 抓);固定 1 口靠 RISK_PROFILE=fixed1_paper。
+        # 標的 MXF 小台(引擎依 spec 自動對齊 pv50)。forward 候選非 edge → paper-only、不放大。
+        return AStructStrategy(
+            ema_span=int(os.getenv("ASTRUCT_EMA_SPAN", "250")),
+            window_start=(8, 45),
+            window_end=(9, 45),
+            force_close=(13, 45),
+            point_value=50.0,
+        )
+    if strategy_type == "astruct_nightgate":
+        # A_struct 夜盤閘門法 真 tick 執行器(2026-06-23):取代逆勢 bug 版 astruct。
+        # 偵測/閘門/破壞位/人工 Discord 審核在本機 lab 管線;這支讀橋接推來的當日決定
+        # (data/astruct_nightgate/next_signal.json)→ 08:45 即時開盤判閘門 → 過則 first_wave_anchored
+        # (浪0=08:45低錨)真 tick 進 1 口 → 結構 TP/SL 引擎 tick 硬停 → 13:45 強平。
+        # TF=1 對齊 lab 1分K;固定 1 口靠 RISK_PROFILE=fixed1_paper;標的 MXF(引擎自動對齊 pv50)。
+        return AStructNightgateStrategy(
+            window_start=(8, 45),
+            window_end=(9, 45),
+            force_close=(13, 45),
+            point_value=50.0,
         )
     return AdaptiveMomentumStrategy()
 
@@ -1041,6 +1068,36 @@ class TradingEngine:
                 except Exception as _wc_outer:
                     logger.error(f"[WallClock] outer error: {_wc_outer}\n{_tb.format_exc()}")
 
+                # ── 盤末強平 wall-clock 保活 ──────────────────────────────────
+                # check_exit 的收盤強平靠 snapshot.timestamp(只在 _on_tick 每 tick 餵);收盤前真 tick
+                # 一斷(流動性枯竭/連線不穩)→ check_exit 不被呼叫 → 強平拖到下一筆 synth 才平、還用
+                # 陳舊價成交(2026-06-17 chips_exec 13:38 斷tick→14:30 才平@45669 陳舊價事故)。
+                # 這裡每輪(~1s)直接用 wall-clock 比對策略 force_close、到點就平,不等 tick。
+                try:
+                    from datetime import time as _dtime
+                    if self.state == EngineState.RUNNING:
+                        _wt = datetime.now().time()             # 引擎 TZ=Asia/Taipei → TST(同上方 WallClock)
+                        for _inst, _pipe in self.pipelines.items():
+                            _pos = self.position_manager.positions.get(_inst)
+                            if _pos is None or _pos.is_flat:
+                                continue
+                            _strat = _pipe.strategy
+                            _fc = getattr(_strat, "force_close", None) or getattr(_strat, "force_close_time", None)
+                            # 只管日盤盤末(08:45-14:00 窗);夜盤強平各策略自管、避免跨午夜誤觸
+                            if _fc is not None and _dtime(8, 45) <= _wt <= _dtime(14, 0) and _wt >= _fc:
+                                _px = _pipe.snapshot.price or _pipe.aggregator.current_price
+                                if _px and _px > 0:
+                                    from strategy.base import Signal, SignalDirection
+                                    _sig = Signal(direction=SignalDirection.CLOSE, strength=1.0,
+                                                  stop_loss=0, take_profit=0,
+                                                  reason="盤末強平(wall-clock補、真tick斷時準時平)",
+                                                  source="force_close_wc")
+                                    logger.info(f"[ForceCloseWC] {_inst} wall-clock {_wt.strftime('%H:%M:%S')} "
+                                                f">= force_close {_fc} 且真tick未觸發 → 平倉 @ {_px:.0f}")
+                                    self._execute_exit(_inst, _sig, _px)
+                except Exception as _fcwc_err:
+                    logger.error(f"[ForceCloseWC] {_fcwc_err}\n{_tb.format_exc()}")
+
         except Exception as _loop_fatal:
             logger.error(f"[Engine] 迴圈致命錯誤（執行緒終止）: {_loop_fatal}\n{_tb.format_exc()}")
             self.state = EngineState.ERROR
@@ -1308,6 +1365,30 @@ class TradingEngine:
             return holder
         return None
 
+    def _is_trading_day(self, now=None) -> bool:
+        """當下是否屬於有效交易日(擋常駐引擎在週末/假日用陳舊/synth tick 誤進場)。
+        夜盤跨午夜:00:00-06:00 歸前一日(週五夜盤延到週六 05:00 仍合法、不誤擋)。
+        時間一律用 TST(UTC+8、台灣無 DST)算,不依賴 process TZ(避免某引擎跑 UTC 時誤判)。"""
+        from datetime import datetime, timedelta, timezone
+        from pathlib import Path
+        if now is None:
+            now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+        ref = (now - timedelta(days=1)) if now.hour < 6 else now      # 凌晨歸前一交易日(夜盤)
+        if ref.weekday() >= 5:                                        # 5=Sat 6=Sun
+            return False
+        if not hasattr(self, "_holiday_set"):
+            self._holiday_set = set()
+            try:
+                p = Path(__file__).resolve().parent.parent / "scripts" / "market_holidays.txt"
+                if p.exists():
+                    for ln in p.read_text(encoding="utf-8").splitlines():
+                        s = ln.strip()
+                        if s and not s.startswith("#"):
+                            self._holiday_set.add(s)
+            except Exception:
+                pass
+        return ref.strftime("%Y-%m-%d") not in self._holiday_set
+
     def _execute_entry(self, instrument: str, signal: Signal):
         """執行進場（指定商品）"""
         # ── Reconcile halt：上次 reconcile 偵測引擎/券商持倉背離、阻止新倉
@@ -1315,6 +1396,14 @@ class TradingEngine:
             logger.warning(
                 f"[Halt] {instrument} reconcile drift halt 中、跳過 {signal.direction.value} 進場"
             )
+            return
+
+        # ── 非交易日守門 ──
+        # 常駐引擎週末/假日仍活著、WallClock 會補 synth tick、下面的時段檢查只看「時分」
+        # → 會在非交易日用陳舊/合成價誤進場(2026-06-27 週六 wave_exec 在凍住 45006 假進場事故)。
+        # 夜盤跨午夜(週五夜盤延到週六 05:00)已歸前一日、不誤擋。
+        if not self._is_trading_day():
+            logger.info(f"[NonTradingDay] {instrument} 非交易日(週末/假日)→ 跳過 {signal.direction.value} 進場")
             return
 
         # 交易時段檢查（防止非交易時段下單）

@@ -208,6 +208,28 @@ def settle(S1, hold_days, ohlc, edx):
                 pts=round(pts, 1), pnl=round(pts * PV, 0), lots=2 if added else 1)
 
 
+def eval_signal(t_iso, ed, ohlc, cache):
+    """確保 cache[t_iso] 已算(必要時抓 TAIFEX OI 算 Max Pain),回 sig dict 或 None(抓/算失敗)。
+    供 EARLY67 依序評估候選訊號日(週三 DTE7 → 週四 DTE6)、各自算 dist 後取第一個 dist>0。"""
+    if t_iso in cache:
+        return cache[t_iso]
+    try:
+        oi = fetch_opt_oi(t_iso)
+        time.sleep(0.3)
+        mp = max_pain(oi, ed)
+    except Exception as e:
+        print(f"  訊號日 {t_iso} 抓/算失敗: {e}")
+        return None
+    if mp is None:
+        print(f"  訊號日 {t_iso} 目標到期 {ed} 無足夠履約 OI → 跳過")
+        cache[t_iso] = {"ed": ed.isoformat(), "skip": True}; save_cache(cache)
+        return cache[t_iso]
+    S = ohlc[t_iso]["close"]
+    cache[t_iso] = {"ed": ed.isoformat(), "maxpain": mp, "close": S, "dist": round((mp - S) / S, 4)}
+    save_cache(cache)
+    return cache[t_iso]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=45, help="回看交易日窗(預設45)")
@@ -242,37 +264,38 @@ def main():
     new_rec = 0
     status = {"state": "flat", "as_of": last_td.isoformat()}
     for ed in exps:
-        # 訊號日 t = DTE 在 [5,8] 最接近 6
-        cands = [(x, (ed - x).days) for x in tds_d if 5 <= (ed - x).days <= 8]
-        if not cands:
-            continue
-        # 同 ed 只進一次(2026-06-12):每日增量跑會讓同一結算日在 DTE7(週三晚)與 DTE6(週四晚)
-        # 各 fire 一次 → 兩筆重疊單(如 ed=6/17 的 6/10+6/11 雙訊號)。此 ed 已有 fired(dist>0)
-        # 訊號 → 沿用最早那個 t,不再評估新訊號日。dist≤0/skip 的不鎖(隔天可重評=「四沒訊號就五」)。
+        # 訊號日政策 = EARLY67(2026-06-15;由短暫的「嚴格 DTE6」改回,忠實回測判決:真 TAIFEX OI+逐根5m
+        # 顯示 DTE7 在 2022 空頭 +97k、DTE6 −117k,Sharpe 1.14>0.74、maxDD 半;雙窗 EARLY67 淨利最高):
+        #   候選訊號日依序 = 週三(DTE7)→ 週四(DTE6);各自算 dist,取「第一個 dist>0」鎖定。
+        #   - 週三(DTE7,結算當日 EOD,舊週選已於當日早盤轉倉、新週籌碼已往新 maxpain 靠)= 有效、較挑;
+        #   - 週四(DTE6,結算後第一個全日)= 週三沒訊號時的後備;
+        #   - **排除週二(DTE8,結算前籌碼未轉倉、maxpain 不成熟,ed=6/17 實測週二 43300 vs 結算後 44250/44300)**。
+        #   進場 = t+1:週三訊號→週四進、週四訊號→週五進。每 ed 一筆,週三進到就不再評估週四。
+        # live 增量 cron:週三晚先評估週三→dist>0 即鎖(prior_ts 沿用);≤0 則週四晚評估週四。batch 模式
+        # 一次看全:同一迴圈先試週三再試週四,兩模式行為一致。在途 ed=6/17 沿用已鎖 6/10(=EARLY67 正解,週四進)。
         prior_ts = sorted(k for k, v in cache.items()
                           if isinstance(v, dict) and v.get("ed") == ed.isoformat()
                           and not v.get("skip") and v.get("dist", -1) > 0)
         if prior_ts:
-            t = date.fromisoformat(prior_ts[0])
+            cand_days = [date.fromisoformat(prior_ts[0])]      # 已鎖 dist>0 → 沿用最早那個(保護在途)
         else:
-            t = min(cands, key=lambda z: abs(z[1] - 6))[0]
+            cand_days = []
+            for dte in (7, 6):                                 # 週三(DTE7)優先、週四(DTE6)次之
+                m = [x for x in tds_d if (ed - x).days == dte]
+                if m:
+                    cand_days.append(m[0])
+            if not cand_days:
+                continue          # 週三/週四都尚未到(週三晚前)或逢假日 → 此 ed 本次不評估
+        t = None
+        for cd in cand_days:                                   # 依序評估,取第一個 dist>0
+            sig = eval_signal(cd.isoformat(), ed, ohlc, cache)
+            if sig and not sig.get("skip") and sig.get("dist", -1) > 0:
+                t = cd
+                break
+        if t is None:
+            continue          # 候選訊號日都 dist≤0/skip → 不做多
         t_iso = t.isoformat()
-        # 算/取 Max Pain(快取)
-        if t_iso not in cache:
-            try:
-                oi = fetch_opt_oi(t_iso)
-                time.sleep(0.3)
-                mp = max_pain(oi, ed)
-            except Exception as e:
-                print(f"  訊號日 {t_iso} 抓/算失敗: {e}"); continue
-            if mp is None:
-                print(f"  訊號日 {t_iso} 目標到期 {ed} 無足夠履約 OI → 跳過"); cache[t_iso] = {"ed": ed.isoformat(), "skip": True}; save_cache(cache); continue
-            S = ohlc[t_iso]["close"]
-            cache[t_iso] = {"ed": ed.isoformat(), "maxpain": mp, "close": S, "dist": round((mp - S) / S, 4)}
-            save_cache(cache)
         sig = cache[t_iso]
-        if sig.get("skip") or sig.get("dist", -1) <= 0:
-            continue   # dist<=0 不做多
 
         fut = [x for x in tds_d if x > t]
         t1 = fut[0] if fut else None         # 進場日(t 之後首個交易日)
@@ -296,6 +319,26 @@ def main():
             hold_so_far = [x.isoformat() for x in tds_d if t1 <= x <= last_td]
             added = any(ohlc[d]["high"] >= scale_lvl for d in hold_so_far if d in ohlc)
             stop_hit = any(ohlc[d]["low"] <= stop_lvl for d in hold_so_far if d in ohlc)
+            # ── 中途已觸 −2% 停損 → 當日全平、即時記 tape(策略「中途跌破停損線全平」),不等結算 ──
+            # (修 2026-06-27:原本算出 stop_hit 卻仍掛「持倉中」抱到結算、MTM 用現價誤導 −131k、
+            #  且與真 tick 引擎已停損 divergence。停損價才是實際出場。)
+            if stop_hit:
+                hsf = [d for d in hold_so_far if d in ohlc]
+                r = settle(S1, hsf, ohlc, "")            # edx="" 不在 hold → 必因 stop 出場
+                if t_iso not in recorded:
+                    append_tape([t_iso, ed.isoformat(), sig["maxpain"], sig["close"], sig["dist"], t1.isoformat(),
+                                 S1, r["added"], r["S2"], r["reason"], r["exit_d"],
+                                 r["exit_px"], r["pts"], r["pnl"], r["lots"], "paper、日OHLC結算、無實滑價",
+                                 (round(rv, 4) if rv is not None else ""), (1 if crash else 0)])
+                    recorded.add(t_iso); new_rec += 1
+                    print(f"  記錄(中途停損) 訊號{t_iso}→進{t1.isoformat()} {r['reason']} {r['pnl']:+.0f}元 (lots{r['lots']}) @{r['exit_d']}")
+                status = {"state": "stopped", "as_of": last_td.isoformat(), "signal_t": t_iso,
+                          "entry_t1": t1.isoformat(), "S1": S1, "stop_at": round(stop_lvl, 1),
+                          "ed": sig["ed"], "side": "long", "dist": sig["dist"], "maxpain": sig["maxpain"],
+                          "lots": r["lots"], "added": r["added"],
+                          "exit_d": r["exit_d"], "exit_px": r["exit_px"], "realized_pnl": r["pnl"],
+                          "note": f"已觸 −2% 停損、{r['exit_d']} 當日全平(不抱到結算);realized {r['pnl']:+.0f}元"}
+                continue
             lots = 2 if added else 1
             last_close = ohlc[last_td.isoformat()]["close"] if last_td.isoformat() in ohlc else S1
             unreal = round(((last_close - S1) + ((last_close - scale_lvl) if added else 0.0)) * PV, 0)
