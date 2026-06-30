@@ -76,9 +76,45 @@ def _wed_contract_code(wed):
     return f"{wed.year}{wed.month:02d}W{n}"           # 週選 W1/W2/W4/W5
 
 
+def _fetch_oi_taifex(date_iso, wed):
+    """備案:FinMind 當日還沒出 OI 時,改抓 TAIFEX 官網 optDailyMarketReport,回 (put_by, call_by) {strike: oi}。
+    防『欄位漂』:① 用『表頭』找未沖銷契約量/履約價/買賣權/契約到期日欄(不靠位置)
+                 ② 用『契約到期日』== 結算日比對(不靠契約代碼格式)。pandas 只在此 fallback 時 import。"""
+    import io
+    import pandas as pd
+    qd = str(date_iso).replace("-", "/")             # 2026/06/30
+    wed_int = int(str(wed).replace("-", ""))         # 結算日 YYYYMMDD,如 20260701
+    body = urllib.parse.urlencode({
+        "queryType": "2", "marketCode": "0", "commodity_id": "TXO",
+        "queryDate": qd, "MarketCode": "0", "commodity_idt": "TXO"}).encode()
+    req = urllib.request.Request(TAIFEX_OPT, data=body, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        html = r.read().decode("utf-8", "ignore")
+    df = next(t for t in pd.read_html(io.StringIO(html))
+              if any("履約價" in str(c) for c in t.columns) and t.shape[0] > 3)
+    col = lambda kw: next(c for c in df.columns if kw in str(c))
+    oicol, kcol, cpcol, edcol = col("未沖銷"), col("履約價"), col("買賣權"), col("契約到期日")
+    put_by, call_by = {}, {}
+    for _, row in df.iterrows():
+        try:
+            if int(float(row[edcol])) != wed_int:
+                continue
+            k = float(row[kcol]); oi = float(str(row[oicol]).replace(",", ""))
+        except (TypeError, ValueError):
+            continue
+        if k <= 0:
+            continue
+        cp = str(row[cpcol]).strip().lower()
+        if cp == "put":
+            put_by[k] = put_by.get(k, 0.0) + oi
+        elif cp == "call":
+            call_by[k] = call_by.get(k, 0.0) + oi
+    return put_by, call_by
+
+
 def fetch_oi_by_strike(date_iso, wed):
     """FinMind TaiwanOptionDaily:回 (put_by, call_by) 各履約 OI {strike: oi}(position 場,一次抓拆 put/call)。
-    用 FinMind 而非 TAIFEX HTML —— 後者欄位會漂(c[13] 非 OI、.5 小數證實抓到價格欄)。
+    FinMind 為主(對帳過、欄位穩);當日 FinMind 還沒出(發布慢)→ 備案改抓 TAIFEX 官網(見 _fetch_oi_taifex)。
     已對帳:position 場 Put OI 算出的 d_put_oi 與研究 feature_history 完全一致。"""
     code = _wed_contract_code(wed)
     rows = _finmind({"dataset": "TaiwanOptionDaily", "data_id": "TXO",
@@ -100,6 +136,15 @@ def fetch_oi_by_strike(date_iso, wed):
             put_by[k] = put_by.get(k, 0.0) + oi
         elif cp == "call":
             call_by[k] = call_by.get(k, 0.0) + oi
+    if not put_by and not call_by:
+        # FinMind 當日 OI 還沒出(選擇權 OI 發布慢)→ 備案抓 TAIFEX 官網
+        try:
+            t_put, t_call = _fetch_oi_taifex(date_iso, wed)
+            if t_put or t_call:
+                put_by, call_by = t_put, t_call
+                print(f"[settlement_v2] FinMind 無 {date_iso} OI → TAIFEX 官網備案抓到(put {len(put_by)}檔)", flush=True)
+        except Exception as e:
+            print(f"[settlement_v2] TAIFEX 備案失敗: {type(e).__name__} {e}", flush=True)
     return put_by, call_by
 
 
