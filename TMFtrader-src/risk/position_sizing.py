@@ -102,6 +102,22 @@ RISK_PRESETS = {
         # −2% 是設計停損(固定%、非ATR),放寬到 30×ATR 讓它一律過,同時仍擋真正異常(>30×ATR)的停損。
         max_sl_mult=30.0,
     ),
+    # maxpain_exec LIVE(2026-07-02 轉真錢)專用:同 fixed1_paper 的固定 1 口+寬鬆 gate 邏輯
+    # (凍結 v2 的風險控制=策略自身 −2% 停損,引擎熔斷只當「災難級」保險,不得干擾設計內損失)。
+    # 設計內最壞單役(2 口 MXF 46,600 水位):第1口 −2%≈−46.6k+加碼口 −3%≈−69.9k ≈ −117k
+    # → max_daily_loss=150k 高於它(不會盤中熔斷打斷凍結策略),但擋同日重複災難。
+    "fixed1_live": RiskPreset(
+        name="fixed1_live",
+        label="固定1口(live)",
+        risk_per_trade=0.40,        # 僅為過 floor≥1;max_contracts=1 鎖死第1口(加碼走 scale-in 不過 sizer)
+        max_contracts=1,
+        max_daily_trades=5,
+        max_daily_loss=150000,
+        max_consecutive_loss=20,
+        cooldown_minutes=0,
+        max_drawdown_pct=0.90,
+        max_sl_mult=30.0,
+    ),
 }
 
 

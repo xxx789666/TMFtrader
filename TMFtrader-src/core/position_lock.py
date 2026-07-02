@@ -52,7 +52,13 @@ def _read(mode: str = "live") -> Optional[dict]:
 
 
 def _is_stale(data: dict) -> bool:
-    return (time.time() - data.get("entry_unix", 0)) > STALE_HOURS * 3600
+    # 多日持倉策略(maxpain_exec live 抱到週選結算)可在 acquire 時帶 stale_hours 覆寫
+    # (launcher env POSITION_LOCK_STALE_HOURS);否則沿用預設 12h(日內策略殭屍鎖保護)。
+    try:
+        limit = float(data.get("stale_hours") or STALE_HOURS)
+    except (TypeError, ValueError):
+        limit = STALE_HOURS
+    return (time.time() - data.get("entry_unix", 0)) > limit * 3600
 
 
 def get_holder(mode: str = "live") -> Optional[str]:
@@ -88,8 +94,16 @@ def is_blocked(my_owner: str, mode: str = "live") -> Optional[dict]:
 
 def acquire(owner: str, side: str, entry_price: float, instrument: str,
             quantity: int = 1, **extra) -> None:
-    """寫鎖。鎖檔依 extra['mode']('paper'/'live')決定。Caller 應先 check is_blocked()=None。"""
+    """寫鎖。鎖檔依 extra['mode']('paper'/'live')決定。Caller 應先 check is_blocked()=None。
+    launcher 設 POSITION_LOCK_STALE_HOURS(如 maxpain_exec live 多日持倉設 220)→ 寫進鎖檔,
+    讓「所有讀鎖的 process」都用該時效判 stale(否則 12h 預設會把多日倉的鎖當殭屍刪掉)。"""
     mode = extra.get("mode", "live")
+    env_stale = os.getenv("POSITION_LOCK_STALE_HOURS", "").strip()
+    if env_stale and "stale_hours" not in extra:
+        try:
+            extra["stale_hours"] = float(env_stale)
+        except ValueError:
+            pass
     f = _lock_file(mode)
     f.parent.mkdir(parents=True, exist_ok=True)
     data = {
