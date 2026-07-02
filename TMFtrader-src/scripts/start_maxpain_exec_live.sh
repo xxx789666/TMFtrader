@@ -48,8 +48,10 @@ export RISK_PROFILE=fixed1_live
 export RECORD_TICKS=0
 export RECORD_DECISIONS=1
 export POSITION_LOCK_STALE_HOURS=220
-# 執行線=frozen(−2% 24h 硬停、無止盈、抱到結算);與 paper 期一致、what-if 影子照記。
+# 執行線=put 版(2026-07-02 user 定案):put 即地板 → 進場後移除 −2% 硬停(策略 check_exit 清 stop)、
+# 進場需 put watcher 心跳(fail-closed,沒 put 不進裸倉)。無止盈、抱到結算;what-if 影子照記(noTP=v2 口徑)。
 export MAXPAIN_TRAIL_PCT=0.0
+export MAXPAIN_PUT_PROTECT=1
 
 LOG="data/logs/maxpain_exec_live_$(date +%Y%m%d).log"
 mkdir -p data/logs

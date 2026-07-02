@@ -54,6 +54,15 @@ ENTRY_GIVEUP = dtime(9, 35)     # 引擎進場窗 08:45-09:30;09:35 還沒進=�
 WATCH_END = dtime(13, 46)       # 加碼可整段持有期觸發 → 持倉未加碼日盯到收盤
 MAX_STRIKE_FALLBACK = 2         # 目標檔無報價 → 往低一檔改掛(交接§5-2),最多退 2 檔
 
+# 真錢模式(2026-07-02 user 指示「put 保護真錢」):MAXPAIN_PUT_LIVE=1 →
+#   真實登入+CA → put 用「限價@ask、ROD」實單買進,15s 沒成交撤單追價重掛(最多 CHASE_MAX 次)。
+#   同時寫心跳 put_ready.json 給引擎進場連鎖(MAXPAIN_PUT_PROTECT:心跳不新鮮引擎不進場=fail-closed,
+#   因為 put 版已拔引擎 −2% 硬停,沒 put 的裸倉不可接受)。paper 模式(預設)行為不變=只 snapshot 記錄。
+PUT_LIVE = os.environ.get("MAXPAIN_PUT_LIVE", "0").strip() == "1"
+PUT_READY = ROOT / "data" / "maxpain_v2" / "put_ready.json"
+CHASE_WAIT_S = 15               # 每次掛單等成交秒數
+CHASE_MAX = 5                   # 追價重掛次數上限(用完 → CRITICAL 告警循環、繼續重試)
+
 COLS = ["signal_t", "entry_t1", "E_fill", "K_put", "put_bid", "put_ask", "put_fill",
         "added", "E2", "K_put2", "put2_fill", "expiry_ed", "settle_S",
         "fut_pnl_pts", "put_pnl_pts", "total_pts", "total_ntd", "v2_same_signal_ntd", "note"]
@@ -127,10 +136,85 @@ def _login():
     from dotenv import load_dotenv
     load_dotenv(ROOT / ".env")
     import shioaji as sj
-    api = sj.Shioaji(simulation=True)
+    api = sj.Shioaji(simulation=not PUT_LIVE)          # 真錢模式=正式環境
     api.login(api_key=os.environ["SHIOAJI_API_KEY"], secret_key=os.environ["SHIOAJI_SECRET_KEY"],
               contracts_timeout=30000)
+    if PUT_LIVE:                                        # 實單需 CA(env 名對齊 core/engine.py)
+        api.activate_ca(ca_path=os.environ["SHIOAJI_CA_PATH"],
+                        ca_passwd=os.environ["SHIOAJI_CA_PASSWORD"],
+                        person_id=os.environ.get("SHIOAJI_PERSON_ID", ""))
+        log("真錢模式:CA 已啟用")
     return api
+
+
+def _heartbeat():
+    """引擎進場連鎖心跳(PUT_PROTECT 讀;epoch ts 跨 process)。只在 watcher 活著+已登入時刷新。"""
+    try:
+        jsave(PUT_READY, dict(date=date.today().isoformat(), ts=_time.time(),
+                              mode=("live" if PUT_LIVE else "paper")))
+    except Exception:
+        pass
+
+
+def _buy_put_live(api, contract, tag):
+    """真實買進 1 張 put:限價@當下 ask、ROD;CHASE_WAIT_S 沒成 → 撤單、新 ask 追價重掛(≤CHASE_MAX)。
+    回傳 dict(K, bid, ask, fill, note) 或 None(全失敗;caller 負責 CRITICAL 告警循環)。"""
+    import shioaji as sj
+    for attempt in range(1, CHASE_MAX + 1):
+        try:
+            s = api.snapshots([contract])[0]
+            bid = float(getattr(s, "buy_price", 0) or 0)
+            ask = float(getattr(s, "sell_price", 0) or 0)
+        except Exception as e:
+            log(f"{tag} 報價失敗(第{attempt}次): {e}"); _time.sleep(3); continue
+        if ask <= 0:
+            log(f"{tag} 無 ask(第{attempt}次) bid={bid}"); _time.sleep(3); continue
+        try:
+            order = sj.Order(price=ask, quantity=1, action=sj.constant.Action.Buy,
+                             price_type=sj.constant.FuturesPriceType.LMT,
+                             order_type=sj.constant.OrderType.ROD,
+                             octype=sj.constant.FuturesOCType.Auto,
+                             account=api.futopt_account)
+            trade = api.place_order(contract, order)
+        except Exception as e:
+            log(f"{tag} 下單失敗(第{attempt}次): {e}"); tg(f"⚠️ {tag} 下單失敗(第{attempt}次): {e}")
+            _time.sleep(3); continue
+        deadline = _time.monotonic() + CHASE_WAIT_S
+        fill_px = None
+        while _time.monotonic() < deadline:
+            _time.sleep(2)
+            try:
+                api.update_status(api.futopt_account)
+                st = str(getattr(trade.status, "status", ""))
+                deals = getattr(trade.status, "deals", None) or []
+                if deals:
+                    fill_px = sum(float(d.price) * int(d.quantity) for d in deals) / \
+                              max(1, sum(int(d.quantity) for d in deals))
+                if "Filled" in st and "PartFilled" not in st:
+                    break
+            except Exception as e:
+                log(f"{tag} 查成交狀態失敗: {e}")
+        if fill_px is not None:
+            note = f"live成交@{fill_px}(掛ask {ask},第{attempt}次);"
+            return dict(K=float(contract.strike_price), bid=bid, ask=ask,
+                        fill=float(fill_px), note=note)
+        try:
+            api.cancel_order(trade)
+            api.update_status(api.futopt_account)
+            log(f"{tag} 第{attempt}次掛 ask={ask} {CHASE_WAIT_S}s 未成 → 撤單追價")
+        except Exception as e:
+            log(f"{tag} 撤單失敗: {e}(可能已成交,重查)")
+            try:
+                api.update_status(api.futopt_account)
+                deals = getattr(trade.status, "deals", None) or []
+                if deals:
+                    fill_px = sum(float(d.price) * int(d.quantity) for d in deals) / \
+                              max(1, sum(int(d.quantity) for d in deals))
+                    return dict(K=float(contract.strike_price), bid=bid, ask=ask,
+                                fill=float(fill_px), note=f"live成交@{fill_px}(撤單競態,第{attempt}次);")
+            except Exception:
+                pass
+    return None
 
 
 def _puts_for_ed(api, ed_iso: str) -> dict:
@@ -190,21 +274,50 @@ def _snap_put(api, puts: dict, ref_px: float, tag: str):
     return None
 
 
+def _get_put(api, puts: dict, ref_px: float, tag: str):
+    """取得 put:paper=snapshot 記錄;live=實單買進(限價@ask 追價)。挑檔/退檔邏輯共用。"""
+    if not PUT_LIVE:
+        return _snap_put(api, puts, ref_px, tag)
+    target = ref_px * (1 - DEPTH)
+    ks = sorted([k for k in puts if k <= target], reverse=True)
+    for i, k in enumerate(ks[:1 + MAX_STRIKE_FALLBACK]):
+        r = _buy_put_live(api, puts[k], f"{tag}:{k:.0f}P")
+        if r is not None:
+            if i > 0:
+                r["note"] = f"目標檔失敗退{i}檔;" + r["note"]
+            return r
+    return None
+
+
 def watch():
     today = date.today()
     if is_holiday(today):
         log("市場休市 → 跳過"); return
+    if datetime.now().time() >= WATCH_END:
+        log("已過盤(WATCH_END) → 跳過"); return
     need, why = _need_watch(today)
-    log(f"watch 判定: need={need} ({why})")
+    log(f"watch 判定: need={need} ({why}) mode={'LIVE真錢' if PUT_LIVE else 'paper'}")
     if not need:
         return
     try:
         api = _login()
     except Exception as e:
-        log(f"登入失敗: {e}"); tg(f"⚠️ watch 登入失敗: {e}"); return
+        log(f"登入失敗: {e}")
+        tg(f"🚨 watch 登入失敗: {e}" + ("(引擎 PUT_PROTECT fail-closed:今天不會進場)" if PUT_LIVE else ""))
+        return
+    _heartbeat()                                    # 進場連鎖:心跳開閘(引擎 08:45 起查)
     try:
         puts_cache = {}                             # ed -> {strike: contract}
+        crit_at = 0.0                               # CRITICAL 告警節流(進場後 put 一直買不到)
+        sig0 = jload(SIG) or {}
+        if sig0.get("ed"):                          # 預抓 put 鏈,成交當下不用等
+            try:
+                puts_cache[sig0["ed"]] = _puts_for_ed(api, sig0["ed"])
+                log(f"預抓週選 put 鏈(ed={sig0['ed']}): {len(puts_cache[sig0['ed']])} 檔")
+            except Exception as e:
+                log(f"預抓 put 鏈失敗(進場時再抓): {e}")
         while datetime.now().time() < WATCH_END:
+            _heartbeat()
             pend = jload(PEND)
             wf = jload(WFP)
             now_t = datetime.now().time()
@@ -223,21 +336,24 @@ def watch():
                 if ed not in puts_cache:
                     puts_cache[ed] = _puts_for_ed(api, ed)
                     log(f"週選 put 鏈(ed={ed}): {len(puts_cache[ed])} 檔")
-                r = _snap_put(api, puts_cache[ed], e1, "put1")
+                r = _get_put(api, puts_cache[ed], e1, "put1")
                 if r is None:
-                    log(f"E1={e1:.0f} 找不到可報價的 put 檔(≤{e1*(1-DEPTH):.0f}),{POLL_S}s 後重試")
-                    tg(f"⚠️ put1 無可用報價(E1={e1:.0f}),重試中")
+                    log(f"E1={e1:.0f} put1 取得失敗(≤{e1*(1-DEPTH):.0f}),重試中")
+                    if PUT_LIVE and _time.monotonic() - crit_at > 60:
+                        crit_at = _time.monotonic()
+                        tg(f"🚨🚨 CRITICAL: 期貨已進場但 put1 買不到(E1={e1:.0f})!"
+                           f"引擎硬停已移除=目前裸倉,持續重試中,請人工關注!")
                     _time.sleep(10); continue
                 pend = dict(signal_t=wf.get("signal_t"), ed=ed,
                             entry_t1=wf.get("entry_t"), E_fill=e1,
                             K_put=r["K"], put_bid=r["bid"], put_ask=r["ask"], put_fill=r["fill"],
                             put1_quote_t=datetime.now().isoformat(timespec="seconds"),
                             added=0, E2="", K_put2="", put2_bid="", put2_ask="", put2_fill="",
-                            note=r["note"])
+                            note=("live;" if PUT_LIVE else "") + r["note"])
                 jsave(PEND, pend)
-                log(f"put1 記錄: K={r['K']:.0f} bid={r['bid']} ask={r['ask']} fill={r['fill']} {r['note']}")
-                tg(f"🛡️ 進場 put1: E1={e1:.0f} → 買 {r['K']:.0f}P@{r['fill']}(bid {r['bid']}/ask {r['ask']}) "
-                   f"ed={ed} {r['note']}")
+                log(f"put1 {'真實成交' if PUT_LIVE else '記錄'}: K={r['K']:.0f} bid={r['bid']} ask={r['ask']} fill={r['fill']} {r['note']}")
+                tg(f"🛡️ {'[LIVE]' if PUT_LIVE else ''}進場 put1: E1={e1:.0f} → 買 {r['K']:.0f}P@{r['fill']}"
+                   f"(bid {r['bid']}/ask {r['ask']}) ed={ed} {r['note']}")
                 continue
             # ② 加碼 put(第 2 張;鏡像=無停損世界的 +1%)
             if pend and not pend.get("added") and wf and wf.get("scaled"):
@@ -245,17 +361,21 @@ def watch():
                 ed = pend["ed"]
                 if ed not in puts_cache:
                     puts_cache[ed] = _puts_for_ed(api, ed)
-                r = _snap_put(api, puts_cache[ed], e2, "put2")
+                r = _get_put(api, puts_cache[ed], e2, "put2")
                 if r is None:
-                    log(f"E2={e2:.0f} 找不到可報價的 put 檔,10s 後重試")
+                    log(f"E2={e2:.0f} put2 取得失敗,重試中")
+                    if PUT_LIVE and _time.monotonic() - crit_at > 60:
+                        crit_at = _time.monotonic()
+                        tg(f"🚨 加碼口 put2 買不到(E2≈{e2:.0f}),加碼口保護缺,持續重試中")
                     _time.sleep(10); continue
                 pend.update(added=1, E2=round(e2, 1), K_put2=r["K"],
                             put2_bid=r["bid"], put2_ask=r["ask"], put2_fill=r["fill"],
                             put2_quote_t=datetime.now().isoformat(timespec="seconds"),
                             note=(pend.get("note", "") + r["note"]))
                 jsave(PEND, pend)
-                log(f"put2 記錄: K={r['K']:.0f} fill={r['fill']} {r['note']}")
-                tg(f"🛡️ 加碼 put2: E2≈{e2:.0f} → 買 {r['K']:.0f}P@{r['fill']}(bid {r['bid']}/ask {r['ask']})")
+                log(f"put2 {'真實成交' if PUT_LIVE else '記錄'}: K={r['K']:.0f} fill={r['fill']} {r['note']}")
+                tg(f"🛡️ {'[LIVE]' if PUT_LIVE else ''}加碼 put2: E2≈{e2:.0f} → 買 {r['K']:.0f}P@{r['fill']}"
+                   f"(bid {r['bid']}/ask {r['ask']})")
                 continue
             _time.sleep(POLL_S)
     finally:

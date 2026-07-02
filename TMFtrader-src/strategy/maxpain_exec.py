@@ -17,6 +17,8 @@
 """
 import csv
 import json
+import os
+import time as time_mod
 from datetime import date, time
 from pathlib import Path
 from typing import Optional
@@ -27,6 +29,15 @@ from core.position import Position, Side
 
 ROOT = Path(__file__).resolve().parent.parent
 SIGNAL_FILE = ROOT / "data" / "maxpain_v2" / "next_signal.json"
+
+# 保護性 put 模式(2026-07-02,交接規格「maxpain+put −2%」轉真錢):
+#   ① 進場連鎖(fail-closed):put watcher(maxpain_put_watch.py --watch,MAXPAIN_PUT_LIVE=1)心跳
+#      data/maxpain_v2/put_ready.json 新鮮(<PUT_READY_FRESH_S)才准進場——否則進了= 無硬停+無 put 裸倉。
+#   ② 進場後移除引擎 −2% 硬停(put 即地板;check_exit 首 tick 清 position.stop_loss)。
+#      進場 Signal 照帶 −2% 停損=讓風控 gate/口數計算不變;whatif 影子(noTP=v2口徑)照記 → 對帳不斷。
+PUT_PROTECT = os.environ.get("MAXPAIN_PUT_PROTECT", "0").strip() == "1"
+PUT_READY = ROOT / "data" / "maxpain_v2" / "put_ready.json"
+PUT_READY_FRESH_S = float(os.environ.get("MAXPAIN_PUT_READY_FRESH_S", 180))
 
 # what-if 影子記錄:同一筆真實進場下,平行算多個出場變體會如何(−1.25%=實際執行線、其餘為影子)。
 # (label, trail, be_floor, use_stop):
@@ -100,6 +111,12 @@ class MaxPainExecStrategy(BaseStrategy):
         if self._acted_signal == signal_t:            # 同一訊號已進過 → 不重進
             return None
 
+        if PUT_PROTECT and not self._put_ready():     # put 腿沒就緒 → 不進場(訊號不消耗、就緒後窗內可進)
+            if time_mod.monotonic() - getattr(self, "_put_warn_at", 0.0) > 30:
+                self._put_warn_at = time_mod.monotonic()
+                print(f"[maxpain_exec] PUT_PROTECT: put watcher 心跳不新鮮 → 暫不進場(fail-closed)", flush=True)
+            return None
+
         self._acted_signal = signal_t
         self._mp_ed = ed                              # ISO 字串(供引擎 _strategy_state 持久化)
         self._mp_s1 = price
@@ -145,9 +162,23 @@ class MaxPainExecStrategy(BaseStrategy):
             return s
         return None
 
+    def _put_ready(self) -> bool:
+        """put watcher 心跳檢查(epoch ts,跨 process;watcher 每輪 poll 刷新)。"""
+        try:
+            rd = json.loads(PUT_READY.read_text(encoding="utf-8"))
+            return (rd.get("date") == date.today().isoformat()
+                    and (time_mod.time() - float(rd.get("ts", 0))) <= PUT_READY_FRESH_S)
+        except (OSError, ValueError, TypeError):
+            return False
+
     def check_exit(self, position: Position, snapshot: MarketSnapshot) -> Optional[Signal]:
         """−2% 由引擎硬停(stop_loss=S1×0.98);這裡管 追蹤止盈 + 結算日強平。
-        ed/最高點/武裝 走 _strategy_state 跨重啟還原。"""
+        ed/最高點/武裝 走 _strategy_state 跨重啟還原。
+        PUT_PROTECT 模式:進場後首 tick 移除硬停(put 即地板=與 v2 唯一差異;
+        進場 Signal 帶 −2% 只為過風控 gate。重啟還原後這裡會再清一次,自癒)。"""
+        if PUT_PROTECT and getattr(position, "stop_loss", 0):
+            position.stop_loss = 0.0
+            print(f"[maxpain_exec] PUT_PROTECT: 引擎硬停已移除(put 即地板)", flush=True)
         ts = snapshot.timestamp
         if ts is None or not self._mp_ed:
             return None
