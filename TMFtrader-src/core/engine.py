@@ -724,6 +724,20 @@ class TradingEngine:
                             take_profit=tp,
                         )
                         logger.info(f"[Sync] 同步真實持倉: {inst} {side.value} x{rp['quantity']} @ {entry} | SL={sl} TP={tp}")
+                    # 鬼鎖自癒(2026-07-03 #11):夜盤佇列出場單被 5s 檢查誤判「未成交」→ 引擎記出場失敗
+                    # 保留鎖,但交易所稍後成交 → 帳上已空、自持 live 鎖殘留(stale 220h 下會擋別策略多日)。
+                    # 啟動對帳:自己持鎖、但帳上沒有本引擎商品的任何倉 → 釋放。
+                    # (保守:帳上有同商品倉時即使疑似他人的也不動,寧可人工處理不誤刪)
+                    try:
+                        _own = self._position_owner(self.instruments[0])
+                        if _own and position_lock.get_holder(mode="live") == _own:
+                            _has = any(str(rp0.get('code', '')).startswith(code)
+                                       for rp0 in real_positions for code in self.instruments)
+                            if not _has:
+                                position_lock.release(_own, mode="live")
+                                logger.warning(f"[Sync] 自持 live 鎖但帳上無倉 → 釋放鬼鎖(owner={_own})")
+                    except Exception as _ge:
+                        logger.warning(f"[Sync] 鬼鎖自癒檢查失敗: {_ge}")
                 except Exception as e:
                     logger.warning(f"[Sync] 同步持倉失敗: {e}")
 
