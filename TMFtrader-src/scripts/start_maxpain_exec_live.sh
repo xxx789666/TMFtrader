@@ -58,7 +58,7 @@ mkdir -p data/logs
 nohup "$PY" scripts/start_paper.py --mode live >> "$LOG" 2>&1 &
 NEW_PID=$!
 echo "$NEW_PID" > "$PIDFILE"
-echo "[$(date '+%F %T')] maxpain_exec LIVE MXF PID=$NEW_PID | TF=30 owner=maxpain_exec RISK=fixed1_live 完整2口:t+1進/+1%加碼/-2%硬停/結算13:30強平 lock_stale=220h 真實下單" >> "$LOG"
+echo "[$(date '+%F %T')] maxpain_exec LIVE MXF PID=$NEW_PID | TF=30 owner=maxpain_exec RISK=fixed1_live put版2口:t+1進(需put心跳)/+1%加碼/無硬停(put=-2%履約價地板)/結算13:30強平 lock_stale=220h 真實下單" >> "$LOG"
 
 if [ -f .env ]; then
   TG_TOKEN=$(grep '^TG_BOT_TOKEN=' .env | cut -d= -f2- | tr -d '"' | tr -d "'")
@@ -67,5 +67,5 @@ if [ -f .env ]; then
     curl -sS --max-time 10 -o /dev/null \
       "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
       --data-urlencode "chat_id=${TG_CHAT}" \
-      --data-urlencode "text=[LIVE] maxpain_exec 真錢引擎啟動 (MXF 2口制/-2%硬停/抱結算, PID ${NEW_PID})"
+      --data-urlencode "text=[LIVE] maxpain_exec 真錢引擎啟動 (MXF 2口制/put版:無硬停、-2%履約價put當地板/抱結算, PID ${NEW_PID})"
 fi
