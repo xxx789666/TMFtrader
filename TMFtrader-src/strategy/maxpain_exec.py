@@ -199,6 +199,12 @@ class MaxPainExecStrategy(BaseStrategy):
         ed/最高點/武裝 走 _strategy_state 跨重啟還原。
         PUT_PROTECT 模式(user 2026-07-03 規則,每 tick 雙向):
           put 成交張數 ≥ 期貨口數 → 撤停損(put 即地板);不足 → 停損裝回 S1×0.98(等 put 或整役 v2)。"""
+        # maxpain 無停利設計(凍結 v2:無止盈抱結算)。引擎「領養」真實持倉時會配預設 take_profit
+        # → 被夜盤 14:50 試撮假 tick 觸發硬停利、2 口在非設計時點被平(2026-07-03 夜盤事故)。
+        # 不論 put 模式與否,一律清掉 TP。
+        if getattr(position, "take_profit", 0):
+            position.take_profit = 0.0
+            print(f"[maxpain_exec] 領養預設停利已清除(maxpain 無停利設計)", flush=True)
         if PUT_PROTECT and self._mp_s1 > 0:
             lots = int(getattr(position, "quantity", 1) or 1)
             if self._put_coverage() >= lots:
