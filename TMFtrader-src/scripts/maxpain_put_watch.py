@@ -157,6 +157,32 @@ def _heartbeat():
         pass
 
 
+def _cancel_orphan_put_orders(api):
+    """撤掉交易所上仍活著的選擇權買單孤兒(watcher 重啟後,前實例的 ROD 限價單還掛著;
+    不撤的話本實例再掛一張 → 權利金跌破限價時兩張都成交=重複買單。2026-07-03 事故根修之三。
+    本帳號選擇權單只有本 watcher 會下 → 撤所有活著的選擇權買單是安全的。"""
+    try:
+        api.update_status(api.futopt_account)
+        n = 0
+        for t in api.list_trades():
+            try:
+                if (getattr(t.contract, "security_type", "") not in ("OPT",)
+                        and not str(getattr(t.contract, "code", "")).startswith(("TXO", "TX1", "TX2", "TX4", "TX5"))):
+                    continue
+                st = str(getattr(t.status, "status", ""))
+                if any(k in st for k in ("Submitted", "PreSubmitted", "PartFilled")):
+                    api.cancel_order(t)
+                    n += 1
+                    log(f"撤孤兒掛單: {t.contract.code} {t.order.action} @{t.order.price}")
+            except Exception as e:
+                log(f"撤孤兒掛單檢查失敗(單筆略過): {e}")
+        if n:
+            api.update_status(api.futopt_account)
+            tg(f"🧹 撤 {n} 張前實例遺留的選擇權掛單(防重複成交)")
+    except Exception as e:
+        log(f"孤兒掛單掃描失敗(不擋主流程): {e}")
+
+
 def _buy_put_live(api, contract, tag, abort_cb=None):
     """真實買 put — user 2026-07-03 規則:**掛限價 MAX_PREM(70 點=NT$3,500)、ROD、不追價**,
     掛著等成交(премium 回落到 70 內才會成交;若市場 ask 本來 ≤70 則立即成交且可能更便宜)。
@@ -311,6 +337,8 @@ def watch():
         tg(f"🚨 watch 登入失敗: {e}" + ("(引擎 PUT_PROTECT fail-closed:今天不會進場)" if PUT_LIVE else ""))
         return
     _heartbeat()                                    # 進場連鎖:心跳開閘(引擎 08:45 起查)
+    if PUT_LIVE:
+        _cancel_orphan_put_orders(api)              # 前實例遺留的 ROD 掛單先撤(防重複成交)
     try:
         puts_cache = {}                             # ed -> {strike: contract}
         crit_at = 0.0                               # CRITICAL 告警節流(進場後 put 一直買不到)

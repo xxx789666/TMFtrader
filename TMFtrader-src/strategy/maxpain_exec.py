@@ -370,10 +370,23 @@ class MaxPainExecStrategy(BaseStrategy):
         self._acted_signal = None
         self._sig_cache = None
         self._sig_cache_at = 0.0
-        # 多日持倉狀態(引擎 _restore_strategy_state 會在重啟+持倉時覆寫還原)
+        # 多日持倉狀態(paper:引擎 _restore_strategy_state 重啟+持倉時覆寫還原)
         self._mp_ed = None
         self._mp_s1 = 0.0
         self._mp_scaled = False
         self._mp_hi = 0.0
         self._mp_armed = False
         self._wf_load()                # 重啟還原進行中的影子狀態(無則 None)
+        # ⚠️ LIVE 模式無 position 持久化(engine _state_dir 僅 paper)→ 每日 cron 重啟後 _mp_* 全丟:
+        # 結算強平(需 _mp_ed)/put 覆蓋率(需 _mp_s1)/同訊號防重進(_acted_signal)全失效(2026-07-03 發現)。
+        # 用 whatif_pending 嫁接還原(進場當下建立、活到結算、含 signal_t/ed/s1/scaled;
+        # paper 模式稍後 _restore_strategy_state 會以正式持久化值覆寫,同值無害)。
+        wf = getattr(self, "_wf", None)
+        if wf and wf.get("ed") and float(wf.get("s1") or 0) > 0:
+            self._mp_ed = wf["ed"]
+            self._mp_s1 = float(wf["s1"])
+            self._mp_scaled = bool(wf.get("scaled"))
+            self._mp_hi = max(self._mp_s1, float(self._mp_hi or 0))
+            self._acted_signal = wf.get("signal_t")     # 同訊號不重進(停損後重啟殘窗防呆)
+            print(f"[maxpain_exec] 重啟還原(wf 嫁接): ed={self._mp_ed} S1={self._mp_s1:.0f} "
+                  f"scaled={self._mp_scaled} signal={self._acted_signal}", flush=True)
