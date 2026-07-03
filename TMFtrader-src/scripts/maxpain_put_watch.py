@@ -54,24 +54,15 @@ ENTRY_GIVEUP = dtime(9, 35)     # 引擎進場窗 08:45-09:30;09:35 還沒進=�
 WATCH_END = dtime(13, 46)       # 加碼可整段持有期觸發 → 持倉未加碼日盯到收盤
 MAX_STRIKE_FALLBACK = 2         # 目標檔無報價 → 往低一檔改掛(交接§5-2),最多退 2 檔
 
-# 真錢模式(2026-07-02 user 指示「put 保護真錢」):MAXPAIN_PUT_LIVE=1 →
-#   真實登入+CA → put 用「限價@ask、ROD」實單買進,15s 沒成交撤單追價重掛(最多 CHASE_MAX 次)。
-#   同時寫心跳 put_ready.json 給引擎進場連鎖(MAXPAIN_PUT_PROTECT:心跳不新鮮引擎不進場=fail-closed,
-#   因為 put 版已拔引擎 −2% 硬停,沒 put 的裸倉不可接受)。paper 模式(預設)行為不變=只 snapshot 記錄。
+# 真錢模式(MAXPAIN_PUT_LIVE=1;2026-07-03 user 執行規則定版):
+#   期貨進場先掛 −2% 停損(引擎) → watcher 同時「**掛限價 MAX_PREM 買 put、ROD、不追價**」→
+#   put 真的成交(覆蓋率≥口數)引擎才撤停損;整天等不到 = 停損留著,該役=v2 模式、保費 0。
+#   歷史教訓(2026-07-03 首日):追 ask 在跳空日付了 466/600 點(預算 70)→ 廢除追價,改純限價等成交。
+#   paper 模式(預設)行為不變=只 snapshot 記錄。
 PUT_LIVE = os.environ.get("MAXPAIN_PUT_LIVE", "0").strip() == "1"
 PUT_READY = ROOT / "data" / "maxpain_v2" / "put_ready.json"
-CHASE_WAIT_S = 15               # 每次掛單等成交秒數
-CHASE_MAX = 5                   # 追價重掛次數上限(用完 → CRITICAL 告警循環、繼續重試)
-# 爛簿守門(2026-07-03 put1 教訓:開盤跳空日 44700P bid265/ask466 價差201,吃 ask 付 466 點
-# ≈ 回測假設 70 點的 6.6 倍)。委買賣價差 > max(ABS, bid×FRAC) = 簿未成形 → 先等(≤WAIT s),
-# 超時仍爛 → 保護優先照買(裸倉風險 > 買貴);無 ask 死檔 15s 快退換檔。
-SPREAD_ABS = float(os.environ.get("MAXPAIN_PUT_SPREAD_ABS", 30))
-SPREAD_FRAC = float(os.environ.get("MAXPAIN_PUT_SPREAD_FRAC", 0.5))
-SPREAD_WAIT_S = float(os.environ.get("MAXPAIN_PUT_SPREAD_WAIT_S", 240))
-# 保費硬上限(2026-07-03 user 定案:保險控制在 NT$3,500/張 = 70 點)。ask 超過上限 → 不買、
-# 寫 put_fallback_stop.json → 引擎回退 −2% 硬停(v2 模式);之後保費若跌回上限內再買、刪 flag(引擎再拔停)。
+# 保費硬上限=限價價格(user 定案:保險控制在 NT$3,500/張 = 70 點)
 MAX_PREM = float(os.environ.get("MAXPAIN_PUT_MAX_PREM", 70))
-FALLBACK_FLAG = ROOT / "data" / "maxpain_v2" / "put_fallback_stop.json"
 
 COLS = ["signal_t", "entry_t1", "E_fill", "K_put", "put_bid", "put_ask", "put_fill",
         "added", "E2", "K_put2", "put2_fill", "expiry_ed", "settle_S",
@@ -166,105 +157,52 @@ def _heartbeat():
         pass
 
 
-def _fallback_on(signal_t, leg, why):
-    """保費超預算/put 買不到 → 引擎回退 −2% 硬停(策略 check_exit 讀此 flag 裝回停損)。"""
-    if not jload(FALLBACK_FLAG):
-        jsave(FALLBACK_FLAG, dict(signal_t=signal_t, leg=leg, why=why, ts=_time.time()))
-        log(f"回退硬停 flag 已寫({leg}:{why})")
-
-
-def _fallback_off():
-    try:
-        FALLBACK_FLAG.unlink()
-        log("put 已到位 → 回退硬停 flag 已清(引擎將再拔停)")
-    except OSError:
-        pass
-
-
 def _buy_put_live(api, contract, tag, abort_cb=None):
-    """真實買進 1 張 put:限價@當下 ask、ROD;CHASE_WAIT_S 沒成 → 撤單、新 ask 追價重掛(≤CHASE_MAX)。
-    爛簿守門:價差 > max(SPREAD_ABS, bid×SPREAD_FRAC) → 等簿成形(≤SPREAD_WAIT_S)再買,超時保護優先強買。
-    無 ask 死檔 15s 快退(回 None 讓上層換檔)。abort_cb:每輪檢查,True=任務已被完成(如另一實例
-    已買到)→ 回 "ABORTED" 不下單(2026-07-03 重複買單事故的根修之二)。
-    回傳 dict(K, bid, ask, fill, note) / "OVER_CAP" / "ABORTED" / None。"""
+    """真實買 put — user 2026-07-03 規則:**掛限價 MAX_PREM(70 點=NT$3,500)、ROD、不追價**,
+    掛著等成交(премium 回落到 70 內才會成交;若市場 ask 本來 ≤70 則立即成交且可能更便宜)。
+    等待期間停損由引擎維持(put 覆蓋率驅動),所以等再久都不裸倉。
+    abort_cb=True(如任務被別實例完成)→ 撤單放棄。回傳 dict(...)/"ABORTED"/None(當日未成交)。"""
     import shioaji as sj
-    start = _time.monotonic()
-    attempt = 0
-    forced_note = ""
-    while attempt < CHASE_MAX:
-        if abort_cb and abort_cb():
-            log(f"{tag} 任務已被完成(abort_cb) → 放棄不下單")
-            return "ABORTED"
-        el = _time.monotonic() - start
-        if el > 900:                                   # 單檔總預算 15 分鐘
-            return None
+    try:
+        s = api.snapshots([contract])[0]
+        bid0 = float(getattr(s, "buy_price", 0) or 0)
+        ask0 = float(getattr(s, "sell_price", 0) or 0)
+    except Exception:
+        bid0 = ask0 = 0.0
+    try:
+        order = sj.Order(price=MAX_PREM, quantity=1, action=sj.constant.Action.Buy,
+                         price_type=sj.constant.FuturesPriceType.LMT,
+                         order_type=sj.constant.OrderType.ROD,
+                         octype=sj.constant.FuturesOCType.Auto,
+                         account=api.futopt_account)
+        trade = api.place_order(contract, order)
+    except Exception as e:
+        log(f"{tag} 掛單失敗: {e}"); tg(f"⚠️ {tag} 掛限價{MAX_PREM:.0f}點失敗: {e}")
+        return None
+    log(f"{tag} 已掛限價 {MAX_PREM:.0f} 點(NT${MAX_PREM*PV:,.0f})等成交,不追價;"
+        f"當下簿 bid {bid0}/ask {ask0};停損由引擎維持中")
+    tg(f"🧷 {tag} 掛限價 {MAX_PREM:.0f} 點等成交(當下 ask {ask0});成交前 -2% 停損維持")
+    while datetime.now().time() < WATCH_END:
+        _time.sleep(10)
+        _heartbeat()
         try:
-            s = api.snapshots([contract])[0]
-            bid = float(getattr(s, "buy_price", 0) or 0)
-            ask = float(getattr(s, "sell_price", 0) or 0)
-        except Exception as e:
-            log(f"{tag} 報價失敗: {e}"); _time.sleep(3); continue
-        if ask <= 0:
-            if el > 15:                                # 死檔快退 → 上層換低一檔
-                return None
-            log(f"{tag} 無 ask bid={bid},等 3s"); _time.sleep(3); continue
-        if ask > MAX_PREM:                             # 保費硬上限:超預算不買(caller 回退硬停)
-            log(f"{tag} ask {ask} > 保費上限 {MAX_PREM:.0f} 點 → 不買")
-            return "OVER_CAP"
-        insane = (bid <= 0) or ((ask - bid) > max(SPREAD_ABS, bid * SPREAD_FRAC))
-        if insane and el < SPREAD_WAIT_S:
-            log(f"{tag} 委買賣簿未成形(bid {bid}/ask {ask} 價差{ask - bid:.0f}) → 等簿({el:.0f}s/{SPREAD_WAIT_S:.0f}s)")
-            _time.sleep(5); continue
-        if insane:
-            forced_note = f"爛簿等{SPREAD_WAIT_S:.0f}s未成形、保護優先強買(bid {bid}/ask {ask});"
-            log(f"{tag} {forced_note}")
-        attempt += 1
-        try:
-            order = sj.Order(price=ask, quantity=1, action=sj.constant.Action.Buy,
-                             price_type=sj.constant.FuturesPriceType.LMT,
-                             order_type=sj.constant.OrderType.ROD,
-                             octype=sj.constant.FuturesOCType.Auto,
-                             account=api.futopt_account)
-            trade = api.place_order(contract, order)
-        except Exception as e:
-            log(f"{tag} 下單失敗(第{attempt}次): {e}"); tg(f"⚠️ {tag} 下單失敗(第{attempt}次): {e}")
-            _time.sleep(3); continue
-        deadline = _time.monotonic() + CHASE_WAIT_S
-        fill_px = None
-        while _time.monotonic() < deadline:
-            _time.sleep(2)
-            try:
-                api.update_status(api.futopt_account)
-                st = str(getattr(trade.status, "status", ""))
-                deals = getattr(trade.status, "deals", None) or []
-                if deals:
-                    fill_px = sum(float(d.price) * int(d.quantity) for d in deals) / \
-                              max(1, sum(int(d.quantity) for d in deals))
-                if "Filled" in st and "PartFilled" not in st:
-                    break
-            except Exception as e:
-                log(f"{tag} 查成交狀態失敗: {e}")
-        if fill_px is not None:
-            note = forced_note + f"live成交@{fill_px}(掛ask {ask},第{attempt}次);"
-            return dict(K=float(contract.strike_price), bid=bid, ask=ask,
-                        fill=float(fill_px), note=note)
-        try:
-            api.cancel_order(trade)
             api.update_status(api.futopt_account)
-            log(f"{tag} 第{attempt}次掛 ask={ask} {CHASE_WAIT_S}s 未成 → 撤單追價")
+            deals = getattr(trade.status, "deals", None) or []
+            if deals:
+                fill_px = sum(float(d.price) * int(d.quantity) for d in deals) / \
+                          max(1, sum(int(d.quantity) for d in deals))
+                return dict(K=float(contract.strike_price), bid=bid0, ask=ask0,
+                            fill=float(fill_px), note=f"限價{MAX_PREM:.0f}成交@{fill_px};")
         except Exception as e:
-            log(f"{tag} 撤單失敗: {e}(可能已成交,重查)")
+            log(f"{tag} 查成交狀態失敗: {e}")
+        if abort_cb and abort_cb():
             try:
-                api.update_status(api.futopt_account)
-                deals = getattr(trade.status, "deals", None) or []
-                if deals:
-                    fill_px = sum(float(d.price) * int(d.quantity) for d in deals) / \
-                              max(1, sum(int(d.quantity) for d in deals))
-                    return dict(K=float(contract.strike_price), bid=bid, ask=ask,
-                                fill=float(fill_px), note=forced_note + f"live成交@{fill_px}(撤單競態,第{attempt}次);")
+                api.cancel_order(trade); api.update_status(api.futopt_account)
             except Exception:
                 pass
-    return None
+            log(f"{tag} 任務已被完成 → 撤掛單")
+            return "ABORTED"
+    return None                                       # 當日未成交(ROD 收盤自動失效);本役維持停損=v2 模式
 
 
 def _puts_for_ed(api, ed_iso: str) -> dict:
@@ -325,26 +263,15 @@ def _snap_put(api, puts: dict, ref_px: float, tag: str):
 
 
 def _get_put(api, puts: dict, ref_px: float, tag: str, abort_cb=None):
-    """取得 put:paper=snapshot 記錄;live=實單買進(限價@ask 追價)。挑檔/退檔邏輯共用。
-    live 回傳:dict=成交 / "OVER_CAP"=各檔保費都超上限(caller 寫 fallback flag 回退硬停)
-    / "ABORTED"=任務已被完成 / None=失敗。"""
+    """取得 put:paper=snapshot 記錄;live=掛限價 MAX_PREM 等成交(user 規則,單一目標檔、不追價不換檔)。
+    live 回傳:dict=成交 / "ABORTED"=任務已被完成 / None=當日未等到(本役=停損模式)。"""
     if not PUT_LIVE:
         return _snap_put(api, puts, ref_px, tag)
     target = ref_px * (1 - DEPTH)
     ks = sorted([k for k in puts if k <= target], reverse=True)
-    any_cap = False
-    for i, k in enumerate(ks[:1 + MAX_STRIKE_FALLBACK]):
-        r = _buy_put_live(api, puts[k], f"{tag}:{k:.0f}P", abort_cb=abort_cb)
-        if r == "ABORTED":
-            return "ABORTED"
-        if r == "OVER_CAP":                 # 該檔超預算 → 試低一檔(更價外=更便宜,仍在退檔上限內)
-            any_cap = True
-            continue
-        if r is not None:
-            if i > 0:
-                r["note"] = f"目標檔失敗退{i}檔;" + r["note"]
-            return r
-    return "OVER_CAP" if any_cap else None
+    if not ks:
+        return None
+    return _buy_put_live(api, puts[ks[0]], f"{tag}:{ks[0]:.0f}P", abort_cb=abort_cb)
 
 
 def _single_instance_guard() -> bool:
@@ -384,8 +311,6 @@ def watch():
         tg(f"🚨 watch 登入失敗: {e}" + ("(引擎 PUT_PROTECT fail-closed:今天不會進場)" if PUT_LIVE else ""))
         return
     _heartbeat()                                    # 進場連鎖:心跳開閘(引擎 08:45 起查)
-    if jload(FALLBACK_FLAG) and not jload(WFP) and not jload(PEND):
-        _fallback_off()                             # 無持倉殘留的回退 flag → 清
     try:
         puts_cache = {}                             # ed -> {strike: contract}
         crit_at = 0.0                               # CRITICAL 告警節流(進場後 put 一直買不到)
@@ -420,24 +345,12 @@ def watch():
                              abort_cb=lambda: bool(jload(PEND)))     # 已有人記到 pend → 放棄
                 if r == "ABORTED":
                     continue
-                if r == "OVER_CAP":                     # 保費超上限 → 回退硬停、盯保費回落(60s 一輪)
-                    if PUT_LIVE:
-                        _fallback_on(wf.get("signal_t"), "put1", f"ask>上限{MAX_PREM:.0f}點")
-                        if _time.monotonic() - crit_at > 300:
-                            crit_at = _time.monotonic()
-                            tg(f"⛔ put1 保費超上限 {MAX_PREM:.0f} 點(NT${MAX_PREM*PV:,.0f}) → "
-                               f"已回退 -2% 硬停(該役=v2 模式);續盯保費回落自動接手")
-                    _time.sleep(60); continue
                 if r is None:
-                    log(f"E1={e1:.0f} put1 取得失敗(≤{e1*(1-DEPTH):.0f}),重試中")
-                    if PUT_LIVE:
-                        _fallback_on(wf.get("signal_t"), "put1", "執行失敗")
-                        if _time.monotonic() - crit_at > 60:
-                            crit_at = _time.monotonic()
-                            tg(f"🚨 put1 買不到(E1={e1:.0f},執行失敗) → 已回退 -2% 硬停;持續重試")
+                    if PUT_LIVE:                        # 當日限價未成交(等到收盤) → 本役=停損模式
+                        log("put1 限價當日未成交 → 本役維持 -2% 停損(v2 模式,保費 0)")
+                        tg(f"⛔ put1 限價 {MAX_PREM:.0f} 點今天沒等到 → 本役維持 -2% 停損(保費 0)")
+                        break
                     _time.sleep(10); continue
-                if PUT_LIVE:
-                    _fallback_off()
                 pend = dict(signal_t=wf.get("signal_t"), ed=ed,
                             entry_t1=wf.get("entry_t"), E_fill=e1,
                             K_put=r["K"], put_bid=r["bid"], put_ask=r["ask"], put_fill=r["fill"],
@@ -459,24 +372,12 @@ def watch():
                              abort_cb=lambda: bool((jload(PEND) or {}).get("added")))  # 已加碼記帳 → 放棄
                 if r == "ABORTED":
                     continue
-                if r == "OVER_CAP":
-                    if PUT_LIVE:
-                        _fallback_on(pend.get("signal_t"), "put2", f"ask>上限{MAX_PREM:.0f}點")
-                        if _time.monotonic() - crit_at > 300:
-                            crit_at = _time.monotonic()
-                            tg(f"⛔ put2 保費超上限 {MAX_PREM:.0f} 點 → 已回退 -2% 硬停(兩口都受停損保護);"
-                               f"續盯保費回落")
-                    _time.sleep(60); continue
                 if r is None:
-                    log(f"E2={e2:.0f} put2 取得失敗,重試中")
-                    if PUT_LIVE:
-                        _fallback_on(pend.get("signal_t"), "put2", "執行失敗")
-                        if _time.monotonic() - crit_at > 60:
-                            crit_at = _time.monotonic()
-                            tg(f"🚨 加碼口 put2 買不到(E2≈{e2:.0f},執行失敗) → 已回退 -2% 硬停;持續重試")
+                    if PUT_LIVE:                        # 當日限價未成交 → 停損維持覆蓋兩口(覆蓋率驅動)
+                        log("put2 限價當日未成交 → -2% 停損維持覆蓋兩口")
+                        tg(f"⛔ put2 限價 {MAX_PREM:.0f} 點今天沒等到 → -2% 停損維持(兩口都在保護內)")
+                        break
                     _time.sleep(10); continue
-                if PUT_LIVE:
-                    _fallback_off()
                 pend.update(added=1, E2=round(e2, 1), K_put2=r["K"],
                             put2_bid=r["bid"], put2_ask=r["ask"], put2_fill=r["fill"],
                             put2_quote_t=datetime.now().isoformat(timespec="seconds"),
@@ -572,10 +473,6 @@ def finalize():
         w.writerow(out)
     try:
         PEND.unlink()
-    except OSError:
-        pass
-    try:
-        FALLBACK_FLAG.unlink()          # 該役結束,回退 flag 一併清
     except OSError:
         pass
     diff = (total_pts * PV - float(v2_ntd)) if v2_ntd != "" else float("nan")

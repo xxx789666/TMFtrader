@@ -38,9 +38,11 @@ SIGNAL_FILE = ROOT / "data" / "maxpain_v2" / "next_signal.json"
 PUT_PROTECT = os.environ.get("MAXPAIN_PUT_PROTECT", "0").strip() == "1"
 PUT_READY = ROOT / "data" / "maxpain_v2" / "put_ready.json"
 PUT_READY_FRESH_S = float(os.environ.get("MAXPAIN_PUT_READY_FRESH_S", 180))
-# 保費超預算回退(2026-07-03 user:保險上限 NT$3,500/張):watcher 買不到上限內的 put 時寫此 flag
-# → 本策略把 −2% 硬停「裝回去」(該役以 v2 模式跑);之後 put 買到、flag 刪除 → 再拔停。
-PUT_FALLBACK = ROOT / "data" / "maxpain_v2" / "put_fallback_stop.json"
+# 停損/put 互鎖(2026-07-03 user 定案的執行規則):
+#   進場先掛 −2% 停損 → watcher 同時掛「限價 70 點(NT$3,500)」買 put(不追價)→
+#   put 成交張數(覆蓋率)≥ 期貨口數才撤停損;等不到 = 停損留著(該役=v2、保費 0)。
+#   加碼後口數+1 → 覆蓋率不足 → 停損自動裝回,等 put2 成交再撤。
+PUT_PENDING = ROOT / "data" / "paper" / "maxpain_put" / "put_pending.json"
 
 # what-if 影子記錄:同一筆真實進場下,平行算多個出場變體會如何(−1.25%=實際執行線、其餘為影子)。
 # (label, trail, be_floor, use_stop):
@@ -174,31 +176,40 @@ class MaxPainExecStrategy(BaseStrategy):
         except (OSError, ValueError, TypeError):
             return False
 
-    def _put_fallback_active(self) -> bool:
-        """watcher 寫的「保費超預算/put 買不到 → 回退硬停」flag(5s 快取,每 tick 呼叫)。"""
+    def _put_coverage(self) -> int:
+        """已成交 put 張數(0/1/2)。pend 須屬本役(ed 相符,防舊 pend 殘留誤撤停損);5s 快取。"""
         nowm = time_mod.monotonic()
-        if nowm - getattr(self, "_pf_at", 0.0) > 5.0:
-            self._pf_at = nowm
+        if nowm - getattr(self, "_pc_at", 0.0) > 5.0:
+            self._pc_at = nowm
+            n = 0
             try:
-                self._pf_cache = bool(json.loads(PUT_FALLBACK.read_text(encoding="utf-8")))
+                d = json.loads(PUT_PENDING.read_text(encoding="utf-8"))
+                if d and d.get("ed") == self._mp_ed:
+                    if str(d.get("put_fill", "")).strip() not in ("", "None"):
+                        n += 1
+                    if d.get("added") and str(d.get("put2_fill", "")).strip() not in ("", "None"):
+                        n += 1
             except (OSError, ValueError):
-                self._pf_cache = False
-        return getattr(self, "_pf_cache", False)
+                pass
+            self._pc_cache = n
+        return getattr(self, "_pc_cache", 0)
 
     def check_exit(self, position: Position, snapshot: MarketSnapshot) -> Optional[Signal]:
         """−2% 由引擎硬停(stop_loss=S1×0.98);這裡管 追蹤止盈 + 結算日強平。
         ed/最高點/武裝 走 _strategy_state 跨重啟還原。
-        PUT_PROTECT 模式(每 tick 雙向):put 已保護 → 移除硬停(put 即地板);
-        watcher 回退 flag 在(保費超預算/put 買不到)→ 硬停裝回 S1×0.98(該役=v2 模式)。"""
-        if PUT_PROTECT:
-            if self._put_fallback_active():
-                if getattr(position, "stop_loss", 0) <= 0 and self._mp_s1 > 0:
+        PUT_PROTECT 模式(user 2026-07-03 規則,每 tick 雙向):
+          put 成交張數 ≥ 期貨口數 → 撤停損(put 即地板);不足 → 停損裝回 S1×0.98(等 put 或整役 v2)。"""
+        if PUT_PROTECT and self._mp_s1 > 0:
+            lots = int(getattr(position, "quantity", 1) or 1)
+            if self._put_coverage() >= lots:
+                if getattr(position, "stop_loss", 0):
+                    position.stop_loss = 0.0
+                    print(f"[maxpain_exec] PUT_PROTECT: put 覆蓋 {lots}/{lots} → 撤停損(put 即地板)", flush=True)
+            else:
+                if getattr(position, "stop_loss", 0) <= 0:
                     position.stop_loss = round(self._mp_s1 * (1 - self.stop_pct), 1)
-                    print(f"[maxpain_exec] PUT_PROTECT: 保費超預算/put未到位 → 回退 -2% 硬停 "
-                          f"@{position.stop_loss:.0f}", flush=True)
-            elif getattr(position, "stop_loss", 0):
-                position.stop_loss = 0.0
-                print(f"[maxpain_exec] PUT_PROTECT: 引擎硬停已移除(put 即地板)", flush=True)
+                    print(f"[maxpain_exec] PUT_PROTECT: put 覆蓋不足({self._put_coverage()}/{lots}) → "
+                          f"停損裝回 @{position.stop_loss:.0f}", flush=True)
         ts = snapshot.timestamp
         if ts is None or not self._mp_ed:
             return None
