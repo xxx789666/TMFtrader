@@ -38,6 +38,9 @@ SIGNAL_FILE = ROOT / "data" / "maxpain_v2" / "next_signal.json"
 PUT_PROTECT = os.environ.get("MAXPAIN_PUT_PROTECT", "0").strip() == "1"
 PUT_READY = ROOT / "data" / "maxpain_v2" / "put_ready.json"
 PUT_READY_FRESH_S = float(os.environ.get("MAXPAIN_PUT_READY_FRESH_S", 180))
+# 保費超預算回退(2026-07-03 user:保險上限 NT$3,500/張):watcher 買不到上限內的 put 時寫此 flag
+# → 本策略把 −2% 硬停「裝回去」(該役以 v2 模式跑);之後 put 買到、flag 刪除 → 再拔停。
+PUT_FALLBACK = ROOT / "data" / "maxpain_v2" / "put_fallback_stop.json"
 
 # what-if 影子記錄:同一筆真實進場下,平行算多個出場變體會如何(−1.25%=實際執行線、其餘為影子)。
 # (label, trail, be_floor, use_stop):
@@ -171,14 +174,31 @@ class MaxPainExecStrategy(BaseStrategy):
         except (OSError, ValueError, TypeError):
             return False
 
+    def _put_fallback_active(self) -> bool:
+        """watcher 寫的「保費超預算/put 買不到 → 回退硬停」flag(5s 快取,每 tick 呼叫)。"""
+        nowm = time_mod.monotonic()
+        if nowm - getattr(self, "_pf_at", 0.0) > 5.0:
+            self._pf_at = nowm
+            try:
+                self._pf_cache = bool(json.loads(PUT_FALLBACK.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                self._pf_cache = False
+        return getattr(self, "_pf_cache", False)
+
     def check_exit(self, position: Position, snapshot: MarketSnapshot) -> Optional[Signal]:
         """−2% 由引擎硬停(stop_loss=S1×0.98);這裡管 追蹤止盈 + 結算日強平。
         ed/最高點/武裝 走 _strategy_state 跨重啟還原。
-        PUT_PROTECT 模式:進場後首 tick 移除硬停(put 即地板=與 v2 唯一差異;
-        進場 Signal 帶 −2% 只為過風控 gate。重啟還原後這裡會再清一次,自癒)。"""
-        if PUT_PROTECT and getattr(position, "stop_loss", 0):
-            position.stop_loss = 0.0
-            print(f"[maxpain_exec] PUT_PROTECT: 引擎硬停已移除(put 即地板)", flush=True)
+        PUT_PROTECT 模式(每 tick 雙向):put 已保護 → 移除硬停(put 即地板);
+        watcher 回退 flag 在(保費超預算/put 買不到)→ 硬停裝回 S1×0.98(該役=v2 模式)。"""
+        if PUT_PROTECT:
+            if self._put_fallback_active():
+                if getattr(position, "stop_loss", 0) <= 0 and self._mp_s1 > 0:
+                    position.stop_loss = round(self._mp_s1 * (1 - self.stop_pct), 1)
+                    print(f"[maxpain_exec] PUT_PROTECT: 保費超預算/put未到位 → 回退 -2% 硬停 "
+                          f"@{position.stop_loss:.0f}", flush=True)
+            elif getattr(position, "stop_loss", 0):
+                position.stop_loss = 0.0
+                print(f"[maxpain_exec] PUT_PROTECT: 引擎硬停已移除(put 即地板)", flush=True)
         ts = snapshot.timestamp
         if ts is None or not self._mp_ed:
             return None
