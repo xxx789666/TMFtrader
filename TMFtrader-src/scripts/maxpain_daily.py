@@ -17,6 +17,14 @@ dist=(MaxPain−S)/S>0 → t+1 開盤進多單 S1;盤中 +1%(S1×1.01)加第2口
   python scripts/maxpain_daily.py              # 每日 cron:補近期完成的組 + 寫待進場 signal
   python scripts/maxpain_daily.py --days 90    # 看更長窗(預設 45 交易日窗)
 """
+# VPS 系統時鐘 UTC → date.today()/datetime.now() 一律 TST(2026-07-03 稽核:別依賴 crontab TZ 前綴)
+import os as _os, time as _time_tz
+_os.environ.setdefault('TZ', 'Asia/Taipei')
+try:
+    _time_tz.tzset()
+except AttributeError:
+    pass
+
 import argparse
 import csv
 import json

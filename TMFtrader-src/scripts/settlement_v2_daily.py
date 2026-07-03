@@ -15,6 +15,14 @@
   python scripts/settlement_v2_daily.py --wed 2026-06-10  # 指定結算週三
   python scripts/settlement_v2_daily.py --verify          # 用 feature_history 最後一筆對帳(驗 live 算法一致)
 """
+# VPS 系統時鐘 UTC → date.today()/datetime.now() 一律 TST(2026-07-03 稽核:別依賴 crontab TZ 前綴)
+import os as _os, time as _time_tz
+_os.environ.setdefault('TZ', 'Asia/Taipei')
+try:
+    _time_tz.tzset()
+except AttributeError:
+    pass
+
 import argparse
 import csv
 import json
@@ -270,9 +278,18 @@ def _settle_pending():
     except (KeyError, ValueError):
         return
     ohlc = fetch_tx_ohlc((wed - timedelta(days=5)).isoformat(), (wed + timedelta(days=3)).isoformat())
-    wbar = ohlc.get(o["settle_wed"])
+    # 結算週三放假(颱風/國定)→ 實際結算順延;往後找最多 3 天內第一個有 OHLC 的交易日
+    # (2026-07-03 稽核修:原本只查精確週三,假日該筆會永遠卡 pending)。
+    wbar, wkey = None, o["settle_wed"]
+    for i in range(0, 4):
+        k = (wed + timedelta(days=i)).isoformat()
+        if k in ohlc:
+            wbar, wkey = ohlc[k], k
+            break
     if not wbar:
         return                                          # 結算日 OHLC 還沒出 → 下次再補
+    if wkey != o["settle_wed"]:
+        print(f"[settlement_v2] 結算週三 {o['settle_wed']} 無交易(假日) → 順延至 {wkey}")
     s = 1 if o["side"] == "long" else -1
     pnl_pts = s * (wbar["close"] - wbar["open"]) - COST_PTS
     settled = {"entry": wbar["open"], "exit": wbar["close"], "pnl_pts": round(pnl_pts, 1),

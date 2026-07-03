@@ -585,6 +585,11 @@ class ShioajiBroker(BaseBroker):
                 self._last_tick_time = _now
                 self._last_real_tick_time = _now   # 真實 Solace tick
                 self._fallback_since = None        # Solace 正常，清除 fallback 計時
+                # 試撮假tick(開盤前 08:30-08:45/收盤集合競價 13:40-13:45 揭示)不入行情鏈:
+                # 假價會污染 K 棒聚合/OR 錨點/tick 級進出場判斷(2026-07-03 全線稽核補;
+                # 試撮 tick 陷阱 2026-06-12 事故同族)。心跳照更新(feed 活著,只是資料不可用)。
+                if getattr(tick, "simtrade", 0):
+                    return
                 close_price = float(tick.close)
                 self._last_real_tick_price = close_price  # 供 KbarPoller fallback 使用
 

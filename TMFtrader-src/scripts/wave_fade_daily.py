@@ -19,6 +19,14 @@
   python scripts/wave_fade_daily.py --no-fetch # 不抓 kbar(用既有 parquet,測試/重算用)
   python scripts/wave_fade_daily.py --combo 0.83 --entry 2026-06-19  # 手動指定(不讀 chips signal)
 """
+# VPS 系統時鐘 UTC → date.today()/datetime.now() 一律 TST(2026-07-03 稽核:別依賴 crontab TZ 前綴)
+import os as _os, time as _time_tz
+_os.environ.setdefault('TZ', 'Asia/Taipei')
+try:
+    _time_tz.tzset()
+except AttributeError:
+    pass
+
 import csv
 import datetime as dt
 import glob

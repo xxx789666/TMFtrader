@@ -14,6 +14,14 @@ T+1 開盤進、收盤出、−2% 盤中停損、不過夜、固定 1 口微台�
 
 口徑(對照 HANDOFF §5):PF~1.2 / RR1.17 / WR53.6% / ~10.7筆月。固定 1 口、point_value 10、−2% 停損。
 """
+# VPS 系統時鐘 UTC → date.today()/datetime.now() 一律 TST(2026-07-03 稽核:別依賴 crontab TZ 前綴)
+import os as _os, time as _time_tz
+_os.environ.setdefault('TZ', 'Asia/Taipei')
+try:
+    _time_tz.tzset()
+except AttributeError:
+    pass
+
 import argparse
 import csv
 import io
@@ -333,6 +341,23 @@ def main():
                                           z_flow=round(zf, 3), z_lt=round(zl, 3)), ensure_ascii=False, indent=2),
                           encoding="utf-8")
         print(f"本次新記錄 {new_n} 筆 | 下一訊號({nxt}):{side} (combo {combo:+.2f})")
+        # ── stale 告警(2026-07-02):資料源(FinMind/TAIFEX)沒出「今天」的籌碼 → 寫出的訊號其實是舊的。
+        # 06-30 傍晚 FinMind 慢半拍 → 訊號檔停在前一日 → 07-01 引擎讀到過期訊號靜默空手、錯過 short。
+        # 條件:今天是平日、非休市日、且 history 最後一列 < 今天 → 推 TG 告警(不再靜默)。
+        last_d = rows[-1]["date"]
+        holi = Path(__file__).resolve().parent / "market_holidays.txt"
+        is_holiday = holi.exists() and today.isoformat() in holi.read_text(encoding="utf-8", errors="ignore").split()
+        if last_d < today.isoformat() and today.weekday() < 5 and not is_holiday:
+            try:
+                import sys as _sys
+                _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+                from core.notify import tg
+                tg(f"⚠️ [chips_combo] 籌碼資料未更新到今天({today.isoformat()}),最後完整日={last_d}。"
+                   f"剛寫出的訊號 trade_date={nxt} 是用舊資料算的 → 明早 chips_exec 可能讀到過期訊號而空手。"
+                   f"可稍晚(20-21點)手動重跑 chips_combo_daily.py 補新資料。")
+            except Exception as e:
+                print(f"(stale 告警推送失敗: {e})")
+            print(f"⚠️ stale: 資料只到 {last_d} < 今天 {today.isoformat()},已推 TG 告警")
 
 
 if __name__ == "__main__":
