@@ -47,7 +47,10 @@ PEND = OUTD / "put_pending.json"
 TAPE = OUTD / "decisions.csv"
 HOLIDAYS = ROOT / "scripts" / "market_holidays.txt"
 
-DEPTH = float(os.environ.get("MAXPAIN_PUT_DEPTH", 0.02))   # put 深度(使用者 2026-07-02 定案 −2%)
+# put 深度:user 2026-07-03 定案改 −3%(原 −2%)。依據:①回測深度掃描 −3% 全期 +197,330 >
+#   −2% 的 +103,656 ②近六週實測「掛限價 70 點」成交率 −3%=42%(8/19 天) vs −2%=16%(3/19)
+#   ③保費約便宜 4 成 → 高 vol 期也較常買得到。代價=地板深 1%(自吞前 3% 回檔)。
+DEPTH = float(os.environ.get("MAXPAIN_PUT_DEPTH", 0.03))
 PV = 50.0                                                  # TXO/MXF 都是 50 元/點 → 1:1
 POLL_S = 3.0
 ENTRY_GIVEUP = dtime(9, 35)     # 引擎進場窗 08:45-09:30;09:35 還沒進=今天沒單
