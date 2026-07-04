@@ -377,6 +377,28 @@ def main():
         print(f"  記錄 訊號{t_iso}→進{t1.isoformat()} dist{sig['dist']:+.3f} {r['reason']} {r['pnl']:+.0f}元 (lots{r['lots']})"
               + (f" ℹ️暴跌後訊號(純記錄;前5日{rv*100:+.1f}%)" if crash else ""))
 
+    # ── 今日重算 maxpain(僅供參考、不影響決策;user 2026-07-04 要求,因 7/3 盤中已撞 46,900)──
+    # 用「今天的 OI」對「當前相關到期」重算痛點位置:持倉/訊號中=該役 ed、空手=下一個週三。
+    # ⚠️ 絕不寫 SIGCACHE(訊號鎖定讀 cache,污染會製造假訊號日);只掛在 status.today_recalc 供日報顯示。
+    try:
+        if status.get("ed"):
+            ed_ref = date.fromisoformat(status["ed"])
+        else:
+            ed_ref = last_td + timedelta(days=1)
+            while ed_ref.weekday() != 2:
+                ed_ref += timedelta(days=1)
+        _oi_rows = fetch_opt_oi(last_td.isoformat())
+        _mp_today = max_pain(_oi_rows, ed_ref)
+        _c_today = ohlc.get(last_td.isoformat(), {}).get("close")
+        if _mp_today and _c_today:
+            status["today_recalc"] = {"as_of": last_td.isoformat(), "ed": ed_ref.isoformat(),
+                                      "maxpain": _mp_today, "close": _c_today,
+                                      "dist": round((_mp_today - _c_today) / _c_today, 4)}
+            print(f"  今日重算(參考): ed={ed_ref} maxpain={_mp_today} close={_c_today:.0f} "
+                  f"dist={(_mp_today - _c_today) / _c_today:+.3%}")
+    except Exception as _re:
+        print(f"  今日重算失敗(不影響訊號): {type(_re).__name__} {_re}")
+
     NEXT.write_text(json.dumps(status, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"本次新記錄 {new_rec} 筆 | 狀態={status['state']}"
           + (f"(訊號{status.get('signal_t')} dist{status.get('dist'):+.3f})" if status['state'] != 'flat' else ""))

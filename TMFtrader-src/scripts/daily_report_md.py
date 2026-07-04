@@ -130,6 +130,37 @@ def _delta4(cur, prev):
     return f"{a - b:+.4f}"
 
 
+def _night_block(tape_a):
+    """夜盤變體 B 紙上 tape 段(night_tape.csv;chips_night_snapshot.py 18:36 記/結)。無檔=空字串。"""
+    rows = _rows(CHIPS / "night_tape.csv")
+    if not rows:
+        return ""
+    settled = [r for r in rows if str(r.get("exit", "")).strip()]
+    pending = [r for r in rows if not str(r.get("exit", "")).strip()]
+    L = ["## 🌙 夜盤變體 B(紙上 tape:訊號當晚 18:36 進、隔日收盤平;forward 驗證中)"]
+    if settled:
+        pn = [_fnum(r.get("pnl_pts")) or 0 for r in settled]
+        wins = sum(1 for x in pn if x > 0)
+        gp = sum(x for x in pn if x > 0); gl = -sum(x for x in pn if x < 0)
+        pf = gp / gl if gl > 0 else float("inf")
+        tot = sum(_fnum(r.get("pnl")) or 0 for r in settled)
+        L.append(f"- B 累積:{len(settled)} 筆 勝 {wins}/{len(settled)} PF {pf:.2f} 淨 **{tot:+,.0f} 元**")
+        start = str(settled[0].get("trade_date", ""))
+        a_same = [r for r in tape_a if str(r.get("trade_date", "")) >= start]
+        if a_same:
+            ta = sum(_fnum(r.get("pnl")) or 0 for r in a_same)
+            L.append(f"- A 現版同期({start} 起 {len(a_same)} 筆):{ta:+,.0f} 元 → **B−A = {tot - ta:+,.0f} 元**")
+        last = settled[-1]
+        L.append(f"- 最近結算:{last.get('trade_date')} {last.get('side')} 進 {last.get('entry')} → "
+                 f"出 {last.get('exit')} **{(_fnum(last.get('pnl')) or 0):+,.0f} 元**({last.get('exit_reason', '')})")
+    if pending:
+        p = pending[-1]
+        L.append(f"- 🟡 持倉中:{p.get('trade_date')} {p.get('side')} 夜盤進 {p.get('entry')}(等隔日收盤結算)")
+    L.append("- 依據:回測 2024-26 B 優(2026 夜盤段 +121.6 點/筆)、2020-23 B 劣 → regime 依賴。"
+             "判準:forward ~60 筆 B 仍優 → 考慮升真 tick;連續落後 → 關閉。夜盤時段停損未模擬(日盤 OHLC 近似)。")
+    return "\n".join(L)
+
+
 def write_chips():
     sig = _json(CHIPS / "next_signal.json") or {}
     hist = _rows(CHIPS / "history.csv")
@@ -181,6 +212,11 @@ def write_chips():
     L += [
         "",
         f"## 累積 tape（小台 pv50、固定 1 口、期間 {_tape_period(tape, 'trade_date')}）\n- {_tape_stats(tape)}",
+    ]
+    _nb = _night_block(tape)
+    if _nb:
+        L += ["", _nb]
+    L += [
         "",
         f"## 真 tick 執行（chips_exec）\n- {_exec_pos('chips_exec')}",
         "",
@@ -263,6 +299,22 @@ def write_maxpain():
         f"| 現價(訊號日收盤) | {_n(latest.get('close'))} | 大台 TX |",
         f"| **dist** | **{_r(latest.get('dist'), 3)} {dist_pct}** | (MaxPain−現價)/現價;**>0 才做多** |",
         "",
+    ]
+    # 今日重算(僅供參考,不影響決策;maxpain_daily 每晚用當日 OI 對當前相關到期重算,2026-07-04 加)
+    rc = sig.get("today_recalc") or {}
+    if rc.get("maxpain"):
+        _rd = _fnum(rc.get("dist"))
+        L += [
+            f"## 🔄 今日重算 maxpain（{rc.get('as_of','?')} 盤後 OI・僅供參考,不影響決策）",
+            "| 項目 | 值 | 說明 |",
+            "|---|--:|---|",
+            f"| 對應到期 | {rc.get('ed','?')} | 持倉中=本役到期;空手=下一個週三 |",
+            f"| 今日 Max Pain | **{_n(rc.get('maxpain'))}** | 痛點會隨每日 OI 移動 |",
+            f"| 今日收盤 | {_n(rc.get('close'))} | 大台 TX |",
+            f"| 今日 dist | {_r(rc.get('dist'), 3)}{f'（{_rd*100:+.1f}%）' if _rd is not None else ''} | 參考痛點移動軌跡;進出場仍照訊號日凍結規則 |",
+            "",
+        ]
+    L += [
         "## 持倉狀態",
     ]
     if state == "open":
