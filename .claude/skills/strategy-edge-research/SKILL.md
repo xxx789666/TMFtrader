@@ -43,6 +43,7 @@ description: 台指期策略 edge 探索循環。當使用者要「設計/優化
 - **定版**:`python scripts/<...>.py 60`(60 trials)→ 與 smoke 比對。
 - **過擬合判定**:若 5-trial 好、60-trial 崩 → 過擬合,**不准當成功**。
 - 跑 `digest_research.py` 看 vN 的 8 維體檢。
+- **機械裁判(迴圈終止條件)**:`python scripts/judge_wfo.py data/wfo_oos_vN_<name>.json` → 最後一行 `VERDICT: PASS` 且 exit 0 才算過關;FAIL 就是 FAIL,不准用文字包裝翻案。可加 `--smoke <5-trial產物>` 判 5→60 不崩、`--bounds <搜索空間json>` 硬判參數收斂。
 
 ### 6. 回寫經驗帳本(**不論成敗都寫**)
 在 `LESSONS.md` 新增 `## vN — <name>` 段:結構改動、假設依據、OOS 結果(含正窗/跨合約/最差窗/5-vs-60)、判決、教訓、對下一版的啟示。失敗也是經驗,照實寫。
