@@ -252,6 +252,48 @@ allowlist 不是垃圾桶 — 每筆理由要能說服人，濫塞 = 弱化檢�
 
 ---
 
+## 迴圈 #8 — 歷史資料更新到最新交易日（積木全現成，回測前必跑）
+
+**目標**：回測前把 1min 月檔更新到最後一個交易日（規則「回測一律跑到最新交易日」的
+機械化）。**更新器與裁判都已存在**，這個迴圈只是把它們接成「更新 → 驗證 → 才准回測」。
+
+**零件**：
+- 更新器：`scripts/fetch_history_kbars.py` — quota-safe（雙閘門預設 420MB/保留 70MB）、
+  分月斷點續抓、交易時段拒跑保護 live、0-bars 急停+TG。
+  ⚠️ 預設跳過已存在月檔 → **當月檔會 stale，必須對當月用 `--force` 重抓**。
+- 裁判：`scripts/check_kbar_gaps.py <SYM> --from <起> --to <最後交易日>` → `GAPS: 0`
+- 下游（要回測才做）：5m 衍生檔重生成、tape 重結算（`resettle_5m.py`）
+
+```
+先讀 .claude/skills/loop-method/SKILL.md 和 LOOP_MEMORY.md。
+
+任務：把 <TMFR1,TXFR1,...> 的 1min 月檔更新到最後交易日。
+流程：(1) 先跑 check_kbar_gaps 看缺哪段;(2) fetch_history_kbars 補 — 歷史月正常抓、
+當月加 --force;(3) 重跑 check_kbar_gaps。
+完成條件：每個 SYM 都 python scripts/check_kbar_gaps.py <SYM> --from <90天前>
+  --to <最後交易日> 印 GAPS: 0
+⚠️ 鐵則：交易時段不跑抓取（腳本預設會擋，禁止用 --allow-trading-hours 繞過）;
+撞 0-bars 急停 = 疑似配額切斷，停下告警不硬重試;補不回來的段（源頭無資料,
+如 TMFR1 上市前）記進 LOOP_MEMORY 已驗證區,不算 GAP 失敗。
+若之後要回測：資料綠了才准動 — 再重生成 5m 衍生檔與 tape(resettle_5m),
+且 tape 要跟 live 對齊(參 #3a)。
+失敗處理：同型失敗 3 次或配額告警 → 停下來問我
+邊界：不碰 crontab / VPS / live;抓取只在非交易時段。收工：更新 LOOP_MEMORY.md，commit
+```
+
+**兩種跑法**：(a) 回測前 on-demand — 把上面模板當回測任務的前置段;(b) 每日排程 —
+可掛本機工作排程器在收盤後自動跑（排程登記 = 人閘，比照 #5;掛好後這迴圈就從
+「每次手動」變「永遠是新的」）。
+
+**你的驗收**：跑 check_kbar_gaps 親眼看 GAPS: 0 且 --to 是最後交易日;瞄一眼
+fetch log 的配額用量（每月成本印在輸出裡）。
+
+**已知陷阱**（都吃過虧）：quota 超量永豐只切歷史查詢會回 0 bars;Shioaji 連線
+5 條/身分證,更新器占 1 條;TMFR1 歷史起點 2024-07;6 月起 tick CSV 與月檔雙軌,
+resample 落地規則見 _resample_ticks_to_1min.py docstring(右邊界/volume>0/試撮剔除)。
+
+---
+
 ## 共通備忘
 
 - breakout 家族的搜索空間 bounds 已建：`data/wfo_bounds_breakout.json`（judge_wfo `--bounds` 用）。新策略家族照樣從自己的 suggest_fn 抽一份。

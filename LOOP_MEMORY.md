@@ -24,5 +24,6 @@
 - [2026-07-07] ~~策略研究迴圈需單一 PASS/FAIL 指令~~ → 已解決（`judge_wfo.py`）。~~bounds 未建~~ → breakout 家族已建，其他策略家族首跑 #4 時自建。
 - [2026-07-07] TXFR1 1min 五月檔 5/28-29 日盤缺（check_kbar_gaps 抓到）→ 首跑迴圈 #3b 時 shioaji 補抓；6 月起 tick CSV 尚未落成月 parquet，同輪處理。
 - [2026-07-07] 靜默失敗基線 137 → 首跑迴圈 #7 時分類歸零（改 live 引擎路徑的點要集中問 user）。
+- [2026-07-07] 迴圈 #8（資料更新到最新）零件全現成：更新器 `fetch_history_kbars.py`（quota 雙閘門/續抓/交易時段拒跑/`--force` 重抓當月）+ 裁判 `check_kbar_gaps.py`。`fetch_and_update_all.py` 是舊一次性版（寫死 2026-04-27）勿用。待辦：(a) 首跑補 TXFR1 5/28-29 與 6 月起缺段、(b) 想全自動就掛本機排程（人閘登記）。
 - [2026-07-07] 迴圈 #5（lab 策略前推 paper）的兩支裁判待建：`preflight_paper.py`（事故記憶機械化 checklist，項目清單在 LOOP_PLAYBOOK #5a）、`paper_acceptance.py`（上線後逐日驗收）。第一次跑 #5a 時順手建。
 - [2026-07-07] 迴圈 #6/#7 待首跑：#6 fetcher 合約測試（fixture 型，不打真網路；先盤點 fetcher 清單）、#7 靜默失敗撲殺（先建 `scan_silent_failures.py` + allowlist；良性沉默 WallClock synth / DayORB 掃描進 allowlist 非修掉）。高頻 bug 家族統計見 2026-07-07 對話：資料源 ≥7 事故（含真錢 -96k）、靜默失敗 ≥6 事故。
