@@ -125,6 +125,63 @@ LESSONS（這是有效結論，不是失敗）。
 
 ---
 
+## 迴圈 #5 — lab 策略前推 paper（三段式：閉環實作 → 人閘 → 驗收監控）
+
+**目標**：tmf-strategy-lab 的新策略（handoff 資料夾交接）接進本 repo 引擎框架跑 paper。
+歷史上這條路徑是事故重災區（試撮 tick 消耗訊號、領養預設停利誤觸、stale 訊號漏單、
+金鑰靜默掛…），鐵律「上線前掃事故記憶當 checklist」— 本迴圈把它機械化。
+
+### 5a 交接實作迴圈（封閉，可全自動）
+
+**裁判（兩道，第一輪先建第二道）**：
+1. `python -m pytest tests/ -q` 全綠（含為新策略加的引擎測試）
+2. `python scripts/preflight_paper.py <策略>` → `PREFLIGHT: PASS` + exit 0 — **待建**。
+   把事故記憶固化成機械檢查項（每項對應一次真實學費）：
+   - 進場窗 ≥08:45（試撮假 tick）＋ simtrade tick 濾除
+   - `_is_trading_day()` guard ＋ market_holidays 比對（非交易日 synth tick）
+   - 領養/預設 SL/TP 逐欄審 = 無隱藏硬停（7/3 試撮觸發平倉事故）
+   - 訊號檔過期規則（假日 gap >2 天跳過；stale 訊號告警雙端）
+   - 金鑰缺失行為明確（fail-closed 或文件化 fail-open）＋ .env fallback 非 vps api.txt
+   - 成交模擬 = 真實 tick 穿價（非 mid）；進場窗無量 = 放棄
+   - Discord/TG：專屬 WEBHOOK ＋ 日報排程 ＋ 假日不出報
+   - Shioaji 連線預算（5 條/身分證）不超；position_lock 單池互斥相容
+3. （加分）replay parity：引擎跑歷史 N 日，訊號與 lab tape 一致（容差先例見 #3a）
+
+```
+先讀 .claude/skills/loop-method/SKILL.md、LOOP_MEMORY.md，和 <策略>_handoff/ 交接文件。
+
+任務：把 <策略> 接進本 repo paper 引擎框架（訊號橋接/引擎配置/日報/watchdog 掛載），
+產出可部署包但不部署。若 scripts/preflight_paper.py 不存在，第一個子任務是建它
+（檢查項清單見 LOOP_PLAYBOOK 迴圈 #5a）。
+完成條件：pytest 全綠 + python scripts/preflight_paper.py <策略> 判 PREFLIGHT: PASS
+⚠️ preflight 每一項對應一次真實虧損事故，不准為了過檢而弱化檢查器 — 檢查器改動
+單獨列出給我審。交接文件的成本/滑價預期 = 硬約束，實作偏離要標紅回報。
+失敗處理：同型失敗 3 次或發現需改共用引擎核心 → 停下來問我
+邊界：不碰 crontab / 不 rsync / 不 push / 不動既有策略行為
+收工：更新 LOOP_MEMORY.md，commit
+```
+
+### 人閘（你親手，不進迴圈）
+
+部署包 rsync 上 VPS 或本機排程掛載、crontab/排程器登記（照 CLAUDE.md 鐵律 cat -n 人審）、
+確認 Shioaji 第幾條連線。**這步永遠是你。**
+
+### 5b 上線驗收監控（開放式，跑 N 個交易日）
+
+**裁判（待建，可與 preflight 共用骨架）**：`python scripts/paper_acceptance.py <策略>` →
+逐項印 PASS/FAIL：heartbeat 新鮮、訊號檔按時更新、日報已產出且推送、log 無 ERROR/
+裸單/幽靈鎖 pattern、成交紀錄全部真 tick。連續 N 日（建議 ≥5 個交易日）全 PASS → 收案。
+
+操作：這段不是 goal 迴圈，是排程監控 — 每交易日收盤後跑一次驗收腳本（可掛 /loop、
+排程器、或你手動）。任何一項 FAIL = 開一個迴圈 #1（bug 修復）處理，修完繼續數天數
+（天數重算與否你判：資料側小修不重算、引擎行為修 = 重算）。
+已知良性誤報先查 MEMORY：WallClock synth、DayORB 靜默掃描、休市日。
+
+**你的驗收**：N 日滿 → 看累計 paper 統計（成本 gap、滑價 vs 交接文件預期）決定
+續跑/轉 live 評估/砍。轉 live 永遠是獨立決策，不在本迴圈範圍。
+
+---
+
 ## 共通備忘
 
 - 裁判缺 `--bounds` 時參數收斂只 WARN 不硬判（記在 LOOP_MEMORY 未解決區）— 跑 #4 第一輪順手建。
