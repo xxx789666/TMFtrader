@@ -21,3 +21,4 @@
 - [2026-07-07] 尚未實跑第一個封閉迴圈。建議起手：bug 修復迴圈（裁判 = pytest，風險零，基線已 265 全綠），跑順後再上策略研究迴圈。
 - [2026-07-07] ~~策略研究迴圈需單一 PASS/FAIL 指令~~ → 已解決，見已驗證區 `judge_wfo.py`。剩餘小缺口：參數收斂目前無 `--bounds` 時只 WARN 不硬判，各策略的搜索空間 bounds JSON 尚未建。
 - [2026-07-07] 迴圈 #5（lab 策略前推 paper）的兩支裁判待建：`preflight_paper.py`（事故記憶機械化 checklist，項目清單在 LOOP_PLAYBOOK #5a）、`paper_acceptance.py`（上線後逐日驗收）。第一次跑 #5a 時順手建。
+- [2026-07-07] 迴圈 #6/#7 待首跑：#6 fetcher 合約測試（fixture 型，不打真網路；先盤點 fetcher 清單）、#7 靜默失敗撲殺（先建 `scan_silent_failures.py` + allowlist；良性沉默 WallClock synth / DayORB 掃描進 allowlist 非修掉）。高頻 bug 家族統計見 2026-07-07 對話：資料源 ≥7 事故（含真錢 -96k）、靜默失敗 ≥6 事故。

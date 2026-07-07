@@ -182,6 +182,73 @@ LESSONS（這是有效結論，不是失敗）。
 
 ---
 
+## 迴圈 #6 — 資料源 fetcher 合約測試（hardening，一次性閉環）
+
+**目標**：repo 內所有外部資料 fetcher（FinMind / TAIFEX 官網 HTML / TAIFEX OpenAPI /
+shioaji 歷史）每支都有 contract test 防禦。動機 = 這是最高頻 bug 家族（≥7 次事故，
+含 TAIFEX HTML 改版 → 幽靈單真錢 -96k）：資料源會變，fetcher 至今裸奔。
+
+**每支 fetcher 的合約（每項對應真實事故）**：
+- 具名表頭定位欄位，**禁止位置索引**（c[13] 吃到最佳賣價事故）
+- 語義檢查：抓到的值要像那個欄位（OI 非負整數、價格在合理區間、日期跟得上今天）
+- 空回應 / 非 200 / 表頭改名 → **fail-closed**（回 None+告警），不准回髒資料繼續跑
+- 金鑰缺失必須炸或告警，不准靜默用不到的路徑（13 支腳本 vps api.txt 事故）
+- 週末/假日回 0 筆不准覆寫既有歷史（FinMind 週日洗空 chips history 事故）
+
+**裁判**：`python -m pytest tests/test_fetcher_contracts*.py -q` 全綠 + 全套 `tests/` 不退步。
+**測試不打真網路** — 用存檔 fixture（正常樣本 + 人造壞樣本：改表頭/挪欄位/空表/亂碼），
+測的是 fetcher 面對變化的行為，不是資料源今天心情。
+
+```
+先讀 .claude/skills/loop-method/SKILL.md 和 LOOP_MEMORY.md。
+
+任務：(1) 盤點 repo 所有外部資料 fetcher，列清單（檔案:函式:資料源:用途）給我看;
+(2) 每支補 contract test（合約五條見 LOOP_PLAYBOOK #6），fixture 進 tests/fixtures/;
+(3) fetcher 不滿足合約的 → 修 fetcher（具名表頭/語義檢查/fail-closed），不是弱化測試。
+完成條件：python -m pytest tests/ -q 全綠，且盤點清單上每支 fetcher 都有對應測試
+⚠️ 修 fetcher 行為時：VPS 上在跑的同名腳本以 repo 版為準 rsync 是之後的事，本迴圈
+只改 repo。已知刻意設計（如 fail-open 純 chips）先查 MEMORY 再動。
+失敗處理：同型失敗 3 次停;發現某 fetcher 修復需要改資料源帳號/金鑰 → 列出問我
+邊界：不打真網路壓測、不碰 crontab / VPS / live。收工：更新 LOOP_MEMORY.md，commit
+```
+
+**你的驗收**：跑 pytest 看綠；掃一眼盤點清單有沒有漏（比對 MEMORY 裡出過事的源頭
+是否都在列）。之後零散的每日檢查（stale 告警、mp 不一致、13:50 錄製自檢）可收攏成
+一支資料品質守門日報 — 那是獨立小任務，不在本閉環。
+
+---
+
+## 迴圈 #7 — 靜默失敗撲殺（掃描型閉環）
+
+**目標**：消滅「該炸的地方選擇沉默」。動機 = ≥6 次事故全是事後才發現：引擎多條
+靜默 return 漏單、TG .env 掉兩行告警全靜默、金鑰 cp950 壞位元靜默讀不到、chips
+stale 靜默漏單。規格書 = 你的既有偏好「TG 全事件覆蓋」。
+
+**裁判（第一輪先建）**：`python scripts/scan_silent_failures.py` → `SILENT: 0` + exit 0。
+掃描 pattern：`except: pass`、except 只 log.debug 不告警、回 None/空值後呼叫端不檢查、
+讀不到設定靜默用預設、外部呼叫無 timeout。配 **allowlist 檔**（每筆附理由）收留
+正當沉默 — 已知良性案例（WallClock synth 補空檔、DayORB 靜默掃描）進 allowlist，
+**不是「修」它們**。
+
+```
+先讀 .claude/skills/loop-method/SKILL.md 和 LOOP_MEMORY.md。
+
+任務：(1) 建 scripts/scan_silent_failures.py + allowlist 機制（pattern 見 LOOP_PLAYBOOK #7）;
+(2) 跑掃描，逐點分類：真問題 → 改 fail-loud（推 TG/Discord 告警或 exit 非 0）+ 回歸測試;
+正當沉默 → 進 allowlist 附一行理由。迭代到 SILENT: 0。
+完成條件：python scripts/scan_silent_failures.py 印 SILENT: 0 且 exit 0，
+且 python -m pytest tests/ -q 全綠
+⚠️ 分類拿不準的（改了可能影響 live 引擎行為）→ 集中列一批問我，不要自行判斷後直接改。
+allowlist 不是垃圾桶 — 每筆理由要能說服人，濫塞 = 弱化檢查器。
+失敗處理：同型失敗 3 次停。邊界：不碰 crontab / VPS / live 引擎的下單路徑邏輯
+（告警可以加，決策邏輯不動）。收工：更新 LOOP_MEMORY.md，commit
+```
+
+**你的驗收**：跑掃描器看 SILENT: 0；**重點審 allowlist** — 那是 agent 替自己開的門，
+逐筆看理由；抽 2-3 個改 fail-loud 的點確認告警真的會推（測 raw URL / 假造一次失敗）。
+
+---
+
 ## 共通備忘
 
 - 裁判缺 `--bounds` 時參數收斂只 WARN 不硬判（記在 LOOP_MEMORY 未解決區）— 跑 #4 第一輪順手建。
