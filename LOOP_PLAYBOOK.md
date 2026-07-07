@@ -69,7 +69,7 @@ whatif 落帳、`_maxpain_precursor_check.py` 有配方比對邏輯可參考。
 
 ---
 
-## 迴圈 #3b — 資料完整性（裁判：缺bar檢查器，**第一輪先建**）
+## 迴圈 #3b — 資料完整性（裁判：check_kbar_gaps.py，已就緒）
 
 **目標**：所有交易日的 1min/5m parquet 無缺 bar。已知地形（別讓 agent 重新發現）：
 2026-05/29 前 = 月檔 parquet、06/01 後 = tick CSV 經 `_resample_ticks_to_1min.py` 重採樣
@@ -79,9 +79,10 @@ TMFR1 歷史只到 2024-07、TXFR1 到 2020-03。
 ```
 先讀 .claude/skills/loop-method/SKILL.md 和 LOOP_MEMORY.md。
 
-任務：建 scripts/check_kbar_gaps.py — 對照 scripts/market_holidays.txt 與交易時段
-（日盤 08:46-13:45、夜盤 15:01-05:00），掃 <SYM> 的 1min parquet 列出缺 bar 日，
-印 GAPS: 0 + exit 0/1。然後補洞（tick CSV 重採樣或 shioaji 補抓）→ 重跑直到 GAPS: 0。
+任務：跑 python scripts/check_kbar_gaps.py <SYM> --from <日期> --to <日期>（已建，
+2026-07-07 Fable 試跑驗證：TMFR1 1-5月 GAPS:0、TXFR1 抓到真缺口 5/28-29）。
+有 GAP 就補洞（tick CSV 經 _resample_ticks_to_1min.py 重採樣或 shioaji 補抓）→
+重跑直到 GAPS: 0。
 完成條件：python scripts/check_kbar_gaps.py <SYM> --from <日期> 印 GAPS: 0
 ⚠️ 已知良性缺口先讀 LOOP_MEMORY / MEMORY（如 WallClock synth、休市日、量0分鐘），
 別把良性缺口「補」成假資料 — 檢查器要能區分「該有而缺」vs「本來就沒有」。
@@ -224,18 +225,20 @@ shioaji 歷史）每支都有 contract test 防禦。動機 = 這是最高頻 bu
 靜默 return 漏單、TG .env 掉兩行告警全靜默、金鑰 cp950 壞位元靜默讀不到、chips
 stale 靜默漏單。規格書 = 你的既有偏好「TG 全事件覆蓋」。
 
-**裁判（第一輪先建）**：`python scripts/scan_silent_failures.py` → `SILENT: 0` + exit 0。
-掃描 pattern：`except: pass`、except 只 log.debug 不告警、回 None/空值後呼叫端不檢查、
-讀不到設定靜默用預設、外部呼叫無 timeout。配 **allowlist 檔**（每筆附理由）收留
-正當沉默 — 已知良性案例（WallClock synth 補空檔、DayORB 靜默掃描）進 allowlist，
-**不是「修」它們**。
+**裁判（已就緒）**：`python scripts/scan_silent_failures.py` → `SILENT: 0` + exit 0。
+AST 掃 bare-except 與純吞噬 except 區塊；allowlist = `scripts/silent_allowlist.txt`
+（每筆附理由）收留正當沉默 — 已知良性案例（WallClock synth 補空檔、DayORB 靜默掃描）
+進 allowlist，**不是「修」它們**。
+基線（2026-07-07 Fable 試跑）：**SILENT: 137**，含 notify.py swallow（= TG 靜默事故
+同型）、engine.py bare-except。迴圈的工作 = 把 137 分類歸零。
+掃描器 v1 只抓兩型；「except 只 log.debug」「回空值不檢查」等進階 pattern 之後加。
 
 ```
 先讀 .claude/skills/loop-method/SKILL.md 和 LOOP_MEMORY.md。
 
-任務：(1) 建 scripts/scan_silent_failures.py + allowlist 機制（pattern 見 LOOP_PLAYBOOK #7）;
-(2) 跑掃描，逐點分類：真問題 → 改 fail-loud（推 TG/Discord 告警或 exit 非 0）+ 回歸測試;
-正當沉默 → 進 allowlist 附一行理由。迭代到 SILENT: 0。
+任務：跑 python scripts/scan_silent_failures.py（已建，基線 137），逐點分類：
+真問題 → 改 fail-loud（推 TG/Discord 告警或 exit 非 0）+ 回歸測試;
+正當沉默 → 進 scripts/silent_allowlist.txt 附一行理由。迭代到 SILENT: 0。
 完成條件：python scripts/scan_silent_failures.py 印 SILENT: 0 且 exit 0，
 且 python -m pytest tests/ -q 全綠
 ⚠️ 分類拿不準的（改了可能影響 live 引擎行為）→ 集中列一批問我，不要自行判斷後直接改。
@@ -251,6 +254,7 @@ allowlist 不是垃圾桶 — 每筆理由要能說服人，濫塞 = 弱化檢�
 
 ## 共通備忘
 
-- 裁判缺 `--bounds` 時參數收斂只 WARN 不硬判（記在 LOOP_MEMORY 未解決區）— 跑 #4 第一輪順手建。
+- breakout 家族的搜索空間 bounds 已建：`data/wfo_bounds_breakout.json`（judge_wfo `--bounds` 用）。新策略家族照樣從自己的 suggest_fn 抽一份。
+- 各卡裁判狀態（2026-07-07 Fable 全套試跑）：#1 pytest 265 綠 ✓、#2/#4 judge_wfo 含 --smoke/--bounds ✓、#3b check_kbar_gaps ✓（並抓到 TXFR1 5/28-29 真缺口）、#7 scan_silent_failures ✓（基線 137）。**#3a reconcile_tape、#5 preflight/acceptance、#6 fixture 測試 = 仍待首輪建**。
 - 所有迴圈產物只 commit 不 push；push 由你決定。
 - 「同型失敗 3 次停下來問我」是每個模板的保險絲 — agent 停了就去看它卡在哪，別直接叫它再試。

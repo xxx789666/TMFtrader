@@ -1,0 +1,4 @@
+# 靜默失敗豁免清單 — scan_silent_failures.py 讀取
+# 格式:相對路徑:行內識別子串  # 理由(必填,要能說服人)
+# 例:core/foo.py:except ImportError  # 可選依賴,缺席時走純CPU路徑,已在啟動log印明
+# ⚠️ allowlist 不是垃圾桶:每筆理由要具體;濫塞=弱化檢查器。人審重點就是這個檔。
