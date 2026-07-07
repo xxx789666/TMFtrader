@@ -12,6 +12,14 @@
 
 裁判：`cd TMFtrader-src && python -m pytest tests/ -q` → 全綠（基線 2026-07-07 = 265 passed）
 
+**含 live 引擎的 bug** — 但只有「repo 內修碼」這段能閉環，跑法三段式（同 #5 結構）：
+止血先行（人/watchdog，kill-first 規則）→ **本迴圈**（用事故 log 把 bug 固化成
+failing test：**先紅、證明測試抓得到，再修到綠**）→ 人閘（rsync 部署 + 重啟決策，
+持倉中必人審）→ 上線行為驗證（live log 出現新字樣、原症狀 N 交易日不復現才收案；
+修法生效看行為不看磁碟 — stale .pyc 教訓）。
+為何頭尾不進迴圈：最終裁判在生產環境（回測 vs live 已證實無法逐筆一致），
+而迴圈的本質是便宜重試 — live 的重試一輪 = 真錢學費。
+
 ```
 先讀 .claude/skills/loop-method/SKILL.md 和 LOOP_MEMORY.md，照上面的紀律工作。
 
