@@ -387,8 +387,9 @@ def main():
            "side": sig["side"], "take": sig["take"], "tue_close": tue_close, "warm": sig["warm"],
            "put_tue": round(put_tue), "put_mon": round(put_mon),
            "put_wall": put_wall, "call_wall": call_wall,
-           "thick": [[k, round(v)] for k, v in thick], "thin": [[k, round(v)] for k, v in thin],
-           "call_thick": [[k, round(v)] for k, v in call_thick]}
+           "thick": [[k, round(v), round(put_tue_by.get(k, 0))] for k, v in thick],
+           "thin": [[k, round(v), round(put_tue_by.get(k, 0))] for k, v in thin],
+           "call_thick": [[k, round(v), round(call_tue_by.get(k, 0))] for k, v in call_thick]}
     if settled:
         out.update(settled)
     NEXT.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -548,25 +549,30 @@ def write_report(o):
     thick = o.get("thick", [])
     if thick:
         L += [f"## 🧱 賣權牆變厚在哪個價位(ΔPut OI 增加 top;現價 ~{spot:.0f})",
-              "| 履約價 | ΔPut OI(口) | 相對現價 |", "|---:|---:|---|"]
-        for k, v in thick:
+              "| 履約價 | ΔPut OI(口) | 總 Put OI(口) | 相對現價 |", "|---:|---:|---:|---|"]
+        for row in thick:
+            k, v = row[0], row[1]
+            tot = f"{row[2]:,.0f}" if len(row) > 2 else "—"   # 舊 JSON 無總口數欄,相容
             rel = ("下方" if k < spot else "上方") + (f" {abs(k - spot) / spot * 100:.1f}%" if spot else "")
-            L.append(f"| {k:.0f} | +{v:,.0f} | {rel} |")
-        ks = [k for k, _ in thick]
+            L.append(f"| {k:.0f} | +{v:,.0f} | {tot} | {rel} |")
+        ks = [row[0] for row in thick]
         below = [k for k in ks if k < spot]
         L += ["", f"- **賣權牆變厚區間 ≈ {min(ks):.0f}–{max(ks):.0f}**;主支撐牆(週二最大 Put OI)= **{o.get('put_wall',0):.0f}**。",
               f"- 解讀:賣權牆增厚{'多集中在現價下方 → 下檔支撐增強' if len(below) >= len(ks) - 1 else '橫跨現價上下'}。", ""]
         if o.get("thin"):
-            L += ["- 賣權變薄(top):" + "、".join(f"{k:.0f}({v:+,.0f})" for k, v in o["thin"]), ""]
+            L += ["- 賣權變薄(top):" + "、".join(
+                f"{r[0]:.0f}({r[1]:+,.0f}" + (f",總{r[2]:,.0f})" if len(r) > 2 else ")") for r in o["thin"]), ""]
     # 買權牆(阻力)
     call_thick = o.get("call_thick", [])
     if call_thick:
         L += [f"## 🧱 買權牆變厚在哪個價位(ΔCall OI 增加 top;現價 ~{spot:.0f})",
-              "| 履約價 | ΔCall OI(口) | 相對現價 |", "|---:|---:|---|"]
-        for k, v in call_thick:
+              "| 履約價 | ΔCall OI(口) | 總 Call OI(口) | 相對現價 |", "|---:|---:|---:|---|"]
+        for row in call_thick:
+            k, v = row[0], row[1]
+            tot = f"{row[2]:,.0f}" if len(row) > 2 else "—"
             rel = ("上方" if k > spot else "下方") + (f" {abs(k - spot) / spot * 100:.1f}%" if spot else "")
-            L.append(f"| {k:.0f} | +{v:,.0f} | {rel} |")
-        cks = [k for k, _ in call_thick]
+            L.append(f"| {k:.0f} | +{v:,.0f} | {tot} | {rel} |")
+        cks = [row[0] for row in call_thick]
         L += ["", f"- **買權牆變厚區間 ≈ {min(cks):.0f}–{max(cks):.0f}**;主阻力牆(週二最大 Call OI)= **{o.get('call_wall',0):.0f}**。", ""]
     # 現價 vs 兩牆(進場位置參考;今天虧損正是 long 開在離阻力近、撞牆回洗)
     pw = o.get("put_wall", 0); cw = o.get("call_wall", 0)
