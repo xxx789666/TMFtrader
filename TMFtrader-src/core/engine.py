@@ -232,14 +232,15 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
     if strategy_type == "chips_exec":
         # chips_combo 訊號的引擎真 tick paper 執行載具(2026-06-09)。訊號計算在
         # scripts/chips_combo_daily.py(cron、HTTP 籌碼)、寫 next_signal.json;這支只執行:
-        # 日盤開盤窗讀 side → 1 口進場(真 tick 成交)、−2% 引擎硬停、13:44 收盤強平、不過夜。
+        # 日盤開盤窗讀 side → 1 口進場(真 tick 成交)、−2% 引擎硬停、13:30 收盤強平、不過夜。
         # 固定 1 口靠 launcher RISK_PROFILE=fixed1_paper;TF 須 ≥30(讓 −2% 停損過 8×ATR gate)。
+        # 2026-07-16 user 定版:強平 13:44 → 13:30(live 首日 user 手動 13:34 平倉後指示「之後一律 13:30」)。
         return ChipsExecStrategy(
             stop_pct=0.02,
             point_value=10.0,
             session_start=(8, 45),   # 08:45=日盤真開盤;08:30-08:45 是試撮(模擬撮合 tick、不可成交,2026-06-12 漏單教訓)
             entry_window_end=(9, 30),
-            force_close=(13, 44),
+            force_close=(13, 30),
         )
     if strategy_type == "maxpain_exec":
         # maxpain_v2 訊號的引擎真 tick paper 執行載具(完整 2 口含 +1% 加碼,2026-06-09)。
@@ -264,15 +265,16 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
         # chips_combo × 波浪 fade 濾網 訊號的引擎真 tick paper 執行載具(2026-06-18)。
         # 決策(combo + 波浪方向 → 政策B 同向跳)在 scripts/wave_fade_daily.py(cron ~07:00、
         # shioaji 唯讀數據金鑰抓 MXFR1 + dir_full 波浪)→ data/wave_fade/next_signal.json;
-        # 這支只執行:日盤開盤窗讀 side(已套濾網)→ 1 口進場(真 tick)、−2% 引擎硬停、13:44 強平、
+        # 這支只執行:日盤開盤窗讀 side(已套濾網)→ 1 口進場(真 tick)、−2% 引擎硬停、13:30 強平、
         # 不過夜。固定 1 口靠 launcher RISK_PROFILE=fixed1_paper;標的 MXF 小台(引擎自動對齊 pv50)。
         # ⚠️ forward 候選非確認 edge(無 2015-19 OOS、設定搜出)→ paper-only、不放大、≥1 年才終審。
+        # 2026-07-16 user 定版:強平 13:44 → 13:30(與 chips_exec 同批,「之後一律 13:30」)。
         return WaveExecStrategy(
             stop_pct=0.02,
             point_value=10.0,
             session_start=(8, 45),   # 08:45=日盤真開盤;08:30-08:45 是試撮(不可成交,2026-06-12 漏單教訓)
             entry_window_end=(9, 30),
-            force_close=(13, 44),
+            force_close=(13, 30),
         )
     if strategy_type == "astruct":
         # A_struct 日內早盤波浪 0-1-2 做多 + 日線 EMA250 牛熊濾網(lab 交接 2026-06-22)。
@@ -671,7 +673,7 @@ class TradingEngine:
             if self.trading_mode == "live" and hasattr(self.broker, 'get_real_positions'):
                 try:
                     real_positions = self.broker.get_real_positions()
-                    for rp in real_positions:
+                    for rp in (real_positions or []):    # None=查詢失敗(2026-07-16 語義)
                         # 從 real position code (e.g. TMFC6) 反查 instrument (TMF)
                         inst = None
                         for code in self.instruments:
@@ -683,10 +685,27 @@ class TradingEngine:
 
                         # owner-aware:多策略共用同一帳戶時,別領養「別支策略」開的倉
                         # (否則本策略會用自己的 check_exit/安全停損平掉對方的單=平錯單)。
-                        # 只領養本 owner 持有或無主孤兒的倉;單策略 live 行為不變。
                         _foreign = self._foreign_position_holder(inst)
                         if _foreign:
                             logger.info(f"[Sync] {inst} 真實持倉屬其他策略(owner={_foreign})、跳過不領養")
+                            continue
+
+                        # 2026-07-23 user 定版:無主孤兒倉 = user 本人手動建倉,一律不領養。
+                        # (7/23 事故:kill 引擎留倉→鎖釋放→breakout 開機領養孤兒→追蹤出場平掉 user 的倉。)
+                        # 只領養「自己鎖」的倉(引擎 crash 後 SIGKILL/OOM 鎖仍在→找回自己的單);
+                        # 無鎖 = 手動倉 → halt 新進場、TG 通知,user 平倉歸位後定期對帳自動解除。
+                        _holder = position_lock.get_holder(mode="live")
+                        if self.trading_mode == "live" and _holder != self._position_owner(inst):
+                            self._reconcile_halt[inst] = True
+                            logger.warning(
+                                f"[Sync] {inst} 帳上有倉({rp['direction']} x{rp['quantity']} @ {rp['price']})"
+                                f" 但無本策略持倉鎖(holder={_holder}) → 判定 user 手動倉,不領養不掛 SL/TP;"
+                                f" halt 新進場,歸位後自動恢復")
+                            try:
+                                tg(f"🖐️ [{self._position_owner(inst)}] 開機偵測無主部位({inst} x{rp['quantity']})"
+                                   f" → 判定手動倉:不領養、暫停自動進場;你平倉歸位後自動恢復,無需動作")
+                            except Exception:
+                                pass
                             continue
 
                         pos = self.position_manager.positions.get(inst)
@@ -1529,6 +1548,25 @@ class TradingEngine:
             logger.info(f"[Risk] [{instrument}] rejected: {decision.rejection_reason}")
             return
 
+        # ── 進場前券商部位對帳(2026-07-17,user:「等我手動結束這筆交易,自動化才進倉」)──
+        # 定期 reconcile 每 60 分一輪,user 盤中手動進倉後的第一小時內引擎可能疊單;
+        # 送進場單前即時對帳:券商淨部位 ≠ 引擎自身認知(fresh=0/加碼=既有倉) → 判定外部手動
+        # 部位 → 跳過進場 + halt(user 平倉歸位後,定期 reconcile 自動解除並恢復進場)。
+        _ok, _net, _own = self._entry_reconcile_check(instrument)
+        if not _ok:
+            logger.warning(f"[Reconcile] [{instrument}] 進場前對帳:券商淨 {_net:+d} vs 引擎 {_own:+d}"
+                           f" → 判定外部手動部位,跳過進場並 halt(外部倉結束後自動恢復)")
+            self._reconcile_halt[instrument] = True
+            import time as _t
+            if _t.time() - self._reconcile_last_alert.get(instrument, 0.0) > 900:
+                self._reconcile_last_alert[instrument] = _t.time()
+                tg(f"🖐️ [{instrument}] 偵測外部手動部位(券商 {_net:+d} 口 vs 引擎 {_own:+d})\n"
+                   f"已暫停自動進場;等你交易結束(帳戶歸位)後自動恢復,無需任何動作")
+            _strat = self.pipelines[instrument].strategy
+            if getattr(_strat, "_traded", False):
+                _strat._traded = False       # 同 lock 擋下的處理:歸位後訊號仍成立可進
+            return
+
         # 下單
         action = "BUY" if signal.is_buy else "SELL"
         log_order(action, price, decision.quantity, f"MKT {instrument}")
@@ -1786,11 +1824,53 @@ class TradingEngine:
             return
 
         action = "SELL" if pos.side == Side.LONG else "BUY"
-        log_order(action, price, pos.quantity, f"MKT 平倉 {instrument}")
+
+        # ── 出場前券商部位對帳 fail-safe(2026-07-16)──
+        # chips live 首日 user 於 App 13:34 手動平倉,引擎不知情仍報 long、13:44 強平差 6 分鐘
+        # 就送出反向單變成真錢裸空單(靠緊急 kill 擋下)。定期 _reconcile_positions 每 60 分一輪
+        # 補不了這種窗口,故所有 live 出場送單前先對帳:
+        #   同向且足量 → 照常送單;同向但不足(外部減碼) → 只平券商實際剩餘口數+告警;
+        #   券商無同向部位(外部全平/反向) → 絕不送單(送了=反向裸單),內部吸收為已平倉+告警;
+        #   查詢無法確認(None) → 照常送單(保命出場優先:狀態不明時寧可重複平倉被拒,不留倉裸奔)。
+        order_qty = pos.quantity
+        if self.trading_mode == "live":
+            _want = pos.quantity if pos.side == Side.LONG else -pos.quantity
+            _decision, _dq = self._exit_reconcile_decision(instrument, _want)
+            if _decision == "absorb":
+                logger.critical(
+                    f"[Reconcile] [{instrument}] 引擎持倉 {_want:+d} 但券商淨部位 {_dq:+d}"
+                    f" → 判定外部平倉(App 手動?),不送 {action} 單;內部吸收為已平倉({signal.reason})")
+                try:
+                    trade = self.position_manager.close_position(
+                        instrument, price, f"外部平倉吸收({signal.reason})")
+                except Exception as _e:
+                    logger.critical(f"[Reconcile] [{instrument}] 吸收記錄失敗: {_e} — 強制重置持倉")
+                    from core.position import Position
+                    self.position_manager.positions[instrument] = Position()
+                    trade = None
+                notify_exit_failed(instrument,
+                                   f"⚠️ 出場對帳:引擎自以為 {_want:+d} 口、券商實際 {_dq:+d} 口 → "
+                                   f"判定外部已平倉,未送單、內部已吸收;請核對 App 部位/委託")
+                position_lock.release(owner, mode=self.trading_mode)
+                if trade:
+                    self.risk_manager.on_trade_closed(trade.net_pnl)
+                    if self.performance:
+                        self.performance.on_trade_closed(trade.to_perf_dict())
+                return
+            if _decision == "reduce":
+                order_qty = _dq
+                logger.critical(
+                    f"[Reconcile] [{instrument}] 外部減碼:引擎 {_want:+d} vs 券商剩餘"
+                    f" → 平倉單口數改 {order_qty}(只平券商實際剩餘)")
+                notify_exit_failed(instrument,
+                                   f"⚠️ 出場對帳:外部減碼(引擎 {_want:+d} 口 vs 券商剩 {order_qty} 口),"
+                                   f"只送 {order_qty} 口平倉;請核對 App")
+
+        log_order(action, price, order_qty, f"MKT 平倉 {instrument}")
 
         result = self.broker.place_order(
             action=action,
-            quantity=pos.quantity,
+            quantity=order_qty,
             price_type="MKT",
             instrument=instrument,
         )
@@ -1894,12 +1974,88 @@ class TradingEngine:
         # 價格異常偵測
         self._check_price_anomaly()
 
+    @staticmethod
+    def _shared_tg_gate(key: str, cooldown: float) -> bool:
+        """跨引擎推播冷卻(2026-07-28):同帳多引擎各自 reconcile 會疊推同一件事。
+        /tmp 冷卻檔存上次推播 epoch;窗內其他引擎讀到就閉嘴。檔案操作失敗 fail-open(寧多推勿漏)。"""
+        import time as _t
+        p = f"/tmp/TMFtrader_tg_gate_{key}"
+        now = _t.time()
+        try:
+            with open(p) as f:
+                if now - float(f.read().strip() or 0) < cooldown:
+                    return False
+        except (FileNotFoundError, ValueError):
+            pass
+        except Exception:
+            return True
+        try:
+            with open(p, "w") as f:
+                f.write(str(now))
+        except Exception:
+            pass
+        return True
+
+    def _broker_net_position(self, instrument: str):
+        """查券商該商品實際淨部位(多=正/空=負)。None=無法確認(無介面/未連線/查詢失敗)。
+        依賴 broker.get_real_positions 的語義(2026-07-16 起):list=查詢成功([]=確認空手)、None=查不到。"""
+        getter = getattr(self.broker, "get_real_positions", None)
+        if not callable(getter):
+            return None
+        try:
+            reals = getter()
+        except Exception as e:
+            logger.warning(f"[Reconcile] [{instrument}] get_real_positions 例外: {e}")
+            return None
+        if reals is None:
+            return None
+        try:
+            code = get_spec(instrument).code
+        except Exception:
+            code = instrument
+        net = 0
+        for rp in reals:
+            if str(rp.get("code", "")).startswith(code):
+                q = int(rp.get("quantity", 0) or 0)
+                net += q if "Buy" in str(rp.get("direction", "")) else -q
+        return net
+
+    def _entry_reconcile_check(self, instrument: str):
+        """進場前對帳(2026-07-17 user 定版:手動倉=正當,系統等它結束、不疊單不催平)。
+        回 (ok, net, own):ok=False=券商有引擎不認識的部位(外部手動倉)→應擋進場。
+        net=None(查詢失敗)=ok(fail-open:誤擋訊號成本 < 誤疊單,但只在「確認有外部倉」才擋)。"""
+        net = self._broker_net_position(instrument)
+        pos0 = self.position_manager.positions.get(instrument)
+        own = 0
+        if pos0 and not getattr(pos0, "is_flat", True):
+            own = pos0.quantity if pos0.side == Side.LONG else -pos0.quantity
+        if net is None or net == own:
+            return True, net, own
+        return False, net, own
+
+    def _exit_reconcile_decision(self, instrument: str, want: int):
+        """出場前對帳決策(純函式,tests/test_reconcile_exit.py 直測)。
+        want=引擎自以為的淨部位(多正空負)。回 (decision, qty):
+          ("send", |want|)   券商同向足量或無法確認 → 照常送單
+          ("reduce", |net|)  券商同向但口數較少(外部減碼) → 只平剩餘
+          ("absorb", net)    券商無同向部位(外部全平/反向) → 不送單、內部吸收"""
+        net = self._broker_net_position(instrument)
+        if net is None:
+            return ("send", abs(want))
+        if net == 0 or (net > 0) != (want > 0):
+            return ("absorb", net)
+        if abs(net) < abs(want):
+            return ("reduce", abs(net))
+        return ("send", abs(want))
+
     def _reconcile_positions(self):
         """定期比對引擎持倉和券商真實持倉"""
         if not hasattr(self.broker, 'get_real_positions'):
             return
         try:
             real_positions = self.broker.get_real_positions()
+            if real_positions is None:      # 2026-07-16 語義:None=查詢失敗,本輪跳過(≠空手)
+                return
             for inst in self.instruments:
                 engine_pos = self.position_manager.positions.get(inst)
                 spec = get_spec(inst)
@@ -1944,16 +2100,19 @@ class TradingEngine:
                     )
                     # ── 進入 halt：阻止 _execute_entry 開新倉
                     self._reconcile_halt[inst] = True
-                    # ── TG 推播（節流：同商品每 15 分鐘最多 1 次、避免每分鐘 spam）
+                    # ── TG 推播節流(2026-07-28 user:每半小時 1 次就好):
+                    #    ①單引擎 30 分 ②跨引擎共用 /tmp 冷卻檔(4 個 live 引擎共帳,各推各的=疊成 spam)
                     import time as _t
                     now_ts = _t.time()
                     last_ts = self._reconcile_last_alert.get(inst, 0.0)
-                    if now_ts - last_ts > 900:
+                    if now_ts - last_ts > 1800 and self._shared_tg_gate(f"halt_{inst}", 1800):
                         self._reconcile_last_alert[inst] = now_ts
+                        # 2026-07-17 user 定版:手動倉=正當,不催平;等歸位自動恢復
                         tg(
-                            f"🚨 [RECONCILE] {inst} 持倉不一致\n"
+                            f"🖐️ [RECONCILE] {inst} 偵測外部部位\n"
                             f"引擎={engine_side}×{engine_qty} 券商={real_side}×{real_qty}\n"
-                            f"已 halt new entry、請手動歸位（平掉外部部位或讓 rogue script 停止）"
+                            f"已暫停自動進場。若是你手動交易 → 無需動作,交易結束(歸位)後自動恢復;"
+                            f"若非你所為 → 查 rogue script/其他引擎"
                         )
                 else:
                     # ── 一致（含預期的跨策略持倉）→ 解除 halt（人工歸位後自動恢復進場）
@@ -1961,7 +2120,8 @@ class TradingEngine:
                         self._reconcile_halt[inst] = False
                         self._reconcile_last_alert[inst] = 0.0
                         logger.info(f"[RECONCILE] {inst} 已歸位、解除 halt、恢復進場")
-                        tg(f"✅ [RECONCILE] {inst} 已歸位、恢復接受新進場")
+                        if self._shared_tg_gate(f"recover_{inst}", 1800):   # ✅ 也跨引擎去重(4 引擎只推 1 則)
+                            tg(f"✅ [RECONCILE] {inst} 已歸位、恢復接受新進場")
         except Exception as e:
             logger.warning(f"[RECONCILE] 持倉核對失敗: {e}")
 

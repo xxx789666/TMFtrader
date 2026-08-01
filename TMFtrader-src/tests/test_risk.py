@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import unittest
+from unittest.mock import patch
 from datetime import datetime
 
 from risk.position_sizing import PositionSizer, RISK_PRESETS
@@ -117,12 +118,13 @@ class TestCircuitBreaker(unittest.TestCase):
         self.assertTrue(cb.can_trade)
 
     def test_connection_lost(self):
-        """連線中斷"""
+        """連線中斷(交易時段內)— 2026-07-10 起 on_connection_lost 分交易時段,故 patch 成 in-session 測核心行為"""
         cb = CircuitBreaker()
-        cb.on_connection_lost()
-        self.assertEqual(cb.state, CircuitState.EMERGENCY_STOP)
-        cb.on_connection_restored()
-        self.assertEqual(cb.state, CircuitState.ACTIVE)
+        with patch.object(CircuitBreaker, "_in_trading_session", return_value=True):
+            cb.on_connection_lost()
+            self.assertEqual(cb.state, CircuitState.EMERGENCY_STOP)
+            cb.on_connection_restored()
+            self.assertEqual(cb.state, CircuitState.ACTIVE)
 
 
 class TestRiskManager(unittest.TestCase):

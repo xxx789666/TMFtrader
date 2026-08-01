@@ -1,4 +1,4 @@
-"""WaveExec — chips_combo × 波浪 fade 濾網 訊號的「引擎真 tick paper 執行載具」。
+﻿"""WaveExec — chips_combo × 波浪 fade 濾網 訊號的「引擎真 tick paper 執行載具」。
 
 決策(combo + 波浪方向 → 政策B 同向跳)留在 scripts/wave_fade_daily.py(cron ~07:00、寫
 data/wave_fade/next_signal.json);這支只負責「執行」:讀當天該不該進、哪方向,在日盤開盤窗用
@@ -8,7 +8,7 @@ data/wave_fade/next_signal.json);這支只負責「執行」:讀當天該不該�
 - next_signal.json = {trade_date, side('long'/'short'/'flat'), wave_dir, ...}。
 - 日盤開盤窗(08:45 真開盤;08:30-08:45 試撮假 tick 不可成交)進 1 口;side=flat 不進。
 - −2% 停損(由進場 Signal 的 stop_loss 交給引擎 tick 級硬停)。
-- 收盤(force_close 13:44)強平、不過夜。無止盈、無 trail。
+- 收盤(force_close 13:30)強平、不過夜。無止盈、無 trail。
 - 固定 1 口:靠 launcher RISK_PROFILE=fixed1_paper(max_contracts=1)鎖死。標的 MXF 小台(pv50)。
 - TF 須 ≥30:讓 −2% 停損(≈880 點)≈3.5-5×ATR、能過 risk_manager 的 8×ATR gate。
 """
@@ -28,7 +28,7 @@ SIGNAL_FILE = ROOT / "data" / "wave_fade" / "next_signal.json"
 class WaveExecStrategy(BaseStrategy):
     def __init__(self, stop_pct: float = 0.02, point_value: float = 10.0,
                  session_start: tuple = (8, 45), entry_window_end: tuple = (9, 30),
-                 force_close: tuple = (13, 44), max_loss_twd: float = 0.0):
+                 force_close: tuple = (13, 30), max_loss_twd: float = 0.0):
         self.stop_pct = stop_pct
         self.point_value = point_value
         self.session_start = time(*session_start)

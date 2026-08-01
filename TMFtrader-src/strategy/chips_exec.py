@@ -1,4 +1,4 @@
-"""ChipsExec — chips_combo 訊號的「引擎真 tick paper 執行載具」。
+﻿"""ChipsExec — chips_combo 訊號的「引擎真 tick paper 執行載具」。
 
 訊號計算(外資 flow + 大戶 ratio → combo,HTTP 籌碼資料)留在 scripts/chips_combo_daily.py
 (cron 18:30 算、寫 data/chips_combo/next_signal.json);這支策略只負責「執行」:讀當天該不該進、
@@ -8,7 +8,7 @@
 - next_signal.json = {trade_date, side('long'/'short'/'flat'), combo, ...}。
 - 日盤開盤窗(預設首根 30m bar ~09:00)進 1 口;side=flat 不進。
 - −2% 停損(由進場 Signal 的 stop_loss 交給引擎 tick 級硬停)。
-- 收盤(force_close 13:44)強平、不過夜。無止盈、無 trail。
+- 收盤(force_close 13:30)強平、不過夜。無止盈、無 trail。
 - 固定 1 口:靠 launcher 的 RISK_PROFILE=fixed1_paper(max_contracts=1)鎖死。
 
 ⚠️ 與 CSV 版的差異(會記錄、屬預期):進場是「開盤窗首根 30m bar ~09:00」的真實 tick 價,
@@ -32,7 +32,7 @@ SIGNAL_FILE = ROOT / "data" / "chips_combo" / "next_signal.json"
 class ChipsExecStrategy(BaseStrategy):
     def __init__(self, stop_pct: float = 0.02, point_value: float = 10.0,
                  session_start: tuple = (8, 45), entry_window_end: tuple = (9, 30),
-                 force_close: tuple = (13, 44), max_loss_twd: float = 0.0):
+                 force_close: tuple = (13, 30), max_loss_twd: float = 0.0):
         self.stop_pct = stop_pct
         self.point_value = point_value
         self.session_start = time(*session_start)
@@ -59,6 +59,19 @@ class ChipsExecStrategy(BaseStrategy):
             self._sig_cache = self._read_signal()
             self._sig_cache_at = now
         return self._sig_cache
+
+    def _alert_stale_once(self, sess, td, side, skipped: bool):
+        """訊號 trade_date ≠ 今天 → 推 TG 告警(每 session 一次;可能是假日位移、也可能是資料源慢的過期訊號)。"""
+        if getattr(self, "_stale_alerted_sess", None) == sess:
+            return
+        self._stale_alerted_sess = sess
+        try:
+            from core.notify import tg
+            act = "已跳過不交易" if skipped else "仍照常執行(≤2天容忍),請人工確認是否為資料源未更新"
+            tg(f"⚠️ [chips_exec] 訊號疑似過期:trade_date={td} ≠ 今天 {sess}(side={side})→ {act}。"
+               f"若昨天傍晚 FinMind/TAIFEX 沒出資料,訊號就是舊的(參考 2026-07-01 漏單案例)。")
+        except Exception:
+            pass
 
     def _entry_decision(self, sess, bt, price) -> Optional[Signal]:
         """進場判斷(on_kbar 與 check_entry_tick 共用;_traded 防重複進場)。"""
@@ -94,7 +107,12 @@ class ChipsExecStrategy(BaseStrategy):
             return None
         if (sess - td).days > 2:
             _log_once(f"trade_date={td} side={_sd} combo={_cb} → 訊號過期({(sess - td).days}天>2)、跳過")
+            self._alert_stale_once(sess, td, _sd, skipped=True)
             return None
+        if td < sess:
+            # 容忍區(1-2 天)照常執行(假日位移是合法情境),但推 TG 告警供人工判斷——
+            # 2026-07-01 案例:FinMind 慢→訊號檔停在前一日(flat)→引擎靜默空手、錯過 short,無人知曉。
+            self._alert_stale_once(sess, td, _sd, skipped=False)
 
         side = _sd
         if side == "long":

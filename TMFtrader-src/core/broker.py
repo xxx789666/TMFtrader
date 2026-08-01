@@ -473,13 +473,30 @@ class ShioajiBroker(BaseBroker):
                     _os.environ.get("DISABLE_RECONNECT_FETCH_COOLDOWN", "").strip().lower()
                     in ("1", "true", "yes")
                 )
-                _should_fetch = _disable_cooldown or (_now_mono - _last_fetch) > _cooldown_sec
+                # 2026-07-15：結算日(每月第三週三=期貨換月日)夜盤強制全抓一次。
+                #   結算後 R1 滾到次月,若 reconnect 落在 cooldown 內會沿用舊(已結算)合約→dead feed
+                #   (record_all_depth 踩過同款)。只在「第三週三 且 >=15:00(R1 已滾) 且 今天還沒抓過換月後合約」
+                #   時強制 1 次;抓完 _last_contracts_fetch_wall 更新到 15:00 後→當天不再重複強制→
+                #   不增加 reconnect 風暴流量。最保險做法:只『加』強制條件、完全不動既有 cooldown 邏輯。
+                _force_settle_fetch = False
+                try:
+                    _wall = datetime.now()
+                    if _wall.weekday() == 2 and 15 <= _wall.day <= 21 and _wall.hour >= 15:  # 第三週三夜盤
+                        _last_wall = getattr(self, '_last_contracts_fetch_wall', None)
+                        _roll_boundary = _wall.replace(hour=15, minute=0, second=0, microsecond=0)
+                        if _last_wall is None or _last_wall < _roll_boundary:
+                            _force_settle_fetch = True
+                            logger.info("[Reconnect] 結算日(第三週三)夜盤首次重連 → 強制全抓合約(換月)")
+                except Exception:
+                    pass
+                _should_fetch = _disable_cooldown or _force_settle_fetch or (_now_mono - _last_fetch) > _cooldown_sec
 
                 if _should_fetch:
                     # 修法 F：reconnect 時同樣拿掉 contract_download=True（避免 race）
                     try:
                         self._api.fetch_contracts(contracts_timeout=30000)
                         self._last_contracts_fetch_mono = _now_mono
+                        self._last_contracts_fetch_wall = datetime.now()   # 結算日強制判定用(wall-clock)
                     except Exception as fc_err:
                         logger.warning(f"[Shioaji] fetch_contracts partial: {fc_err}")
                 else:
@@ -870,14 +887,16 @@ class ShioajiBroker(BaseBroker):
                     threading.Thread(target=self._attempt_reconnect, daemon=True).start()
         return AccountInfo()
 
-    def get_real_positions(self) -> list[dict]:
-        """查詢真實持倉"""
+    def get_real_positions(self) -> list[dict] | None:
+        """查詢真實持倉。回 list=查詢成功([]=確認空手);None=無法確認(未連線/無帳戶/查詢失敗)。
+        2026-07-16 語義修正:錯誤不再回 [] — 出場對帳 fail-safe 必須區分「確認空手」vs「查不到」,
+        混用會讓查詢失敗被當成外部平倉、保命出場單被錯誤攔下。"""
         if not self._api:
-            return []
+            return None
         try:
             account = self._api.futopt_account or self._api.stock_account
             if not account:
-                return []
+                return None
             positions = self._api.list_positions(account)
             result = []
             for p in (positions or []):
@@ -898,7 +917,7 @@ class ShioajiBroker(BaseBroker):
                     self._last_reconnect_time = _t.monotonic()
                     logger.warning("[Token] list_positions 偵測到 token 過期，觸發重連")
                     threading.Thread(target=self._attempt_reconnect, daemon=True).start()
-            return []
+            return None
 
     def get_historical_kbars(self, instrument: str = "", count: int = 60) -> list:
         """用 Shioaji API 取得歷史 K 棒（暖機用）"""
