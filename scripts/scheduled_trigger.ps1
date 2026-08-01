@@ -43,6 +43,20 @@ Write-Log "================================================================"
 $wslList = wsl.exe --list --running 2>&1 | Out-String
 Write-Log ("WSL running list: " + ($wslList -replace "[\r\n]+", " "))
 
+# Step 0.5 (2026-07-28): deterministic audit digest BEFORE Hermes runs.
+# Produces TMFtrader-src\data\hermes_digest\digest_latest.md (freshness + tape-progress
+# + consistency material). Non-fatal: review still runs without it.
+try {
+  Write-Log "Running hermes_weekly_digest.py (pre-digest)"
+  $Py     = "C:\Users\xx\AppData\Local\Programs\Python\Python312\python.exe"
+  $Digest = Join-Path $PSScriptRoot "hermes_weekly_digest.py"
+  $dout   = & $Py $Digest 2>&1 | Out-String
+  Add-Content -LiteralPath $LogFile -Value $dout -Encoding utf8
+  Write-Log "pre-digest done"
+} catch {
+  Write-Log ("pre-digest FAILED (non-fatal): " + $_.Exception.Message)
+}
+
 try {
   Write-Log "Invoking wsl.exe -> ~/vps_trader/scripts/run_weekly_review.sh"
   # WSL2 sees the project via ~/vps_trader symlink (created during setup_wsl_local.sh)
