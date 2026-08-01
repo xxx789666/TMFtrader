@@ -130,7 +130,68 @@ def fetch_tx_ohlc(start, end):
         prev = out.get(d)
         if prev is None or vol > prev["vol"]:              # 同日取最大量(近月)
             out[d] = {"open": o, "high": h, "low": l, "close": c, "vol": vol}
-    return {d: {k: v[k] for k in ("open", "high", "low", "close")} for d, v in out.items()}
+    res = {d: {k: v[k] for k in ("open", "high", "low", "close")} for d, v in out.items()}
+    # T+0(2026-07-07):FinMind 期貨日線傍晚才更新;下午 15:0x 跑時當日缺列 → 補官網行情頁,
+    # 讓 chips 三源(外資/大戶 CSV 本來就是 TAIFEX T+0)當天下午就湊齊、訊號不必等晚場。
+    today_iso = date.today().isoformat()
+    if start <= today_iso <= end and today_iso not in res:
+        bar = _fetch_tx_ohlc_web(today_iso)
+        if bar:
+            res[today_iso] = bar
+    return res
+
+
+def _fetch_tx_ohlc_web(date_iso):
+    """官網 futDailyMarketReport 當日 TX 日盤 OHLC(T+0)。近月=一般時段量最大的純月份契約。
+    具名表頭定位 + re.I(防大寫 <TD>,同選擇權頁 2026-05 改版模式);任何不符回 None(fail-closed)。"""
+    import re
+    body = urllib.parse.urlencode({"queryType": "2", "marketCode": "0", "commodity_id": "TX",
+                                   "queryDate": date_iso.replace("-", "/"),
+                                   "MarketCode": "0", "commodity_idt": "TX"}).encode()
+    try:
+        req = urllib.request.Request("https://www.taifex.com.tw/cht/3/futDailyMarketReport",
+                                     data=body, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            t = r.read().decode("utf-8", "replace")
+        if date_iso.replace("-", "/") not in t:
+            return None
+        hdr, idx, best = None, {}, None
+        for m in re.finditer(r"<tr[^>]*>(.*?)</tr>", t, re.S | re.I):
+            c = [re.sub(r"<[^>]+>", "", x).strip().replace(",", "")
+                 for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", m.group(1), re.S | re.I)]
+            if not c:
+                continue
+            if hdr is None and any("開盤" in x for x in c):
+                hdr = [re.sub(r"[\s*]", "", x) for x in c]
+                for name, key in (("開盤價", "o"), ("最高價", "h"), ("最低價", "l"),
+                                  ("最後成交價", "c"), ("一般交易時段成交量", "v")):
+                    for i, x in enumerate(hdr):
+                        if name in x:
+                            idx[key] = i
+                            break
+                if len(idx) < 5:
+                    return None                       # 表頭再改版 → fail-closed
+                continue
+            if hdr is None or c[0] != "TX" or len(c) != len(hdr):
+                continue
+            if not re.fullmatch(r"\d{6}", c[1].strip()):   # 排除價差/週契約,只留純月份
+                continue
+            try:
+                o, h, l, cl = (float(c[idx["o"]]), float(c[idx["h"]]),
+                               float(c[idx["l"]]), float(c[idx["c"]]))
+                v = float(c[idx["v"]] or 0)
+            except (ValueError, TypeError):
+                continue
+            if o <= 0 or h <= 0:
+                continue
+            if best is None or v > best[0]:
+                best = (v, {"open": o, "high": h, "low": l, "close": cl})
+        if best:
+            print(f"  [tx_ohlc] {date_iso} 用官網T+0頁 close={best[1]['close']:.0f}")
+            return best[1]
+    except Exception as e:
+        print(f"  [tx_ohlc] 官網T+0失敗: {e}")
+    return None
 
 
 def fetch_taifex_largetrader(start, end):

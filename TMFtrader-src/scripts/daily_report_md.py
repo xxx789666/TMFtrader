@@ -131,8 +131,18 @@ def _delta4(cur, prev):
 
 
 def _night_block(tape_a):
-    """夜盤變體 B 紙上 tape 段(night_tape.csv;chips_night_snapshot.py 18:36 記/結)。無檔=空字串。"""
-    rows = _rows(CHIPS / "night_tape.csv")
+    """夜盤變體 B 紙上 tape 段(night_tape.csv;chips_night_snapshot.py 18:36 記新倉/備援結算)。無檔=空字串。
+    2026-07-16 修(user 抓包報告一天延遲):隔日收盤 OHLC 15:10 就進 history.csv,但結算 cron 在 18:36
+    → 15:14 版報告永遠顯示「持倉中」。改成產報告前先就地結算(settle 冪等、失敗不擋報告),
+    18:36 那發保留 = 備援結算 + 記當晚新倉。"""
+    try:
+        import chips_night_snapshot as _cns
+        _live = _cns.load_tape()
+        if _live and _cns.settle(_live):
+            _cns.save_tape(_live)
+    except Exception as _e:
+        print(f"night tape 預結算失敗(不擋報告): {_e}")
+    rows = [r for r in _rows(CHIPS / "night_tape.csv") if r.get("trade_date") != "trade_date"]
     if not rows:
         return ""
     settled = [r for r in rows if str(r.get("exit", "")).strip()]
@@ -144,12 +154,8 @@ def _night_block(tape_a):
         gp = sum(x for x in pn if x > 0); gl = -sum(x for x in pn if x < 0)
         pf = gp / gl if gl > 0 else float("inf")
         tot = sum(_fnum(r.get("pnl")) or 0 for r in settled)
+        # 2026-07-16 user 定版:B 段只列自己的統計,不混 A 對照(A/B 比較等 ~60 筆判準時再拉 tape 算)
         L.append(f"- B 累積:{len(settled)} 筆 勝 {wins}/{len(settled)} PF {pf:.2f} 淨 **{tot:+,.0f} 元**")
-        start = str(settled[0].get("trade_date", ""))
-        a_same = [r for r in tape_a if str(r.get("trade_date", "")) >= start]
-        if a_same:
-            ta = sum(_fnum(r.get("pnl")) or 0 for r in a_same)
-            L.append(f"- A 現版同期({start} 起 {len(a_same)} 筆):{ta:+,.0f} 元 → **B−A = {tot - ta:+,.0f} 元**")
         last = settled[-1]
         L.append(f"- 最近結算:{last.get('trade_date')} {last.get('side')} 進 {last.get('entry')} → "
                  f"出 {last.get('exit')} **{(_fnum(last.get('pnl')) or 0):+,.0f} 元**({last.get('exit_reason', '')})")
@@ -356,14 +362,24 @@ def write_maxpain():
                      f"**{_fnum(r.get('pnl')) or 0:+,.0f} 元** {r.get('exit_reason','')}（{r.get('lots','')}口）")
     else:
         L.append("- 無（未到結算日或空手）")
+    # 引擎無倉時再看手動重進場管理器(mxf_manual_reentry, owner=maxpain_manual)——
+    # 2026-07-06 盲點:事故後真倉在 manual_reentry_state.json、日報只讀 paper 路徑誤報 divergence
+    _mx_exec = _exec_pos('maxpain_exec')
+    if _mx_exec == "無倉":
+        _mr = _json(ROOT / "data" / "manual_reentry_state.json")
+        if _mr and _mr.get("phase") == "holding":
+            _mx_exec = (f"持倉 long x{_mr.get('filled_qty','?')} @ {_fnum(_mr.get('avg_px')) or 0:,.0f}"
+                        f"（手動重進場 maxpain_manual、停損 {_fnum(_mr.get('stop_px')) or 0:,.0f}）")
+        elif _mr and _mr.get("phase") == "seeking":
+            _mx_exec = "手動重進場求成交中（maxpain_manual）"
     L += [
         "",
         f"## 累積 tape（小台 pv50、{_maxpain_lots(tape)}、期間 {_tape_period(tape, 'signal_t')}）\n- {_tape_stats(tape)}"
         + _crash_dualcol(tape),
         "",
-        f"## 真 tick 執行（maxpain_exec）\n- {_exec_pos('maxpain_exec')}"
+        f"## 真 tick 執行（maxpain_exec）\n- {_mx_exec}"
         + ("\n- ⚠️ 紙上帳持倉中、但引擎無倉 → divergence(對帳時標註;如基礎設施事故/漏單)"
-           if state == "open" and _exec_pos('maxpain_exec') == "無倉" else ""),
+           if state == "open" and _mx_exec == "無倉" else ""),
         "",
         "## 📖 名詞解釋",
         "- **Max Pain(最大痛點)**:由選擇權各履約價的買權/賣權未平倉量(OI)算出——指數若結算在這個價,"

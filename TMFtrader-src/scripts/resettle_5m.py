@@ -22,12 +22,14 @@ def load_5m():
     return bars, sorted(bars)
 
 
-def maxpain_5m(entry_d, ed_d, bars, dates):
+def maxpain_5m(entry_d, ed_d, bars, dates, be_after_scale=False):
+    """be_after_scale=True:加第2口後把停損移到成本價(均價 S1×1.005)。"""
     hold = [d for d in dates if entry_d <= d <= ed_d]
     if not hold or entry_d not in bars:
         return None
     S1 = bars[entry_d][0][0]
     lvl, stp = S1 * (1 + SCALE), S1 * (1 - STOP)
+    be = S1 * (1 + SCALE / 2)                 # 加碼後成本價(兩口均價)
     added, S2 = False, None
     last_c, last_d = S1, entry_d
     for d in hold:
@@ -35,12 +37,16 @@ def maxpain_5m(entry_d, ed_d, bars, dates):
             continue
         for (o, h, l, c) in bars[d]:
             last_c, last_d = c, d
-            if o <= stp:
+            cur = be if (added and be_after_scale) else stp
+            if o <= cur:                       # 跳空穿(當前)停損
                 return _mk(S1, S2 if added else None, o, "stop_gap", added, d)
-            if not added and h >= lvl:
+            if not added and h >= lvl:         # 同根加碼 → 停損即刻收緊到成本價
                 added, S2 = True, lvl
-            if l <= stp:
-                return _mk(S1, S2 if added else None, stp, "stop", added, d)
+                if be_after_scale:
+                    cur = be
+            if l <= cur:
+                rs = "be_stop" if (added and be_after_scale) else "stop"
+                return _mk(S1, S2 if added else None, cur, rs, added, d)
     return _mk(S1, S2 if added else None, last_c, "settle", added, last_d)
 
 

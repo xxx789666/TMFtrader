@@ -12,12 +12,13 @@ try:
 except Exception:
     def tg(m): pass
 
-# 2026-06-09 cutover 後現役:day_v7(breakout_v7)+ night_v7 兩支 live MXF + chips_exec paper。
-# 已退場:night_v3(被 night_v7 取代)、day_orb(暫停)、aft_orb(被 chips_exec 取代)。
+# 2026-06-09 cutover 後現役 live:day_v7 + night_v7 + chips_exec(2026-07-16 轉真錢)+
+# maxpain_exec(2026-07-03 轉真錢)。已退場:night_v3、day_orb、aft_orb。
+# 2026-07-22 修:chips/maxpain 標籤與路徑從 paper 改 live(7/21 chips live 真錢單漏報事故)。
 TARGETS = [("breakout_v7", "data/live/breakout_v7", "live"),
            ("night_v7", "data/live/night_v7", "live"),
-           ("chips_exec", "data/paper/chips_exec", "paper"),
-           ("maxpain_exec", "data/paper/maxpain_exec", "paper"),   # 真 tick paper、多日持倉
+           ("chips_exec", "data/live/chips_exec", "live"),
+           ("maxpain_exec", "data/live/maxpain_exec", "live"),   # 多日持倉
            ("wave_exec", "data/paper/wave_exec", "paper")]   # chips×波浪fade 政策B、真 tick paper、日盤
 today = datetime.now().strftime("%Y-%m-%d")
 yday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -148,7 +149,7 @@ def fmt_status(st):
         return f"待進 {st.get('trade_date','')} {side} combo{st.get('combo',0):+.2f}"
     return json.dumps(st, ensure_ascii=False)[:60]
 
-lines = [f"📋 [覆盤] {today} 早 — live x2(day_v7/night_v7) + chips_exec paper(真tick) + CSV(chips/maxpain/settlement_v2)"]
+lines = [f"📋 [覆盤] {today} 早 — live x4(day_v7/night_v7/chips/maxpain) + wave paper + CSV(chips/maxpain/settlement_v2)"]
 for name, base, mode in TARGETS:
     trades = load(base)
     if not trades:

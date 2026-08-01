@@ -75,40 +75,127 @@ def _finmind(params):
         return json.loads(r.read().decode("utf-8"))
 
 
-def fetch_opt_oi(date_iso):
-    """TAIFEX 官網 optDailyMarketReport 單日 TXO 各履約 OI。回 [(expiry_yyyymmdd, strike, cp, oi)]。
-    **格式自動偵測**(TAIFEX 2026 改版):
-    - 16 cell(2026+):c[2]=契約到期日YYYYMMDD c[3]=履約 c[4]=Call/Put c[13]=未沖銷OI。到期=c[2]。
-    - 15 cell(≤2025):c[1]=代碼 c[2]=履約 c[3]=Call/Put c[12]=未沖銷OI。到期=_ed_of(c[1])(無到期日欄)。
-    兩者統一回 expiry=YYYYMMDD 字串,供 max_pain 用日期配對。"""
-    body = urllib.parse.urlencode({"queryType": "2", "marketCode": "1", "commodity_id": "TXO",
-                                   "queryDate": date_iso.replace("-", "/"), "MarketCode": "1",
-                                   "commodity_idt": "TXO", "button": "送出查詢"}).encode()
-    req = urllib.request.Request(TAIFEX_OPT, data=body, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        t = r.read().decode("utf-8", "replace")
-    out = []
-    for row in re.findall(r"<tr[^>]*>(.*?)</tr>", t, re.S):
-        c = [re.sub(r"<[^>]+>", "", x).strip() for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S)]
-        if not c or c[0] != "TXO":
-            continue
-        if len(c) >= 16:                                  # 新格式
-            exp, si, cpi, oii = c[2], 3, 4, 13
-        elif len(c) == 15:                                # 老格式
-            ed = _ed_of(c[1])
-            if ed is None:                                # F#/不可解 → 丟
-                continue
-            exp, si, cpi, oii = ed.strftime("%Y%m%d"), 2, 3, 12
-        else:
-            continue
+TAIFEX_OAPI = "https://openapi.taifex.com.tw/v1/DailyMarketReportOpt"   # 官方 OpenAPI(僅最新交易日)
+TAIFEX_FUT_PAGE = "https://www.taifex.com.tw/cht/3/futDailyMarketReport"
+
+
+def fetch_opt_oi_web(date_iso, retries=3, wait_s=45):
+    """T+0 官網行情頁:當日一般時段含未沖銷量下午 ~15:00 就有(OpenAPI 批次要傍晚)。
+    2026-07-07 確診 5 月改版真相:4 個量/OI 欄被改成**大寫 <TD>**,舊小寫 regex 靜默跳過
+    → 欄位左移、c[13] 吃到最佳賣價(非「欄位消失」)。本實作三道防線,任一不過回 []
+    (fail-closed,交給 OpenAPI/FinMind):
+      ①re.I 全大小寫解析 ②具名表頭定位「未沖銷契約量」欄(不用裸欄位序)
+      ③語義檢查:列數≥300 + OI 總和>50k(價格欄冒充 OI 時總和遠小)。"""
+    body = urllib.parse.urlencode({"queryType": "2", "marketCode": "0", "commodity_id": "TXO",
+                                   "queryDate": date_iso.replace("-", "/"),
+                                   "MarketCode": "0", "commodity_idt": "TXO"}).encode()
+    for attempt in range(retries):
         try:
-            strike = int(c[si])
-            oi = float(c[oii].replace(",", ""))
-        except (ValueError, IndexError):
-            continue
-        if oi <= 0:
-            continue
-        out.append((exp, strike, c[cpi], oi))
+            req = urllib.request.Request(TAIFEX_OPT, data=body, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                t = r.read().decode("utf-8", "replace")
+            if date_iso.replace("-", "/") not in t:
+                raise ValueError("頁面日期不符(資料未出?)")
+            hdr, oi_idx, out = None, None, []
+            for m in re.finditer(r"<tr[^>]*>(.*?)</tr>", t, re.S | re.I):
+                c = [re.sub(r"<[^>]+>", "", x).strip().replace(",", "")
+                     for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", m.group(1), re.S | re.I)]
+                if not c:
+                    continue
+                if oi_idx is None and any("未沖銷" in x for x in c):
+                    hdr = [re.sub(r"[\s*]", "", x) for x in c]
+                    oi_idx = next(i for i, x in enumerate(hdr) if "未沖銷" in x)
+                    continue
+                if oi_idx is None or c[0] != "TXO" or len(c) != len(hdr):
+                    continue
+                ed = _ed_of(c[1].strip())
+                if ed is None:                       # F#(週五契約)等非標的 → 丟
+                    continue
+                if c[4] not in ("Call", "Put"):
+                    continue
+                try:
+                    strike = int(float(c[3]))
+                    oi = float(c[oi_idx] or 0)
+                except (ValueError, TypeError):
+                    continue
+                if oi <= 0:
+                    continue
+                out.append((ed.strftime("%Y%m%d"), strike, c[4], oi))
+            if len(out) >= 300 and sum(r[3] for r in out) > 50000:
+                print(f"  [fetch_opt_oi] {date_iso} 用官網T+0頁 {len(out)} 列")
+                return out
+            raise ValueError(f"語義檢查不過 rows={len(out)}")
+        except Exception as e:
+            print(f"  [fetch_opt_oi] 官網T+0 try{attempt + 1}/{retries}: {e}")
+            if attempt + 1 < retries:
+                time.sleep(wait_s)
+    return []
+
+
+def fetch_opt_oi(date_iso):
+    """單日 TXO 各履約 OI。回 [(expiry_yyyymmdd, strike, cp, oi)]、cp∈{Call,Put}。
+
+    🚨 2026-07-07 重寫:原 HTML 解析(optDailyMarketReport c[13])在 TAIFEX ~2026-05底改版後
+    讀到「最後最佳賣價」而非未沖銷量 → 之後訊號全用壞權重(07-02 假訊號 46,900、真 OI 46,500
+    dist<0 本不該進場、07-07 -2% 停損 = 幽靈單)。裁判 = OpenAPI OpenInterest == FinMind position。改為:
+      1) TAIFEX OpenAPI DailyMarketReportOpt(一手 JSON、欄位具名、僅最新交易日、一般時段)
+      2) FinMind TaiwanOptionDaily position 場(歷日備援;已驗證 == 官方 OI)
+    兩者皆無 → 回 [](max_pain 回 None → 空手,fail-closed)。HTML 路徑廢除、勿復活。
+    到期配對:代碼(YYYYMM/YYYYMMW#)→ _ed_of 名目週三;F#(週五契約)非本策略標的、丟。"""
+    want = date_iso.replace("-", "")
+    out = []
+    try:                                                  # 1) OpenAPI(查詢日==最新資料日才命中)
+        req = urllib.request.Request(TAIFEX_OAPI, headers={"User-Agent": "Mozilla/5.0",
+                                                           "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        for r_ in data:
+            if (r_.get("Date") != want or r_.get("Contract") != "TXO"
+                    or r_.get("TradingSession") != "一般"):
+                continue
+            ed = _ed_of(str(r_.get("ContractMonth(Week)", "")).strip())
+            if ed is None:
+                continue
+            try:
+                strike = int(float(r_.get("StrikePrice")))
+                oi = float(str(r_.get("OpenInterest", "0")).replace(",", ""))
+            except (ValueError, TypeError):
+                continue
+            if oi <= 0:
+                continue
+            out.append((ed.strftime("%Y%m%d"), strike,
+                        "Call" if r_.get("CallPut") == "買權" else "Put", oi))
+    except Exception as e:
+        print(f"  [fetch_opt_oi] OpenAPI 失敗({e}),改 FinMind")
+    if out:
+        print(f"  [fetch_opt_oi] {date_iso} 用 OpenAPI {len(out)} 列")
+        return out
+    # 1.5) T+0 官網下午頁(僅當日:下午 15:0x OpenAPI 還是前一日;歷史回補仍走 FinMind 驗證過的路)
+    if date_iso == date.today().isoformat():
+        out = fetch_opt_oi_web(date_iso)
+        if out:
+            return out
+    try:                                                  # 2) FinMind 備援(歷日)
+        j = _finmind({"dataset": "TaiwanOptionDaily", "data_id": "TXO",
+                      "start_date": date_iso, "end_date": date_iso})
+        for r_ in (j.get("data") or []):
+            if r_.get("trading_session") != "position":
+                continue
+            ed = _ed_of(str(r_.get("contract_date", "")).strip())
+            if ed is None:
+                continue
+            try:
+                strike = int(float(r_.get("strike_price")))
+                oi = float(r_.get("open_interest") or 0)
+            except (ValueError, TypeError):
+                continue
+            if oi <= 0:
+                continue
+            out.append((ed.strftime("%Y%m%d"), strike,
+                        "Call" if str(r_.get("call_put", "")).lower().startswith("c") else "Put", oi))
+    except Exception as e:
+        print(f"  [fetch_opt_oi] FinMind 也失敗({e}) → 回空(fail-closed 空手)")
+    print(f"  [fetch_opt_oi] {date_iso} 用 FinMind {len(out)} 列")
     return out
 
 
@@ -133,7 +220,65 @@ def fetch_tx_ohlc(start, end):
         d = r["date"]
         if d not in out or vol > out[d]["vol"]:           # 同日取最大量(近月)
             out[d] = {"open": o, "high": h, "low": l, "close": c, "vol": vol}
-    return {d: {k: v[k] for k in ("open", "high", "low", "close")} for d, v in out.items()}
+    res = {d: {k: v[k] for k in ("open", "high", "low", "close")} for d, v in out.items()}
+    # T+0:FinMind 期貨日線傍晚才更新;下午跑時當日缺列 → 補官網行情頁(2026-07-07 T+0 路徑)
+    today_iso = date.today().isoformat()
+    if start <= today_iso <= end and today_iso not in res:
+        bar = _fetch_tx_ohlc_web(today_iso)
+        if bar:
+            res[today_iso] = bar
+    return res
+
+
+def _fetch_tx_ohlc_web(date_iso):
+    """官網 futDailyMarketReport 當日 TX 日盤 OHLC(T+0)。近月=一般時段量最大的純月份契約。
+    具名表頭定位 + re.I(防大寫 <TD>,同選擇權頁 5 月改版模式);任何不符回 None(fail-closed)。"""
+    body = urllib.parse.urlencode({"queryType": "2", "marketCode": "0", "commodity_id": "TX",
+                                   "queryDate": date_iso.replace("-", "/"),
+                                   "MarketCode": "0", "commodity_idt": "TX"}).encode()
+    try:
+        req = urllib.request.Request(TAIFEX_FUT_PAGE, data=body, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            t = r.read().decode("utf-8", "replace")
+        if date_iso.replace("-", "/") not in t:
+            return None
+        hdr, idx, best = None, {}, None
+        for m in re.finditer(r"<tr[^>]*>(.*?)</tr>", t, re.S | re.I):
+            c = [re.sub(r"<[^>]+>", "", x).strip().replace(",", "")
+                 for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", m.group(1), re.S | re.I)]
+            if not c:
+                continue
+            if hdr is None and any("開盤" in x for x in c):
+                hdr = [re.sub(r"[\s*]", "", x) for x in c]
+                for name, key in (("開盤價", "o"), ("最高價", "h"), ("最低價", "l"),
+                                  ("最後成交價", "c"), ("一般交易時段成交量", "v")):
+                    for i, x in enumerate(hdr):
+                        if name in x:
+                            idx[key] = i
+                            break
+                if len(idx) < 5:
+                    return None                       # 表頭再改版 → fail-closed
+                continue
+            if hdr is None or c[0] != "TX" or len(c) != len(hdr):
+                continue
+            if not re.fullmatch(r"\d{6}", c[1].strip()):   # 排除價差/週契約,只留純月份
+                continue
+            try:
+                o, h, l, cl = (float(c[idx["o"]]), float(c[idx["h"]]),
+                               float(c[idx["l"]]), float(c[idx["c"]]))
+                v = float(c[idx["v"]] or 0)
+            except (ValueError, TypeError):
+                continue
+            if o <= 0 or h <= 0:
+                continue
+            if best is None or v > best[0]:
+                best = (v, {"open": o, "high": h, "low": l, "close": cl})
+        if best:
+            print(f"  [tx_ohlc] {date_iso} 用官網T+0頁 close={best[1]['close']:.0f}")
+            return best[1]
+    except Exception as e:
+        print(f"  [tx_ohlc] 官網T+0失敗: {e}")
+    return None
 
 
 def max_pain(oi_rows, target_ed):
@@ -390,6 +535,59 @@ def main():
         _oi_rows = fetch_opt_oi(last_td.isoformat())
         _mp_today = max_pain(_oi_rows, ed_ref)
         _c_today = ohlc.get(last_td.isoformat(), {}).get("close")
+        # ── T+0 覆核(2026-07-07):下午跑用官網頁、傍晚跑用 OpenAPI/FinMind。同一 as_of/ed 兩次
+        #    重算 mp 不一致 = 資料源分歧 → TG 告警人工核對(進出場仍照訊號日凍結規則,不自動改)。
+        _old_rc = status.get("today_recalc") or {}
+        if (_mp_today and _old_rc.get("maxpain") and _old_rc.get("as_of") == last_td.isoformat()
+                and _old_rc.get("ed") == ed_ref.isoformat() and _old_rc["maxpain"] != _mp_today):
+            _msg = (f"⚠️ [maxpain] T+0覆核不一致 {last_td}: 前次(下午官網) mp={_old_rc['maxpain']} vs "
+                    f"本次重算 mp={_mp_today}(OpenAPI/FinMind)。差={_mp_today - _old_rc['maxpain']:+d},請人工核對。")
+            print(_msg)
+            try:
+                import sys as _sys
+                _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+                from core.notify import tg
+                tg(_msg)
+            except Exception as _te:
+                print(f"(覆核告警推送失敗: {_te})")
+        # ── 雙源獨立覆核(2026-07-07 加):OpenAPI 批次實測 20:18+ 才更新 → 15:10 與 18:40 兩場
+        #    通常都 fallback 到官網 T+0 頁=同源自比無效。這裡明確抓 FinMind(與官網完全獨立)
+        #    同日重算一次;抓得到才比、比不過推 TG(FinMind vs TAIFEX 有已知源分歧,訊息供人工判讀)。
+        try:
+            _j = _finmind({"dataset": "TaiwanOptionDaily", "data_id": "TXO",
+                           "start_date": last_td.isoformat(), "end_date": last_td.isoformat()})
+            _fm = []
+            for _r in (_j.get("data") or []):
+                if _r.get("trading_session") != "position":
+                    continue
+                _e2 = _ed_of(str(_r.get("contract_date", "")).strip())
+                if _e2 is None:
+                    continue
+                try:
+                    _oi2 = float(_r.get("open_interest") or 0)
+                    if _oi2 > 0:
+                        _fm.append((_e2.strftime("%Y%m%d"), int(float(_r["strike_price"])),
+                                    "Call" if str(_r.get("call_put", "")).lower().startswith("c") else "Put", _oi2))
+                except (ValueError, TypeError):
+                    continue
+            _mp_fm = max_pain(_fm, ed_ref) if _fm else None
+            if _mp_fm is None:
+                print("  雙源覆核: FinMind 尚無今日資料(略過,明日自然補比)")
+            elif _mp_today and _mp_fm != _mp_today:
+                _m2 = (f"⚠️ [maxpain] 雙源覆核不一致 {last_td}: 主鏈 mp={_mp_today} vs FinMind mp={_mp_fm}"
+                       f"(差 {_mp_fm - _mp_today:+d})。可能=已知源分歧,也可能=官網解析又出事,請人工核對。")
+                print(_m2)
+                try:
+                    import sys as _sy
+                    _sy.path.insert(0, str(Path(__file__).resolve().parent.parent))
+                    from core.notify import tg
+                    tg(_m2)
+                except Exception as _t2:
+                    print(f"(雙源覆核告警推送失敗: {_t2})")
+            else:
+                print(f"  雙源覆核 OK: FinMind mp={_mp_fm} == 主鏈 {_mp_today}")
+        except Exception as _fe:
+            print(f"  雙源覆核失敗(略過): {_fe}")
         if _mp_today and _c_today:
             status["today_recalc"] = {"as_of": last_td.isoformat(), "ed": ed_ref.isoformat(),
                                       "maxpain": _mp_today, "close": _c_today,

@@ -19,3 +19,5 @@
 2026-10-09
 2026-10-26
 2026-12-25
+# typhoon closure (unscheduled, not national holiday)
+2026-07-10

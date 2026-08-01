@@ -45,7 +45,8 @@ def load_tape():
     if not TAPE.exists():
         return []
     with open(TAPE, encoding="utf-8") as f:
-        return list(csv.DictReader(f))
+        # 濾歷史「重複 header 列」汙染(trade_date 欄值= 'trade_date' 的假列);save_tape 重寫即自癒
+        return [r for r in csv.DictReader(f) if r.get("trade_date") != "trade_date"]
 
 
 def save_tape(rows):
