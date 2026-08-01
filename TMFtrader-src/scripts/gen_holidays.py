@@ -16,14 +16,19 @@
    主專案用法:跑本程式後取「平日休市」清單去補 scripts/market_holidays.txt 的缺漏。
    TING 側 data/market_holidays.txt 才是全表語義(含週末)。
 """
-import io
 import sys
 import datetime as dt
 import urllib.request
 from pathlib import Path
 
-# Windows cp950 stdout 遇中文/emoji 會 UnicodeEncodeError(本專案鐵律雷;Linux 無感)
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+# Windows cp950 遇中文/emoji 會 UnicodeEncodeError(本專案鐵律雷;Linux 無感)。
+# ⚠️ stdout+stderr 都要包(2026-08-01 TING 方二次修正):sys.exit(訊息)走 stderr,
+#    只包 stdout 時「年份驗證 ❌ 拒絕」= 本工具最重要的輸出,仍會在最後一刻亂碼/崩潰。
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 URL = "https://www.twse.com.tw/rwd/zh/holidaySchedule/holidaySchedule?response=csv&queryYear={}"
 TAIFEX_PDF = "https://www.taifex.com.tw/file/taifex/CHINESE/4/{}Calendar.pdf"
