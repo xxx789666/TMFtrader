@@ -63,9 +63,20 @@ MAX_STRIKE_FALLBACK = 2         # 目標檔無報價 → 往低一檔改掛(交�
 #   歷史教訓(2026-07-03 首日):追 ask 在跳空日付了 466/600 點(預算 70)→ 廢除追價,改純限價等成交。
 #   paper 模式(預設)行為不變=只 snapshot 記錄。
 PUT_LIVE = os.environ.get("MAXPAIN_PUT_LIVE", "0").strip() == "1"
+# 手動暫停真錢下單至指定日(含當日;paper 鏡像照記):skip 檔內容=ISO 日期,過期自動失效。
+# 2026-07-31 user 指示:本輪(訊號7/29,結算8/5)live 停掛 put → 檔案寫 2026-08-05,8/6 起自動恢復。
+PUT_LIVE_SKIP = ROOT / "data" / "maxpain_v2" / "put_live_skip_until.txt"
+if PUT_LIVE and PUT_LIVE_SKIP.exists():
+    try:
+        if date.today() <= date.fromisoformat(PUT_LIVE_SKIP.read_text(encoding="utf-8").strip()):
+            PUT_LIVE = False
+    except (ValueError, OSError):
+        pass
 PUT_READY = ROOT / "data" / "maxpain_v2" / "put_ready.json"
-# 保費硬上限=限價價格(user 定案:保險控制在 NT$3,500/張 = 70 點)
-MAX_PREM = float(os.environ.get("MAXPAIN_PUT_MAX_PREM", 70))
+# 保費硬上限=限價價格。2026-07-07 user 定案 70→90 點(NT$4,500/張):
+# 160筆回測 -3% 深度,上限70 → 2026-03-05 崩盤週 put 開價 77 差 7 點買不到、最壞單筆 -4,701 沒保到;
+# 上限90 → 全期 PF 1.98≈put純版 2.00、最壞 -2,061。上限定位=防爛簿假價,非控保費預算。
+MAX_PREM = float(os.environ.get("MAXPAIN_PUT_MAX_PREM", 90))
 
 COLS = ["signal_t", "entry_t1", "E_fill", "K_put", "put_bid", "put_ask", "put_fill",
         "added", "E2", "K_put2", "put2_fill", "expiry_ed", "settle_S",
