@@ -76,9 +76,7 @@ check_live(){
   if kill -0 "$pid" 2>/dev/null; then wlog "$owner live OK (pid $pid)"; clear_alert "${owner}_live"
   else alert "${owner}_live" "🚨 live $owner 不在了（pid $pid 已歿）@ $(date '+%m/%d %H:%M')"; fi
 }
-# 2026-06-08 起 live 只 2 支:day_v7(=breakout_v7)+ night_v7（取代 night_v3;day_orb/aft_orb 已下架）
-check_live breakout_v7 813 820   # 08:15 cron 重啟（day_v7）
-check_live night_v7    1448 1455 # 14:50 cron 重啟（夜盤 30m 全夜盤）
+# 2026-08-02 user 拍板:breakout_v7 退役(槽位讓給魅影 requote live)、night_v7 除籍(6/22 暫停→移除)
 check_live chips_exec   815 830  # 08:20 cron 重啟(2026-07-22 補:7/16 轉 live 後漏掛)
 check_live maxpain_exec 815 830  # 08:21 cron 重啟(2026-07-03 轉 live 後漏掛)
 
