@@ -914,6 +914,7 @@ class TradingEngine:
                 quantity=quantity,
                 price_type="MKT",
                 instrument=instrument,
+                octype="New",   # 2026-08-02:手動開倉=新倉
             )
 
             if not result.success:
@@ -1605,6 +1606,7 @@ class TradingEngine:
             quantity=decision.quantity,
             price_type="MKT",
             instrument=instrument,
+            octype="New",       # 2026-08-02:進場一律新倉,與魅影對沖腿雙向共存(勿用 Auto 沖掉對方)
         )
 
         if not result.success:
@@ -1630,7 +1632,8 @@ class TradingEngine:
             logger.critical(f"[GHOST] [{instrument}] 開倉記錄失敗: {e} — 嘗試反向平倉")
             try:
                 reverse = "SELL" if action == "BUY" else "BUY"
-                self.broker.place_order(action=reverse, quantity=decision.quantity, price_type="MKT", instrument=instrument)
+                self.broker.place_order(action=reverse, quantity=decision.quantity, price_type="MKT",
+                                        instrument=instrument, octype="Cover")  # 沖回剛開的倉,只平自己方向
             except Exception as e2:
                 logger.critical(f"[GHOST] [{instrument}] 反向平倉也失敗: {e2} — 請手動處理！")
             return
@@ -1743,7 +1746,8 @@ class TradingEngine:
             fill_price = price
         else:
             result = self.broker.place_order(action=action, quantity=add_qty,
-                                             price_type="MKT", instrument=instrument)
+                                             price_type="MKT", instrument=instrument,
+                                             octype="New")   # 加倉=新倉(2026-08-02)
             if not result.success:
                 logger.error(f"[Scale] [{instrument}] 加倉下單失敗: {result.message}")
                 return
@@ -1902,7 +1906,8 @@ class TradingEngine:
             quantity=order_qty,
             price_type="MKT",
             instrument=instrument,
-        )
+            octype="Cover",     # 2026-08-02:出場一律平倉別(只平自己方向;帳上已平=拒單 fail-loud,
+        )                       # 不會像 Auto 反向開裸倉=6/12 型事故根治)
 
         if not result.success:
             # 出場連續失敗計數

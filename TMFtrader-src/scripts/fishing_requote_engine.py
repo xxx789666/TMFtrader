@@ -181,9 +181,11 @@ def send_hedge(api, side, opt_code, opt_px):
     t0 = time.perf_counter()
     for attempt in (1, 2):
         try:
+            # octype=New(2026-08-02):對沖腿=新倉,與 chips/maxpain 反向部位雙向共存(鎖倉);
+            # Auto 會「先平反向」→ 把別的引擎的倉沖掉、自己變裸選擇權(user 抓到的跨引擎沖銷雷)
             order = api.Order(price=0, quantity=1, action=action,
                               price_type=sjc.FuturesPriceType.MKT, order_type=sjc.OrderType.IOC,
-                              octype=sjc.FuturesOCType.Auto, account=api.futopt_account)
+                              octype=sjc.FuturesOCType.New, account=api.futopt_account)
             trade = api.place_order(HEDGE_C, order)
             seq = trade.order.seqno
         except Exception as e:

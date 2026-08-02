@@ -747,8 +747,15 @@ class ShioajiBroker(BaseBroker):
         logger.info(f"[KbarPoller] REST fallback 啟動（{interval}s 輪詢）")
 
     def place_order(self, action: str, quantity: int, price: float = 0,
-                    price_type: str = "MKT", instrument: str = "") -> OrderResult:
-        """下單（指定商品），等待成交回報確認"""
+                    price_type: str = "MKT", instrument: str = "",
+                    octype: str = "Auto") -> OrderResult:
+        """下單（指定商品），等待成交回報確認。
+
+        octype(2026-08-02 A案補):"New"=新倉/"Cover"=平倉/"Auto"=自動(預設,向後相容)。
+        背景:魅影 requote 的 MXF 對沖腿與 chips/maxpain 反向共存於同帳戶,Auto 會
+        「先平反向」→ chips 進場單把魅影對沖腿沖掉(魅影變裸選擇權)。改:引擎進場一律
+        New(雙向鎖倉共存,保證金收大邊)、出場一律 Cover(只平自己方向;帳上已平時
+        Cover 被拒=擋 6/12 型「出場單反向開裸倉」舊事故,fail-loud 優於錯方向)。"""
         contract = self._contracts.get(instrument, self._contract)
         if not self._api or not contract:
             return OrderResult(success=False, message=f"找不到合約: {instrument}")
@@ -771,7 +778,9 @@ class ShioajiBroker(BaseBroker):
                     quantity=quantity,
                     price_type=sj.constant.FuturesPriceType.MKT if price_type == "MKT" else sj.constant.FuturesPriceType.LMT,
                     order_type=sj.constant.OrderType.IOC,
-                    octype=sj.constant.FuturesOCType.Auto,
+                    octype={"New": sj.constant.FuturesOCType.New,
+                            "Cover": sj.constant.FuturesOCType.Cover}.get(
+                                octype, sj.constant.FuturesOCType.Auto),
                     account=self._api.futopt_account,
                 )
 
@@ -1094,7 +1103,8 @@ class MockBroker(BaseBroker):
         logger.info(f"[MockBroker] tick generation started for {list(self._instruments.keys())}")
 
     def place_order(self, action: str, quantity: int, price: float = 0,
-                    price_type: str = "MKT", instrument: str = "") -> OrderResult:
+                    price_type: str = "MKT", instrument: str = "",
+                    octype: str = "Auto") -> OrderResult:
         with self._lock:
             self._order_counter += 1
             current_price = self._prices.get(instrument, self._price)

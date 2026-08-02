@@ -41,8 +41,22 @@ def main():
     eng.HEDGE_C = min(mxf, key=lambda c: str(c.delivery_month))
     fut = api.Contracts.Futures.TXF.TXFR1
     print(f"對沖合約={eng.HEDGE_C.code}", flush=True)
+    def cover(action):
+        """Cover 平自己方向(2026-08-02 New 語義配套):Buy=回補空腿/Sell=平多腿。"""
+        order = api.Order(price=0, quantity=1, action=action,
+                          price_type=sjc.FuturesPriceType.MKT, order_type=sjc.OrderType.IOC,
+                          octype=sjc.FuturesOCType.Cover, account=api.futopt_account)
+        tr = api.place_order(eng.HEDGE_C, order)
+        evt, box = threading.Event(), []
+        eng.deal_evt[tr.order.seqno] = (evt, box)
+        got = evt.wait(3.0)
+        eng.deal_evt.pop(tr.order.seqno, None)
+        px = box[0][1] if got and box else None
+        print(f"  cover {action} → {'@'+str(px) if px else '無回報!'}", flush=True)
+        return px is not None
+
     order_sides = ["P", "C"] if "--reverse" in sys.argv else ["C", "P"]   # --reverse=對照組:Buy先Sell後
-    print(f"順序={order_sides}", flush=True)
+    print(f"順序={order_sides}(octype=New,兩腿共存後 Cover 各自平)", flush=True)
     results = []
     try:
         for rep in range(1, REPS + 1):
@@ -52,7 +66,19 @@ def main():
             time.sleep(1.0)
             eng.F = float(api.snapshots([fut])[0].close)
             ok2 = eng.send_hedge(api, order_sides[1], f"TEST_rep{rep}", 0)
-            results.append((ok1, ok2))
+            # ── 雙向鎖倉驗證:New+New 兩腿應「共存」非互沖 ──
+            time.sleep(1.5)
+            pos = api.list_positions(api.futopt_account)
+            print(f"  共存驗證: {[(p.code, str(p.direction), p.quantity) for p in pos]}", flush=True)
+            both = len([p for p in pos if p.code.startswith("MXF")]) >= 2
+            print(f"  雙向留倉 {'✅ 成立' if both else '⚠️ 未成立(可能被淨額沖銷!)'}", flush=True)
+            # Cover 各自平掉(空腿 Buy 回補、多腿 Sell 平)
+            cover(sjc.Action.Buy)
+            time.sleep(0.5)
+            cover(sjc.Action.Sell)
+            # 清測試登記
+            eng._ext_reg(remove_opt=f"TEST_rep{rep}")
+            results.append((ok1, ok2, both))
             if eng.HEDGE_FAIL:
                 print("HEDGE_FAIL 觸發,中止", flush=True)
                 break

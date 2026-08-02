@@ -105,9 +105,10 @@ def main():
                 continue
             ok = False
             for attempt in (1, 2):
+                # octype=Cover(2026-08-02):只平自己方向的腿;chips/maxpain 的反向倉共存時不誤傷
                 order = api.Order(price=0, quantity=int(e["qty"]), action=action,
                                   price_type=sjc.FuturesPriceType.MKT, order_type=sjc.OrderType.IOC,
-                                  octype=sjc.FuturesOCType.Auto, account=api.futopt_account)
+                                  octype=sjc.FuturesOCType.Cover, account=api.futopt_account)
                 tr = api.place_order(mxf, order)
                 evt, box = threading.Event(), []
                 deal_evt[tr.order.seqno] = (evt, box)
