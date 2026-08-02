@@ -133,6 +133,28 @@ def wait_ack(seqno, timeout=1.5):
 
 LIVE_ORDER_STATES = ("PendingSubmit", "PreSubmitted", "Submitted", "PartFilled")
 
+# ── 外部部位登記簿(2026-08-02 A案):對沖成交→登記,結算平腿器移除;
+#    core 引擎(chips/maxpain)對帳前扣除登記倉,防「魅影對沖腿被判手動倉→halt」誤傷。
+EXT_POS_FILE = ROOT / "data" / "external_positions.json"
+
+
+def _ext_reg(entry=None, remove_opt=None):
+    """讀改寫登記簿(key=fishing_requote)。entry=新增;remove_opt=按 opt_code 移除。失敗只 log 不擋交易。"""
+    try:
+        d = {}
+        if EXT_POS_FILE.exists():
+            d = json.loads(EXT_POS_FILE.read_text(encoding="utf-8"))
+        lst = d.get("fishing_requote", [])
+        if entry:
+            lst.append(entry)
+        if remove_opt:
+            lst = [e for e in lst if e.get("opt_code") != remove_opt]
+        d["fishing_requote"] = lst
+        EXT_POS_FILE.write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
+        log(f"外部倉登記簿更新:{'+' + entry['opt_code'] if entry else '-' + str(remove_opt)}(現 {len(lst)} 筆)")
+    except Exception as e:
+        log(f"⚠️ 登記簿寫入失敗:{e} — chips/maxpain 可能誤判手動倉而 halt,無資金風險但要人工補寫")
+
 
 def verify_no_residual(api, trades):
     """退場後查委託「地面實況」(2026-08-01,TING 部署方貢獻)。
@@ -196,6 +218,10 @@ def send_hedge(api, side, opt_code, opt_px):
             metric("hedge", side, ms, f"px={px} F0={f0:.0f} slip={slip:+.1f} try{attempt}")
             log(f"[{side}] ✅ 對沖成交 MXF {action}@{px} {ms:.0f}ms slip{slip:+.1f}點 (opt {opt_code}@{opt_px})")
             tg(f"✅ **對沖成交** MXF @{px}({ms:.0f}ms, slip {slip:+.1f}點)\n{opt_code}@{opt_px} 組合對鎖成立")
+            _ext_reg(entry=dict(code=HEDGE_C.code, direction=("Sell" if side == "C" else "Buy"),
+                                qty=1, opt_code=opt_code, K=legs[side]["K"], cp=side,
+                                expiry=str(legs[side].get("dd", "")), hedge_px=px,
+                                ts=f"{tst_now():%F %T}"))
             return True
         metric("hedge_retry" if attempt == 1 else "hedge_fail", side, None, f"try{attempt} 2s無成交回報")
         log(f"[{side}] ⚠️ 對沖第 {attempt} 次 2s 內無成交回報")

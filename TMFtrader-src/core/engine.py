@@ -38,6 +38,28 @@ from core.notify import notify_entry, notify_exit, notify_exit_failed, tg
 from core import position_lock
 from core import decision_recorder
 from core.instrument_config import INSTRUMENT_SPECS, get_spec, InstrumentSpec
+
+# ── 外部引擎部位登記簿(2026-08-02 A案):魅影 requote live 的 MXF 對沖腿掛同一帳戶,
+#    core 引擎的孤兒/對帳判定會誤判為手動倉而 halt(每個魅影過夜魚=chips/maxpain 白停一天)。
+#    requote 成交對沖後寫入本檔、結算平腿器(fishing_settle_close)移除;core 判定前先扣除。
+#    fail-safe:檔缺/壞=回 0 → 寧可誤 halt 不可漏 halt(孤兒防護對真手動倉照常有效)。
+EXTERNAL_POS_FILE = Path(__file__).resolve().parent.parent / "data" / "external_positions.json"
+
+
+def _external_registered_qty(code: str, direction: str) -> int:
+    """回傳外部引擎登記在案、與(合約碼,方向)相符的口數合計。direction 用子字串比對
+    (rp['direction'] 可能是 'Buy'/'Action.Buy' 等形式)。"""
+    try:
+        import json as _json
+        d = _json.loads(EXTERNAL_POS_FILE.read_text(encoding="utf-8"))
+        n = 0
+        for entries in d.values():
+            for e in entries or []:
+                if e.get("code") == code and e.get("direction") and e["direction"] in str(direction):
+                    n += int(e.get("qty", 0) or 0)
+        return n
+    except Exception:
+        return 0
 from strategy.base import BaseStrategy, Signal, SignalDirection
 from strategy.momentum import AdaptiveMomentumStrategy
 from strategy.gold_trend import GoldTrendStrategy
@@ -688,6 +710,13 @@ class TradingEngine:
                         _foreign = self._foreign_position_holder(inst)
                         if _foreign:
                             logger.info(f"[Sync] {inst} 真實持倉屬其他策略(owner={_foreign})、跳過不領養")
+                            continue
+
+                        # 2026-08-02 A案:外部登記倉(魅影對沖腿)全額覆蓋此列 → 非孤兒,跳過不 halt
+                        _ext = _external_registered_qty(rp['code'], rp['direction'])
+                        if _ext >= rp['quantity']:
+                            logger.info(f"[Sync] {inst} 帳上倉 {rp['code']} {rp['direction']}"
+                                        f" x{rp['quantity']} 屬外部登記引擎(魅影對沖腿) → 跳過不領養不 halt")
                             continue
 
                         # 2026-07-23 user 定版:無主孤兒倉 = user 本人手動建倉,一律不領養。
@@ -2066,7 +2095,15 @@ class TradingEngine:
                 real_side = None
                 for rp in real_positions:
                     if rp['code'].startswith(contract_code) and rp['quantity'] > 0:
-                        real_qty = rp['quantity']
+                        # 2026-08-02 A案:先扣外部登記倉(魅影對沖腿),殘餘才進背離判定
+                        _ext = _external_registered_qty(rp['code'], rp['direction'])
+                        _eff = rp['quantity'] - _ext
+                        if _ext > 0:
+                            logger.info(f"[RECONCILE] {inst} 扣除外部登記倉 {rp['code']}"
+                                        f" {rp['direction']} x{_ext}(魅影對沖腿) → 殘餘 {max(_eff,0)}")
+                        if _eff <= 0:
+                            continue
+                        real_qty = _eff
                         real_side = "long" if "Buy" in rp['direction'] else "short"
 
                 engine_qty = engine_pos.quantity if engine_pos and not engine_pos.is_flat else 0
