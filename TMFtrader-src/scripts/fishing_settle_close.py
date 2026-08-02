@@ -130,6 +130,15 @@ def main():
                 reg["fishing_requote"] = [x for x in reg.get("fishing_requote", [])
                                           if x.get("opt_code") != e["opt_code"]]
                 save_registry(reg)
+                # B案(2026-08-02):全部組合平完 → 還互斥鎖(chips/maxpain 恢復進場資格)
+                if not reg["fishing_requote"]:
+                    try:
+                        sys.path.insert(0, str(ROOT))
+                        from core import position_lock as plock
+                        plock.release("fishing_requote", mode="live")
+                        log("🔓 互斥鎖已釋放")
+                    except Exception as le:
+                        log(f"⚠️ 釋放鎖失敗:{le}(stale 120h 會自動清)")
             else:
                 tg(f"🆘 **結算平腿失敗={code} 裸倉!** {e['opt_code']} 的對沖腿({e['direction']} x{e['qty']})"
                    f"未能回補 — **立即人工市價平倉!**(登記簿保留,人工平完後手動移除該筆)")

@@ -133,8 +133,18 @@ def wait_ack(seqno, timeout=1.5):
 
 LIVE_ORDER_STATES = ("PendingSubmit", "PreSubmitted", "Submitted", "PartFilled")
 
-# ── 外部部位登記簿(2026-08-02 A案):對沖成交→登記,結算平腿器移除;
-#    core 引擎(chips/maxpain)對帳前扣除登記倉,防「魅影對沖腿被判手動倉→halt」誤傷。
+# ── B案互斥(2026-08-02 user 拍板):台灣期交所同帳戶同契約同月份強制淨額(多空不可並存,
+#    Auto/New 皆會互沖) → 魅影加入 position_lock 互斥池:
+#    對方(chips/maxpain)持鎖 → 撤餌暫停;魅影成交 → 取鎖(stale_hours=120 涵蓋颱風順延);
+#    結算平腿完成 → 還鎖。core 端跨策略配套(不領養/reconcile 認鎖/進場擋)全現成。
+sys.path.insert(0, str(ROOT))
+from core import position_lock as plock          # noqa: E402
+LOCK_OWNER = "fishing_requote"
+LOCK_STALE_H = 120.0
+LOCK_PAUSED = {"v": False}   # 對方持鎖=撤餌暫停(shadow 同樣生效,8/4 驗行為)
+
+# ── 外部部位登記簿(2026-08-02 A案遺產,B案下降級為文件化+競態保險,照寫無害):
+#    對沖成交→登記,結算平腿器移除;core 引擎對帳前扣除登記倉。
 EXT_POS_FILE = ROOT / "data" / "external_positions.json"
 
 
@@ -301,6 +311,8 @@ def cancel_all(api, why):
 
 def requote(api, side):
     leg = legs[side]
+    if LOCK_PAUSED["v"]:                          # B案互斥:對方策略持倉中,不掛餌(2026-08-02)
+        return
     if leg["filled"] or time.time() < frozen_until:
         return
     if time.time() < leg.get("hold_until", 0):    # 拒單退避中(2026-07-31)
@@ -365,6 +377,21 @@ def main():
                         log(f"🚨 [{side}] 成交!{code} @{msg.get('price')}")
                         if LIVE:
                             tg(f"🎣 **重掛引擎成交** {code} @{msg.get('price')} → 送對沖(市價)")
+                            # B案(2026-08-02):成交即取互斥鎖(chips/maxpain 進場自此被擋)。
+                            # 競態守衛:check→fill 秒級窗內鎖被他策略搶走 → 不覆寫他人的鎖,
+                            # 照樣對沖(裸奔更糟)+🚨 告警人工對帳。
+                            try:
+                                if plock.is_blocked(LOCK_OWNER, mode="live") is None:
+                                    plock.acquire(LOCK_OWNER, side=("sell" if side == "C" else "buy"),
+                                                  entry_price=float(msg.get("price") or 0),
+                                                  instrument="MXF", quantity=1, mode="live",
+                                                  stale_hours=LOCK_STALE_H)
+                                    log(f"🔒 已取互斥鎖(stale={LOCK_STALE_H:.0f}h)")
+                                else:
+                                    tg("🚨 **鎖競態**:魅影已成交但互斥鎖被他策略持有 — 照常對沖,"
+                                       "但同契約反向部位會被期交所淨額互沖,**立即人工對帳!**")
+                            except Exception as _le:
+                                log(f"⚠️ 取鎖失敗:{_le}")
                             # 2026-07-31 對沖分支實作:另線程跑(callback 不阻塞行情/回報流),
                             # place_order 本體 ~50ms,等成交回報最長 2s×2 次在線程內進行。
                             threading.Thread(target=send_hedge,
@@ -466,6 +493,7 @@ def main():
     signal.signal(signal.SIGINT, on_term)
 
     last_flush = last_beat = last_struct = last_repick = time.time()
+    last_lockchk = 0.0
     try:
         while not stop["flag"]:
             time.sleep(0.05)                         # v3:主迴圈快轉,靠 tick 標記驅動、非固定改價
@@ -474,6 +502,25 @@ def main():
                 log("停止檔 → 收工"); break
             if HEDGE_FAIL:
                 log("🆘 對沖失敗 → 撤光掛單停機(裸部位需人工處理)"); break
+            # ── B案互斥檢查(每 2s):對方持鎖 → 撤餌暫停;釋放 → 恢復 ──
+            if time.time() - last_lockchk >= 2.0:
+                last_lockchk = time.time()
+                try:
+                    _blk = plock.is_blocked(LOCK_OWNER, mode="live")
+                except Exception:
+                    _blk = None
+                if _blk and not LOCK_PAUSED["v"]:
+                    LOCK_PAUSED["v"] = True
+                    try:
+                        cancel_all(api, "mutex_blocked")
+                    except Exception as _ce:
+                        log(f"互斥撤餌異常:{_ce}")
+                    log(f"⛔ 互斥:{_blk.get('owner')} 持倉中 → 撤餌暫停")
+                    tg(f"⛔ 互斥暫停:{_blk.get('owner')} 持倉中 → 魅影撤餌;歸位自動恢復")
+                elif not _blk and LOCK_PAUSED["v"]:
+                    LOCK_PAUSED["v"] = False
+                    log("✅ 互斥鎖已釋放 → 恢復掛餌")
+                    tg("✅ 互斥解除 → 魅影恢復掛餌")
             hm = (now.hour, now.minute)
             if (5, 5) <= hm and hm < (8, 40):
                 log("盤間空窗(05:05-08:40)→ 收工"); break
