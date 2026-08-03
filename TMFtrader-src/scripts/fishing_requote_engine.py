@@ -63,6 +63,9 @@ legs = {}          # side("C"/"P") -> dict(contract, trade, quoted_px, K, upd_ti
 ack_evt = {}       # seqno -> (Event, [t_ack])
 requote_req = {}   # side -> True(v3 事件驅動:on_tick 標記「掛價已偏離」,主迴圈消化;不在行情線程下單)
 deal_evt = {}      # seqno -> (Event, [(t, price)]) — 對沖單成交回報等待(2026-07-31 對沖分支實作)
+MY_SEQNOS = set()  # 本引擎本 session 送出的所有委託 seqno(2026-08-03 TING回送②:殘單判定
+                   # 與引擎 leg 記帳解耦 — 在「送出當下」記錄,撤單記帳錯了它也不會錯)
+NEED_UPDATE_STATUS = False  # shioaji 1.7.x 改價/撤單前需 update_status(login_compat 偵測後設定)
 HEDGE_C = None     # MXF 近月合約(main 登入後解析)
 HEDGE_FAIL = False # 對沖失敗旗標:True → 主迴圈撤光掛單停機(絕不邊裸抱邊釣)
 mlock = threading.Lock()
@@ -166,19 +169,61 @@ def _ext_reg(entry=None, remove_opt=None):
         log(f"⚠️ 登記簿寫入失敗:{e} — chips/maxpain 可能誤判手動倉而 halt,無資金風險但要人工補寫")
 
 
-def verify_no_residual(api, trades):
-    """退場後查委託「地面實況」(2026-08-01,TING 部署方貢獻)。
-    不用撤單 ack 碼推論 — 夜盤 05:00 收盤 ROD 已被交易所自動失效,引擎 05:05 收工時
-    cancel 會被拒,用 ack 判定會每晚誤報。查 update_status 才是實況。查不到=保守視為有殘留。"""
-    if not trades:
-        return True, "無掛單"
+def login_compat(api, key, sec):
+    """依 login() 實際簽名帶參數(2026-08-03 TING 回送④:1.7.x 移除 contracts_timeout/
+    fetch_contract,寫死會啟動瞬間 TypeError;舊版行為完全不變)。順帶偵測 1.7.x
+    → 設 NEED_UPDATE_STATUS(該版改價/撤單前必須 update_status;舊版不設=零額外延遲)。"""
+    global NEED_UPDATE_STATUS
+    import inspect
+    try:
+        params = inspect.signature(api.login).parameters
+    except Exception:
+        params = {}
+    kw = {}
+    if "contracts_timeout" in params:
+        kw["contracts_timeout"] = 30000
+    else:
+        NEED_UPDATE_STATUS = True
+    if "fetch_contract" in params:
+        kw["fetch_contract"] = True
+    return api.login(api_key=key, secret_key=sec, **kw)
+
+
+def wait_contracts(api, timeout=90):
+    """1.7.x 合約背景非同步載入,不等會掃到空表誤判「非獵魚夜」收工;舊版立即回 True。"""
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        try:
+            if any(c.code == "TXFR1" for c in api.Contracts.Futures.TXF) \
+               and sum(1 for _ in api.Contracts.Options) > 0:
+                return True
+        except Exception:
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def verify_no_residual(api, trades=None):
+    """退場後查「整個帳戶」委託實況(2026-08-03 TING 回送②;trades 參數僅保留相容不再使用)。
+    ①的直接教訓:安全網不能依賴引擎記帳 — 撤單記帳錯,只查自己記得的那幾張就跟著錯。
+    判準:本引擎(MY_SEQNOS=送出當下記錄)的活單→不乾淨;他引擎活單(共用帳戶,如 maxpain
+    put watcher 的 ROD)→只列示不判失敗。
+    ⑤反面結論(TING 實證):order_margin_premium 不可當殘單判準 — 選擇權買方未成交委託
+    該欄=0,拿它當第二訊號會壓下真警報。
+    註:日盤 13:45 收盤後委託簿 ~14:35 才清算完成,該窗內 list_trades 殘留顯示非誤報。
+    ack 碼也不可反推:夜盤 05:00 ROD 自動失效,05:05 cancel 被拒,用 ack 會每晚誤報。"""
     try:
         api.update_status(api.futopt_account)
+        alive = [t for t in api.list_trades()
+                 if str(getattr(t.status, "status", "")).split(".")[-1] in LIVE_ORDER_STATES]
     except Exception as e:
-        return False, f"update_status 失敗({str(e)[:40]}),無法確認"
-    live = [f"{t.order.seqno}={str(t.status.status).split('.')[-1]}"
-            for t in trades if str(t.status.status).split(".")[-1] in LIVE_ORDER_STATES]
-    return (not live), ("已確認無殘留" if not live else "殘留 " + ",".join(live))
+        return False, f"委託查詢失敗({str(e)[:40]}),無法確認"
+    mine = [t for t in alive if getattr(t.order, "seqno", "") in MY_SEQNOS]
+    others = len(alive) - len(mine)
+    if not mine:
+        return True, "已確認帳戶無本引擎未成交委託" + (f"(他引擎活單 {others} 張)" if others else "")
+    desc = ",".join(f"{t.contract.code}@{t.order.price}#{t.order.seqno}" for t in mine[:8])
+    return False, f"殘留本引擎 {len(mine)} 張:{desc}"
 
 
 def send_hedge(api, side, opt_code, opt_px):
@@ -198,6 +243,7 @@ def send_hedge(api, side, opt_code, opt_px):
                               octype=sjc.FuturesOCType.New, account=api.futopt_account)
             trade = api.place_order(HEDGE_C, order)
             seq = trade.order.seqno
+            MY_SEQNOS.add(seq)
         except Exception as e:
             metric("hedge_err", side, None, str(e)[:40])
             log(f"[{side}] 對沖下單異常(try{attempt}): {str(e)[:60]}")
@@ -253,6 +299,7 @@ def place_leg(api, side):
                       octype=sjc.FuturesOCType.New, account=api.futopt_account)
     t0 = time.perf_counter()
     trade = api.place_order(leg["contract"], order)
+    MY_SEQNOS.add(trade.order.seqno)              # 殘單判定與記帳解耦(TING②)
     ack = wait_ack(trade.order.seqno)
     ms = (((ack[0] if ack else None) or time.perf_counter()) - t0) * 1000
     if ack and ack[1] != "00":                    # 拒單:不算已掛 + 退避(2026-07-31:首晚壓測 12s 拒 732 次=無退避風暴)
@@ -272,42 +319,65 @@ def place_leg(api, side):
 
 def update_leg(api, side, px):
     leg = legs[side]
+    if NEED_UPDATE_STATUS:                        # TING④b:1.7.x 改價前必須 update_status(舊版跳過)
+        try:
+            api.update_status(api.futopt_account)
+        except Exception:
+            pass
     t0 = time.perf_counter()
     try:
         api.update_order(trade=leg["trade"], price=px)
         ack = wait_ack(leg["trade"].order.seqno)
         ms = (((ack[0] if ack else None) or time.perf_counter()) - t0) * 1000
-        if ack and ack[1] != "00":                # 改價被拒:狀態不明→撤+重掛
+        if ack and ack[1] != "00":                # 改價被拒:狀態不明→撤+重掛(撤沒確認就不掛,防疊單)
             metric("update_reject", side, ms, f"px={px} code={ack[1]}")
-            cancel_leg(api, side, "update_reject")
-            place_leg(api, side)
+            if cancel_leg(api, side, "update_reject"):
+                place_leg(api, side)
             return
         leg["quoted_px"] = px
         metric("update", side, ms, f"px={px}{'' if ack else '·ack逾時'}")
     except Exception as e:
         metric("update_fail", side, None, str(e)[:40])
-        log(f"[{side}] 改價失敗({str(e)[:40]}) → 撤+重掛")
-        cancel_leg(api, side)
-        place_leg(api, side)
+        log(f"[{side}] 改價失敗({str(e)[:40]}) → 撤+重掛(撤沒確認就不掛)")
+        if cancel_leg(api, side):
+            place_leg(api, side)
 
 def cancel_leg(api, side, why="requote"):
+    """撤該側掛單,回 True=已確認撤除(或本無單)。
+    2026-08-03 TING 回送①(最嚴重):原版無論成敗都清 trade=None → 引擎忘記自己有單 →
+    下輪 requote 重掛疊單(實錄:5 秒同檔疊 3 張×2 側=6 張、吃光買力 99Q9、退場 verify
+    被空記帳騙過寫「收工(無掛單)」而市場還有 6 張真單)。失敗=保留參照+計數,不清。"""
     leg = legs[side]
     if not leg.get("trade"):
-        return
+        return True
+    if NEED_UPDATE_STATUS:
+        try:
+            api.update_status(api.futopt_account)
+        except Exception:
+            pass
     t0 = time.perf_counter()
+    ok = False
     try:
         api.cancel_order(leg["trade"])
         ack = wait_ack(leg["trade"].order.seqno)
         ms = (((ack[0] if ack else None) or time.perf_counter()) - t0) * 1000
+        ok = bool(ack and ack[1] == "00")
         metric("cancel", side, ms, why + (f" code={ack[1]}" if ack and ack[1] != "00" else ""))
     except Exception as e:
         metric("cancel_fail", side, None, str(e)[:40])
         log(f"[{side}] 撤單失敗: {str(e)[:40]}")
-    leg["trade"] = None; leg["quoted_px"] = None
+    if ok:
+        leg["trade"] = None
+        leg["quoted_px"] = None
+        leg["cancel_fail_n"] = 0
+    else:
+        leg["cancel_fail_n"] = leg.get("cancel_fail_n", 0) + 1
+        log(f"[{side}] 撤單未確認,保留參照(第 {leg['cancel_fail_n']} 次)— 不重掛")
+    return ok
 
 def cancel_all(api, why):
-    for s in list(legs):
-        cancel_leg(api, s, why)
+    # TING 回送①配套:不可寫 all(genexpr) — 首腿失敗會短路,剩下的腿根本不會被撤
+    return all([cancel_leg(api, s, why) for s in list(legs)])
 
 def requote(api, side):
     leg = legs[side]
@@ -316,6 +386,9 @@ def requote(api, side):
     if leg["filled"] or time.time() < frozen_until:
         return
     if time.time() < leg.get("hold_until", 0):    # 拒單退避中(2026-07-31)
+        return
+    if leg.get("cancel_fail_n"):                  # 懸置撤單未解(TING①):先解,解掉前不報價不重掛
+        cancel_leg(api, side, "cancel_retry")
         return
     px = target_px(side, leg["K"])
     if px is None:
@@ -340,8 +413,15 @@ def requote(api, side):
 def main():
     global F, frozen_until
     api = sj.Shioaji(simulation=False)
-    api.login(api_key=os.environ["SHIOAJI_API_KEY"], secret_key=os.environ["SHIOAJI_SECRET_KEY"],
-              contracts_timeout=30000)
+    login_compat(api, os.environ["SHIOAJI_API_KEY"], os.environ["SHIOAJI_SECRET_KEY"])  # TING④a
+    if not wait_contracts(api):
+        log("⚠️ 合約載入逾時(90s) → 收工")
+        tg("⚠️ 重掛引擎:合約載入逾時,收工(查 shioaji 版本/連線)")
+        try:
+            api.logout()
+        except Exception:
+            pass
+        return
     api.activate_ca(ca_path=os.environ["SHIOAJI_CA_PATH"],
                     ca_passwd=os.environ["SHIOAJI_CA_PASSWORD"],
                     person_id=os.environ["SHIOAJI_PERSON_ID"])
@@ -444,10 +524,17 @@ def main():
     # 挑腿:最近週選,dte≤MAX_DTE 才張網;C=價內1.5-4%(K<F)、P=價內1.5-4%(K>F),取量最大檔
     def pick_legs():
         today = tst_now().date()   # 每次呼叫重算(跨夜 dte 不 stale;2026-07-31 隨週期重挑一併修)
+        # TING③:結算日 13:30 後,今日到期鏈整天仍在合約表 → 夜盤會挑到已結算腿狂掛
+        # (實測 7/31 18:01 不擋=43 條全是已結算 TXZ);主迴圈 13:25-14:50 守衛不涵蓋 15:00 後。
+        past_settle = tst_now().time() >= dt.time(13, 35)
         best = {}
         groups = {}
         for catname in ("TXO", "TX1", "TX2", "TX4", "TX5", "TXU", "TXV", "TXX", "TXY", "TXZ"):  # 2026-07-31 TXW死碼→TXZ第5週五(7/29 live實證)
-            cat = getattr(api.Contracts.Options, catname, None)
+            try:
+                # TING④c:1.7.x 對不存在的 category getattr 會拋 ShioajiValueError(shard),非回 None
+                cat = getattr(api.Contracts.Options, catname, None)
+            except Exception:
+                continue
             if cat is None:
                 continue
             for c in cat:
@@ -457,7 +544,7 @@ def main():
                 except Exception:
                     continue
                 dte = (ddate - today).days
-                if dte < 0 or dte > MAX_DTE:
+                if dte < 0 or dte > MAX_DTE or (past_settle and dte == 0):
                     continue
                 K = float(c.strike_price)
                 right = "C" if str(c.option_right).endswith("Call") else "P"
