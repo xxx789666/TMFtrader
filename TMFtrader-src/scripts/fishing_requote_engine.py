@@ -63,8 +63,24 @@ legs = {}          # side("C"/"P") -> dict(contract, trade, quoted_px, K, upd_ti
 ack_evt = {}       # seqno -> (Event, [t_ack])
 requote_req = {}   # side -> True(v3 事件驅動:on_tick 標記「掛價已偏離」,主迴圈消化;不在行情線程下單)
 deal_evt = {}      # seqno -> (Event, [(t, price)]) — 對沖單成交回報等待(2026-07-31 對沖分支實作)
-MY_SEQNOS = set()  # 本引擎本 session 送出的所有委託 seqno(2026-08-03 TING回送②:殘單判定
+MY_SEQNOS = set()  # 本引擎送出的所有委託 seqno(2026-08-03 TING回送②:殘單判定
                    # 與引擎 leg 記帳解耦 — 在「送出當下」記錄,撤單記帳錯了它也不會錯)
+# TING 回送⑧:MY_SEQNOS 是行程記憶=①的同型漏洞(重啟後舊單被歸「他引擎」→verify 誤判乾淨)
+# → 落地持久化:每次送單即寫檔,啟動載回;保留近 500 筆防無限增長。
+SEQ_FILE = ROOT / "data" / "opt" / "requote_my_seqnos.json"
+try:
+    MY_SEQNOS.update(json.loads(SEQ_FILE.read_text(encoding="utf-8")))
+except Exception:
+    pass
+
+
+def _seq_add(seq):
+    MY_SEQNOS.add(seq)
+    try:
+        SEQ_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SEQ_FILE.write_text(json.dumps(sorted(MY_SEQNOS)[-500:]), encoding="utf-8")
+    except Exception:
+        pass
 NEED_UPDATE_STATUS = False  # shioaji 1.7.x 改價/撤單前需 update_status(login_compat 偵測後設定)
 HEDGE_C = None     # MXF 近月合約(main 登入後解析)
 HEDGE_FAIL = False # 對沖失敗旗標:True → 主迴圈撤光掛單停機(絕不邊裸抱邊釣)
@@ -221,7 +237,16 @@ def verify_no_residual(api, trades=None):
     mine = [t for t in alive if getattr(t.order, "seqno", "") in MY_SEQNOS]
     others = len(alive) - len(mine)
     if not mine:
-        return True, "已確認帳戶無本引擎未成交委託" + (f"(他引擎活單 {others} 張)" if others else "")
+        if others:
+            # TING⑧修法3:他引擎活單獨立推播列示(不判失敗)— 埋在成功訊息裡容易被略過,
+            # 寧可多叫一次讓人眼睛掃一眼(重啟遺漏/歸類錯誤的最後防線)。
+            try:
+                odesc = ",".join(f"{t.contract.code}#{getattr(t.order, 'seqno', '?')}"
+                                 for t in alive if getattr(t.order, "seqno", "") not in MY_SEQNOS)
+                tg(f"ℹ️ 退場掃描:帳戶有非本引擎活單 {others} 張({odesc[:200]}) — 請人工掃一眼歸屬")
+            except Exception:
+                pass
+        return True, "已確認帳戶無本引擎未成交委託" + (f"(他引擎活單 {others} 張,已推列示)" if others else "")
     desc = ",".join(f"{t.contract.code}@{t.order.price}#{t.order.seqno}" for t in mine[:8])
     return False, f"殘留本引擎 {len(mine)} 張:{desc}"
 
@@ -243,7 +268,7 @@ def send_hedge(api, side, opt_code, opt_px):
                               octype=sjc.FuturesOCType.New, account=api.futopt_account)
             trade = api.place_order(HEDGE_C, order)
             seq = trade.order.seqno
-            MY_SEQNOS.add(seq)
+            _seq_add(seq)
         except Exception as e:
             metric("hedge_err", side, None, str(e)[:40])
             log(f"[{side}] 對沖下單異常(try{attempt}): {str(e)[:60]}")
@@ -272,10 +297,13 @@ def send_hedge(api, side, opt_code, opt_px):
         if got and box:
             ms = (box[0][0] - t0) * 1000
             px = box[0][1]
-            slip = (f0 - px) if action == sjc.Action.Sell else (px - f0)   # 不利滑價為正
-            metric("hedge", side, ms, f"px={px} F0={f0:.0f} slip={slip:+.1f} try{attempt}")
-            log(f"[{side}] ✅ 對沖成交 MXF {action}@{px} {ms:.0f}ms slip{slip:+.1f}點 (opt {opt_code}@{opt_px})")
-            tg(f"✅ **對沖成交** MXF @{px}({ms:.0f}ms, slip {slip:+.1f}點)\n{opt_code}@{opt_px} 組合對鎖成立")
+            # TING 回送⑥:status 補認路徑取不到成交價時 px=0,slip 會算出 ≈F 的假數字
+            # (43500 級)毀掉整晚滑價中位數/p99 — 成功照認,滑價標 unknown。
+            slip = ((f0 - px) if action == sjc.Action.Sell else (px - f0)) if px else None
+            sl_s = f"{slip:+.1f}" if slip is not None else "unknown"
+            metric("hedge", side, ms, f"px={px} F0={f0:.0f} slip={sl_s} try{attempt}")
+            log(f"[{side}] ✅ 對沖成交 MXF {action}@{px} {ms:.0f}ms slip{sl_s}點 (opt {opt_code}@{opt_px})")
+            tg(f"✅ **對沖成交** MXF @{px}({ms:.0f}ms, slip {sl_s}點)\n{opt_code}@{opt_px} 組合對鎖成立")
             _ext_reg(entry=dict(code=HEDGE_C.code, direction=("Sell" if side == "C" else "Buy"),
                                 qty=1, opt_code=opt_code, K=legs[side]["K"], cp=side,
                                 expiry=str(legs[side].get("dd", "")), hedge_px=px,
@@ -299,7 +327,7 @@ def place_leg(api, side):
                       octype=sjc.FuturesOCType.New, account=api.futopt_account)
     t0 = time.perf_counter()
     trade = api.place_order(leg["contract"], order)
-    MY_SEQNOS.add(trade.order.seqno)              # 殘單判定與記帳解耦(TING②)
+    _seq_add(trade.order.seqno)                   # 殘單判定與記帳解耦+持久化(TING②⑧)
     ack = wait_ack(trade.order.seqno)
     ms = (((ack[0] if ack else None) or time.perf_counter()) - t0) * 1000
     if ack and ack[1] != "00":                    # 拒單:不算已掛 + 退避(2026-07-31:首晚壓測 12s 拒 732 次=無退避風暴)
