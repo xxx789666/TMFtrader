@@ -559,13 +559,16 @@ def main():
         groups = {}
         for catname in ("TXO", "TX1", "TX2", "TX4", "TX5", "TXU", "TXV", "TXX", "TXY", "TXZ"):  # 2026-07-31 TXW死碼→TXZ第5週五(7/29 live實證)
             try:
-                # TING④c:1.7.x 對不存在的 category getattr 會拋 ShioajiValueError(shard),非回 None
+                # TING④c+第三批修正:1.7.x 的 getattr 會「成功」回惰性物件,ShioajiValueError
+                # 要到迭代時才拋 → try 必須包住迭代(list() 強迫在 try 內跑完),
+                # 只包 getattr 等於沒包(死碼 TX4/TX5/TXX/TXY 在 1.7.x 必然中彈,啟動即死)。
                 cat = getattr(api.Contracts.Options, catname, None)
+                clist = list(cat) if cat is not None else []
             except Exception:
                 continue
-            if cat is None:
+            if not clist:
                 continue
-            for c in cat:
+            for c in clist:
                 ddl = str(c.delivery_date).replace("/", "-")
                 try:
                     ddate = dt.date.fromisoformat(ddl)
