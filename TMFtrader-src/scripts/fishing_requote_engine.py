@@ -40,7 +40,7 @@ LIVE = "--live" in sys.argv
 if LIVE and os.environ.get("FISHING_LIVE") != "YES":
     sys.exit("live 模式需 FISHING_LIVE=YES 雙重確認(paper 判活尺未過前禁用)")
 
-OFFSET = 90 if LIVE else 400   # 2026-07-25 live 40→90(shadow 400 不動:物理不可成交=B級驗收用)
+OFFSET = 97 if LIVE else 400   # 2026-08-03 live 90→97(user定);shadow 400 不動:物理不可成交=B級驗收用
 DEEP_PCT_LO, DEEP_PCT_HI = 0.015, 0.04     # 魚區:價內 1.5%~4%
 REQUOTE_MIN_PTS = 5
 MAX_UPD_PER_MIN = 30
