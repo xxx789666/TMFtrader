@@ -17,7 +17,7 @@
   - 熔斷搶跑:F 在 VEL_WIN 秒內動 > VEL_PTS → 立刻「撤單」(不只凍結)+FREEZE_SEC 後重掛
   - 成交(live才可能):即停該側報價+送MXF對沖(市價)+TG;shadow 若成交(不應發生)→全撤+終止
   - SIGTERM/停止檔(/tmp/requote_stop)→撤光所有單再退;絕不留無人看管的掛單
-  - dte≤1 才張網(同 paper 引擎口徑);05:05 自動收工
+  - dte≤1 才張網(同 paper 引擎口徑);04:58 自動收工(收盤前撤單拿真 ack,8/4 A 案)
 啟動:CONFIRM_LIVE_ORDER=YES .venv/bin/python3 scripts/fishing_requote_engine.py [--live]
 """
 import os, sys, json, time, signal, statistics, threading
@@ -51,7 +51,10 @@ MAX_DTE = 1 if LIVE else int(os.environ.get("FISHING_MAX_DTE", "1"))
 STOP_FILE = Path("/tmp/requote_stop")
 METRICS = ROOT / "data" / "opt" / f"requote_{'live' if LIVE else 'shadow'}_metrics.csv"
 WEBHOOK = os.getenv("DISCORD_WEBHOOK_FISHING") or ""
-END_HHMM = (5, 5)
+# 2026-08-04 user 拍板 A:04:58 提前收工(原 05:05)。TING 8/3 整夜實證:05:00 收盤後
+# 撤單必敗(99SP/非交易時間)→05:05 cancel_all 全被拒→verify 列殘(ROD 已到期的狀態殘影)
+# →每晚結構性髒退場🆘。提前 2 分鐘=撤單在盤中拿真 ack,「乾淨收工」才驗證得出來。
+END_HHMM = (4, 58)
 
 import shioaji as sj
 from shioaji import constant as sjc
@@ -642,8 +645,8 @@ def main():
                     log("✅ 互斥鎖已釋放 → 恢復掛餌")
                     tg("✅ 互斥解除 → 魅影恢復掛餌")
             hm = (now.hour, now.minute)
-            if (5, 5) <= hm and hm < (8, 40):
-                log("盤間空窗(05:05-08:40)→ 收工"); break
+            if END_HHMM <= hm and hm < (8, 40):
+                log(f"盤間空窗({END_HHMM[0]:02d}:{END_HHMM[1]:02d}-08:40)→ 收工"); break
             if hm >= (13, 25) and hm < (14, 50) and any(
                     str(l.get("dd", "")) == now.date().isoformat() for l in legs.values()):
                 log("結算日 13:25 → 收工(避 13:30 結算)"); break
