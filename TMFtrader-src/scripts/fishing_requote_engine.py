@@ -381,8 +381,10 @@ def cancel_leg(api, side, why="requote"):
     if NEED_UPDATE_STATUS:
         try:
             api.update_status(api.futopt_account)
-        except Exception:
-            pass
+        except Exception as _ue:
+            # 2026-08-04 她方觀察①:這裡吞掉的失敗會讓下游撤單報「Please run update_status
+            # first」= 誤導歸因;不改行為,但記 metric 供撤單失敗歸因(驗收項2)
+            metric("upd_status_fail", side, None, str(_ue)[:40])
     t0 = time.perf_counter()
     ok = False
     try:
@@ -672,13 +674,24 @@ def main():
                                           upd_times=deque(), filled=False)
                         log(f"[{side}] 新增腿 {c.code} K={K:.0f}(dte{dte_})")
                     elif not cur["filled"] and cur["contract"].code != c.code:
+                        # 2026-08-04 ⑩:同 bug 第二出口 — cancel_leg 修對了(失敗保留參照),
+                        # 但這裡無條件丟 cur = 舊單參照照樣蒸發:孤兒單成交時 order_cb 比不到
+                        # 任何腿 → 不送對沖 → 裸選擇權過夜且零錯誤。撤單「確認成功」才准換腿;
+                        # 失敗保留 cur(cancel_fail_n 讓 requote 只重撤不重掛),下輪 repick 再試。
+                        ok = False
                         try:
-                            cancel_leg(api, side, "repick_switch")
+                            ok = cancel_leg(api, side, "repick_switch")
                         except Exception as e:
                             log(f"[{side}] repick 撤舊腿異常:{e}")
-                        legs[side] = dict(contract=c, K=K, dd=ddl, trade=None, quoted_px=None,
-                                          upd_times=cur["upd_times"], filled=False)
-                        log(f"[{side}] 魚區漂移換腿 → {c.code} K={K:.0f}(dte{dte_})")
+                        if ok:
+                            legs[side] = dict(contract=c, K=K, dd=ddl, trade=None, quoted_px=None,
+                                              upd_times=cur["upd_times"], filled=False)
+                            log(f"[{side}] 魚區漂移換腿 → {c.code} K={K:.0f}(dte{dte_})")
+                        else:
+                            metric("repick_hold", side, None,
+                                   f"cancel未確認 keep={cur['contract'].code} fail_n={cur.get('cancel_fail_n', 0)}")
+                            log(f"[{side}] 換腿暫緩:舊腿撤單未確認(第 {cur.get('cancel_fail_n', 0)} 次)"
+                                f"→ 保留 {cur['contract'].code} 參照,下輪重試")
             if all(l["filled"] for l in legs.values()):
                 log("兩側皆成交(box)→ 停止報價"); break
             if time.time() - last_flush > 30:
