@@ -87,6 +87,17 @@ def _seq_add(seq):
 NEED_UPDATE_STATUS = False  # shioaji 1.7.x 改價/撤單前需 update_status(login_compat 偵測後設定)
 HEDGE_C = None     # MXF 近月合約(main 登入後解析)
 HEDGE_FAIL = False # 對沖失敗旗標:True → 主迴圈撤光掛單停機(絕不邊裸抱邊釣)
+# ── stale-F 守門(2026-08-05):行情斷流(訂閱死/單路斷)時 F 凍結=掛單變呆單、熔斷也瞎
+#    → 斷流>FEED_STALE_S 秒(盤中)撤光掛單暫停,feed 回流自動恢復。全斷網(API 同死)
+#    引擎自己也撤不了 → 兜底=夜盤 ROD 05:00 到期+App 人工,此守門保的是 feed-only 斷。
+FEED_STALE_S = 30.0
+FEED_STALE = {"v": False}
+last_fut_ts = 0.0
+# 演練鉤(env 閘,預設全關):FISHING_DRILL_FEEDSTALE="HH:MM-HH:MM"=該窗丟棄期貨 tick 模擬斷流;
+# FISHING_DRILL_CANCELFAIL=1=首次 repick 撤單注入失敗一次(驗⑩保留參照不換腿)
+_DF = os.environ.get("FISHING_DRILL_FEEDSTALE", "")
+DRILL_FEED_WIN = tuple(_DF.split("-", 1)) if "-" in _DF else None
+DRILL_CANCELFAIL = os.environ.get("FISHING_DRILL_CANCELFAIL", "") == "1"
 mlock = threading.Lock()
 mrows = []
 
@@ -381,6 +392,12 @@ def cancel_leg(api, side, why="requote"):
     leg = legs[side]
     if not leg.get("trade"):
         return True
+    if DRILL_CANCELFAIL and why == "repick_switch" and not leg.get("_drill_cf"):
+        leg["_drill_cf"] = True                    # 每腿只注入一次,下輪走真撤單
+        leg["cancel_fail_n"] = leg.get("cancel_fail_n", 0) + 1
+        metric("cancel_fail", side, None, "drill_inject")
+        log(f"[{side}] 🎭 演練:repick 撤單注入失敗 → 驗⑩保留參照不換腿")
+        return False
     if NEED_UPDATE_STATUS:
         try:
             api.update_status(api.futopt_account)
@@ -414,7 +431,7 @@ def cancel_all(api, why):
 
 def requote(api, side):
     leg = legs[side]
-    if LOCK_PAUSED["v"]:                          # B案互斥:對方策略持倉中,不掛餌(2026-08-02)
+    if LOCK_PAUSED["v"] or FEED_STALE["v"]:       # B案互斥/行情斷流:不掛餌(斷流時掛=呆單)
         return
     if leg["filled"] or time.time() < frozen_until:
         return
@@ -522,18 +539,24 @@ def main():
     fsnap = api.snapshots([fut])[0]
     F = float(fsnap.close)
     api.quote.subscribe(fut, quote_type=sjc.QuoteType.Tick, version=sjc.QuoteVersion.v1)
+    globals()["last_fut_ts"] = time.time()   # 訂閱即計時:訂閱從未活過也會在30s後觸發守門
 
     @api.on_tick_fop_v1()
     def on_tick(exchange, tick):
-        global F, frozen_until
+        global F, frozen_until, last_fut_ts
         if getattr(tick, "simtrade", 0):   # 試撮假tick不入(2026-07-31:不餵F/不觸熔斷/不標requote)
             return
         if not str(tick.code).startswith("TXF"):
             return
+        if DRILL_FEED_WIN:                 # 🎭 演練:模擬行情斷流(該窗丟棄期貨 tick)
+            _dhm = tst_now().strftime("%H:%M")
+            if DRILL_FEED_WIN[0] <= _dhm < DRILL_FEED_WIN[1]:
+                return
         try:
             px = float(tick.close)
         except Exception:
             return
+        last_fut_ts = time.time()
         F = px
         now = time.time()
         fut_buf.append((now, px))
@@ -644,6 +667,24 @@ def main():
                     LOCK_PAUSED["v"] = False
                     log("✅ 互斥鎖已釋放 → 恢復掛餌")
                     tg("✅ 互斥解除 → 魅影恢復掛餌")
+                # ── stale-F 守門(2026-08-05):盤中斷流>30s → 撤光暫停;回流自動恢復 ──
+                _gap = (time.time() - last_fut_ts) if last_fut_ts else 0.0
+                _hm2 = (now.hour, now.minute)
+                _flow = _hm2 >= (15, 0) or _hm2 < (4, 57) or ((8, 46) <= _hm2 <= (13, 43))
+                if _flow and _gap > FEED_STALE_S and not FEED_STALE["v"]:
+                    FEED_STALE["v"] = True
+                    metric("feed_stale", "", None, f"gap={_gap:.0f}s")
+                    try:
+                        cancel_all(api, "feed_stale")
+                    except Exception as _fe:
+                        log(f"斷流撤單異常:{_fe}")
+                    log(f"🆘 行情斷流 {_gap:.0f}s → 撤光掛單暫停(回流自動恢復)")
+                    tg(f"🆘 **魅影:行情斷流 {_gap:.0f}s** → 已撤光掛單暫停;回流自動恢復。"
+                       f"若持續請查連線,並開 App 複核殘單")
+                elif FEED_STALE["v"] and last_fut_ts and _gap <= 5.0:
+                    FEED_STALE["v"] = False
+                    log("✅ feed 回流 → 恢復掛餌")
+                    tg("✅ 魅影:行情回流 → 恢復掛餌")
             hm = (now.hour, now.minute)
             if END_HHMM <= hm and hm < (8, 40):
                 log(f"盤間空窗({END_HHMM[0]:02d}:{END_HHMM[1]:02d}-08:40)→ 收工"); break
