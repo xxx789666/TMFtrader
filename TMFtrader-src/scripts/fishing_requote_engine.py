@@ -93,6 +93,7 @@ HEDGE_FAIL = False # 對沖失敗旗標:True → 主迴圈撤光掛單停機(絕
 FEED_STALE_S = 30.0
 FEED_STALE = {"v": False}
 last_fut_ts = 0.0
+HEDGE_THREADS = []  # 路徑4修(2026-08-05 TING抓):對沖線程要記名,退場 join 別射後不理
 # 演練鉤(env 閘,預設全關):FISHING_DRILL_FEEDSTALE="HH:MM-HH:MM"=該窗丟棄期貨 tick 模擬斷流;
 # FISHING_DRILL_CANCELFAIL=1=首次 repick 撤單注入失敗一次(驗⑩保留參照不換腿)
 _DF = os.environ.get("FISHING_DRILL_FEEDSTALE", "")
@@ -524,9 +525,11 @@ def main():
                                 log(f"⚠️ 取鎖失敗:{_le}")
                             # 2026-07-31 對沖分支實作:另線程跑(callback 不阻塞行情/回報流),
                             # place_order 本體 ~50ms,等成交回報最長 2s×2 次在線程內進行。
-                            threading.Thread(target=send_hedge,
-                                             args=(api, side, code, msg.get("price")),
-                                             daemon=True).start()
+                            _ht = threading.Thread(target=send_hedge,
+                                                   args=(api, side, code, msg.get("price")),
+                                                   daemon=True)
+                            HEDGE_THREADS.append(_ht)   # 路徑4:記名供退場 join
+                            _ht.start()
                         else:
                             tg(f"🚨 **影子單成交(不應發生!)** {code} @{msg.get('price')} → 全撤+終止,查 OFFSET")
         except Exception as e:
@@ -755,6 +758,17 @@ def main():
         except Exception as e:
             log(f"退場撤單異常: {e}")
         time.sleep(1.0)
+        # 路徑4修(2026-08-05 TING抓):對沖線程原本射後不理,退場只 sleep(1) 就 logout →
+        # 退場前 ~4 秒內的成交,daemon 對沖線程隨行程被砍=裸部位且零告警(觸發時機=04:58
+        # 排定收工/stop檔/SIGTERM,手動停機那一刻最危險)。順序=先撤單止血新成交、再 join
+        # 在途對沖(含 sleep 期間晚到 deal 回報起的線程);join 逾時→🆘 指名人工補。
+        for _ht in list(HEDGE_THREADS):
+            if _ht.is_alive():
+                log("等待在途對沖線程完成...")
+                _ht.join(timeout=8.0)
+                if _ht.is_alive():
+                    tg("🆘 **退場時對沖線程逾時未完成** — 立即開 App 查 MXF 對沖腿是否成立,"
+                       "缺腿=裸選擇權,人工市價補對鎖!")
         clean, detail = verify_no_residual(api, _trades)
         flush_metrics()
         if clean:
