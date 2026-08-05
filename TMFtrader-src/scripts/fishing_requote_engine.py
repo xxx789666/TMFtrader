@@ -42,8 +42,14 @@ if LIVE and os.environ.get("FISHING_LIVE") != "YES":
 
 OFFSET = 97 if LIVE else 400   # 2026-08-03 live 90→97(user定);shadow 400 不動:物理不可成交=B級驗收用
 DEEP_PCT_LO, DEEP_PCT_HI = 0.015, 0.04     # 魚區:價內 1.5%~4%
-REQUOTE_MIN_PTS = 5
-MAX_UPD_PER_MIN = 30
+# ── 2026-08-05 券商紅線改版:營業員通知「API 刪改單>萬筆/日影響系統維運,再犯今日停權限」
+#    (昨夜影子 11,152 改價+256 掛撤=1.15萬筆=我們)。物理:edge=97 點,掛價根本不需要 5 點精度
+#    — 死區 5→25(改價需求隨死區平方級下降,估 <1,500 筆/夜)、節流 30→6/分/側(burst 抑制)、
+#    新增 OPS_BUDGET 硬頂(達標=撤光收工,絕不邊超限邊跑)。經濟:最壞偏離 ~35 點,97−35−11=+51 仍正。
+REQUOTE_MIN_PTS = float(os.environ.get("FISHING_REQUOTE_MIN_PTS", "25"))
+MAX_UPD_PER_MIN = int(os.environ.get("FISHING_MAX_UPD_PER_MIN", "6"))
+OPS_BUDGET = int(os.environ.get("FISHING_OPS_BUDGET", "3000"))   # 全日委託操作硬頂(掛+改+撤)
+OPS = {"n": 0, "warned": False}
 REPICK_S = 90.0        # 2026-07-31:腿週期重挑(paper v2.1 動態魚區移植;修開機一次性=7/28漂移bug真錢版)
 VEL_WIN, VEL_PTS, FREEZE_SEC = 2.0, 30.0, 10.0
 # shadow 可用 FISHING_MAX_DTE 放寬(壓測重掛機制不限獵魚夜;offset400 物理不可成交=零風險);live 鎖死 1
@@ -281,6 +287,7 @@ def send_hedge(api, side, opt_code, opt_px):
             order = api.Order(price=0, quantity=1, action=action,
                               price_type=sjc.FuturesPriceType.MKT, order_type=sjc.OrderType.IOC,
                               octype=sjc.FuturesOCType.New, account=api.futopt_account)
+            OPS["n"] += 1
             trade = api.place_order(HEDGE_C, order)
             seq = trade.order.seqno
             _seq_add(seq)
@@ -341,6 +348,7 @@ def place_leg(api, side):
                       price_type=sjc.FuturesPriceType.LMT, order_type=sjc.OrderType.ROD,
                       octype=sjc.FuturesOCType.New, account=api.futopt_account)
     t0 = time.perf_counter()
+    OPS["n"] += 1
     trade = api.place_order(leg["contract"], order)
     _seq_add(trade.order.seqno)                   # 殘單判定與記帳解耦+持久化(TING②⑧)
     ack = wait_ack(trade.order.seqno)
@@ -368,6 +376,7 @@ def update_leg(api, side, px):
         except Exception:
             pass
     t0 = time.perf_counter()
+    OPS["n"] += 1
     try:
         api.update_order(trade=leg["trade"], price=px)
         ack = wait_ack(leg["trade"].order.seqno)
@@ -408,6 +417,7 @@ def cancel_leg(api, side, why="requote"):
             metric("upd_status_fail", side, None, str(_ue)[:40])
     t0 = time.perf_counter()
     ok = False
+    OPS["n"] += 1
     try:
         api.cancel_order(leg["trade"])
         ack = wait_ack(leg["trade"].order.seqno)
@@ -651,6 +661,16 @@ def main():
                 log("停止檔 → 收工"); break
             if HEDGE_FAIL:
                 log("🆘 對沖失敗 → 撤光掛單停機(裸部位需人工處理)"); break
+            # ── 委託操作預算(2026-08-05 券商紅線):達硬頂=撤光收工,絕不邊超限邊跑 ──
+            if OPS["n"] >= OPS_BUDGET:
+                metric("ops_budget_halt", "", None, f"n={OPS['n']}")
+                log(f"🛑 委託操作達硬頂 {OPS['n']}/{OPS_BUDGET} → 收工(券商刪改單紅線)")
+                tg(f"🛑 **魅影:委託操作達硬頂 {OPS['n']}/{OPS_BUDGET}** → 撤光收工。"
+                   f"若非行情極端日=參數異常,明晨查 metrics 歸因")
+                break
+            if not OPS["warned"] and OPS["n"] >= OPS_BUDGET * 0.8:
+                OPS["warned"] = True
+                tg(f"⚠️ 魅影:委託操作 {OPS['n']}/{OPS_BUDGET}(80%) — 注意用量")
             # ── B案互斥檢查(每 2s):對方持鎖 → 撤餌暫停;釋放 → 恢復 ──
             if time.time() - last_lockchk >= 2.0:
                 last_lockchk = time.time()
@@ -746,7 +766,8 @@ def main():
             if time.time() - last_beat > 300:
                 last_beat = time.time()
                 held = {s: l["quoted_px"] for s, l in legs.items()}
-                log(f"[心跳] F={F:.0f} 掛價={held} 凍結={'是' if time.time()<frozen_until else '否'}")
+                log(f"[心跳] F={F:.0f} 掛價={held} 凍結={'是' if time.time()<frozen_until else '否'}"
+                    f" ops={OPS['n']}/{OPS_BUDGET}")
     finally:
         # 2026-08-01 修(TING 部署方抓到):原版「收工」無條件寫入 — cancel_leg 吞例外+無條件清
         # trade=None → cancel_all 永不上拋 → 撤單失敗照樣寫「收工/掛單已全撤」= 騙過看門狗零告警。
