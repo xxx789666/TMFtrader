@@ -100,6 +100,8 @@ FEED_STALE_S = 30.0
 FEED_STALE = {"v": False}
 last_fut_ts = 0.0
 HEDGE_THREADS = []  # 路徑4修(2026-08-05 TING抓):對沖線程要記名,退場 join 別射後不理
+CAP_DONE = {"v": False}  # 2026-08-06 user 定調:25萬=1組。首組成交→撤另一側→收工持倉至結算
+                         # (原設計兩側可同時成交=box 需~45萬,超出策略資金紀律;box 紅利放棄)
 # 演練鉤(env 閘,預設全關):FISHING_DRILL_FEEDSTALE="HH:MM-HH:MM"=該窗丟棄期貨 tick 模擬斷流;
 # FISHING_DRILL_CANCELFAIL=1=首次 repick 撤單注入失敗一次(驗⑩保留參照不換腿)
 _DF = os.environ.get("FISHING_DRILL_FEEDSTALE", "")
@@ -442,7 +444,7 @@ def cancel_all(api, why):
 
 def requote(api, side):
     leg = legs[side]
-    if LOCK_PAUSED["v"] or FEED_STALE["v"]:       # B案互斥/行情斷流:不掛餌(斷流時掛=呆單)
+    if LOCK_PAUSED["v"] or FEED_STALE["v"] or CAP_DONE["v"]:  # 互斥/斷流/首組達成:不掛餌
         return
     if leg["filled"] or time.time() < frozen_until:
         return
@@ -540,6 +542,7 @@ def main():
                                                    daemon=True)
                             HEDGE_THREADS.append(_ht)   # 路徑4:記名供退場 join
                             _ht.start()
+                            CAP_DONE["v"] = True        # CAP=1:主迴圈會撤另一側+收工
                         else:
                             tg(f"🚨 **影子單成交(不應發生!)** {code} @{msg.get('price')} → 全撤+終止,查 OFFSET")
         except Exception as e:
@@ -759,6 +762,15 @@ def main():
                                    f"cancel未確認 keep={cur['contract'].code} fail_n={cur.get('cancel_fail_n', 0)}")
                             log(f"[{side}] 換腿暫緩:舊腿撤單未確認(第 {cur.get('cancel_fail_n', 0)} 次)"
                                 f"→ 保留 {cur['contract'].code} 參照,下輪重試")
+            if CAP_DONE["v"]:
+                # 2026-08-06 CAP=1:首組成交 → 撤未成交側 → 收工(組合持倉至結算,平腿器接手)
+                for _s2 in list(legs):
+                    if not legs[_s2]["filled"] and legs[_s2].get("trade"):
+                        cancel_leg(api, _s2, "cap_reached")
+                log("💰 首組達成(CAP=1)→ 撤另一側,收工(持倉至結算)")
+                tg("💰 **魅影:首組達成(CAP=1)** → 已撤另一側掛單,收工;組合持倉至結算,"
+                   "明日 13:26 平腿器自動處理")
+                break
             if all(l["filled"] for l in legs.values()):
                 log("兩側皆成交(box)→ 停止報價"); break
             if time.time() - last_flush > 30:
