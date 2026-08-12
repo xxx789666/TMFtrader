@@ -85,7 +85,9 @@ def push(sig):
     STAGE.write_text(json.dumps(sig, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"寫入 {STAGE}\n{json.dumps(sig, ensure_ascii=False)}")
     cmd = ["wsl", "bash", "-lc",
-           f'gcloud compute scp "{STAGE_WSL}" {VPS_DEST} --zone={ZONE}']
+           'gcloud compute scp --account=x011training@gmail.com '
+           '--project=project-ae93c5d6-cf6e-402d-969 '
+           f'"{STAGE_WSL}" {VPS_DEST} --zone={ZONE}']
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:

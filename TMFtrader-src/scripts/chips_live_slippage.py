@@ -23,7 +23,8 @@ MANUAL_TAPE = ROOT / "data" / "manual_close_vs_rule_tape.csv"
 BT = dict(n=733, total=11192, wr=0.54, pf=1.33, avg=15.3)   # 2020-2025 滑價後口徑 baseline
 
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
-SSH = ("gcloud compute ssh ultratrader-night --zone=asia-east1-b --command="
+SSH = ("gcloud compute ssh ultratrader-night --zone=asia-east1-b "
+       "--account=x011training@gmail.com --project=project-ae93c5d6-cf6e-402d-969 --command="
        "'grep -h \"訊號讀取\\|log_trade\\|\\[FILL\\]\" "
        "/home/xx/TMFtrader-src/data/logs/TMFtrader_chips_exec_*.log "
        "/home/xx/TMFtrader-src/data/logs/chips_exec_live_*.log 2>/dev/null | sort -u'")
