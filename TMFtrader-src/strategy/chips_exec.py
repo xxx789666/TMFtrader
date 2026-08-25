@@ -27,6 +27,8 @@ from core.position import Position, Side
 
 ROOT = Path(__file__).resolve().parent.parent
 SIGNAL_FILE = ROOT / "data" / "chips_combo" / "next_signal.json"
+# 今天已推播過的告警 token(每行一個 "<日期>|<種類>";盤中重啟不重推)
+ALERT_MARK = ROOT / "data" / "chips_combo" / "alerts_sent.txt"
 
 
 class ChipsExecStrategy(BaseStrategy):
@@ -60,18 +62,56 @@ class ChipsExecStrategy(BaseStrategy):
             self._sig_cache_at = now
         return self._sig_cache
 
-    def _alert_stale_once(self, sess, td, side, skipped: bool):
-        """訊號 trade_date ≠ 今天 → 推 TG 告警(每 session 一次;可能是假日位移、也可能是資料源慢的過期訊號)。"""
-        if getattr(self, "_stale_alerted_sess", None) == sess:
+    def _alert_once(self, sess, kind, msg):
+        """同一天同一種告警只推一次(TG)。
+
+        兩層去重:①行程內 set ②marker 檔(盤中被 watchdog 重啟也不會重推)。
+        marker 只保留當天的 token,不會無限長大。全程 try/except 吞掉 —— 通知失敗
+        絕不影響交易主流程。
+        """
+        tok = f"{sess}|{kind}"
+        seen = getattr(self, "_alerted", None)
+        if seen is None:
+            seen = self._alerted = set()
+        if tok in seen:
             return
-        self._stale_alerted_sess = sess
+        seen.add(tok)
+        try:
+            done = ALERT_MARK.read_text(encoding="utf-8").split() if ALERT_MARK.exists() else []
+        except Exception:
+            done = []
+        if tok in done:
+            return                                      # 今天推過了(這次是重啟)
         try:
             from core.notify import tg
-            act = "已跳過不交易" if skipped else "仍照常執行(≤2天容忍),請人工確認是否為資料源未更新"
-            tg(f"⚠️ [chips_exec] 訊號疑似過期:trade_date={td} ≠ 今天 {sess}(side={side})→ {act}。"
-               f"若昨天傍晚 FinMind/TAIFEX 沒出資料,訊號就是舊的(參考 2026-07-01 漏單案例)。")
+            tg(msg)
         except Exception:
             pass
+        try:
+            ALERT_MARK.parent.mkdir(parents=True, exist_ok=True)
+            ALERT_MARK.write_text(
+                "\n".join([d for d in done if d.startswith(f"{sess}|")] + [tok]),
+                encoding="utf-8")
+        except Exception:
+            pass
+
+    def _alert_stale_once(self, sess, td, side, skipped: bool):
+        """訊號 trade_date ≠ 今天 → 推 TG 告警(可能是假日位移、也可能是資料源慢的過期訊號)。"""
+        act = "已跳過不交易" if skipped else "仍照常執行(≤2天容忍),請人工確認是否為資料源未更新"
+        self._alert_once(sess, "stale",
+                         f"⚠️ [chips_exec] 訊號疑似過期:trade_date={td} ≠ 今天 {sess}(side={side})→ {act}。"
+                         f"若昨天傍晚 FinMind/TAIFEX 沒出資料,訊號就是舊的(參考 2026-07-01 漏單案例)。")
+
+    def _notify_flat_once(self, sess, sig):
+        """side=flat(今天不進場)→ 推一則 TG。
+
+        Why:空手日引擎既不推 TG、也沒人會去看 log,「今天訊號叫我別進」和「引擎根本沒跑」
+        在使用者端是同一種沉默(2026-08-24 wave_exec 就因此被誤判成故障)。
+        """
+        cb = sig.get("combo")
+        cb_txt = f"{cb:+.2f}" if isinstance(cb, (int, float)) else str(cb)
+        self._alert_once(sess, "flat",
+                         f"⚪ chips_exec {sess} 空手(combo {cb_txt} 未達門檻 ±0.5)")
 
     def _entry_decision(self, sess, bt, price) -> Optional[Signal]:
         """進場判斷(on_kbar 與 check_entry_tick 共用;_traded 防重複進場)。"""
@@ -79,6 +119,7 @@ class ChipsExecStrategy(BaseStrategy):
             self._cur_sess = sess
             self._traded = False
             self._logged_sess = None
+            self._alerted = set()
 
         def _log_once(msg):
             # 每 session 只印一次(此函式每 tick 被呼叫,避免洗版);只在進場窗內印
@@ -92,6 +133,10 @@ class ChipsExecStrategy(BaseStrategy):
         sig = self._read_signal_cached()
         if not sig:
             _log_once("無 next_signal.json → 跳過")
+            self._alert_once(sess, "nosig",
+                             f"🔴 [chips_exec] {sess} 讀不到 next_signal.json → 今天不會進場。"
+                             f"檢查前一晚 18:30 / 當日 15:10 的 chips_combo_daily.py"
+                             f"(data/logs/chips_combo.log)。")
             return None
         # 訊號日期配對:今天 == trade_date,或 trade_date 在 ≤2 天前(容忍假日位移:訊號寫的
         # 「下一交易日」若撞國定假日,實際首個交易日會晚 1-2 天)。絕不提前交易(sess < td 跳過)。
@@ -101,6 +146,9 @@ class ChipsExecStrategy(BaseStrategy):
             td = _date.fromisoformat(str(_tdraw))
         except ValueError:
             _log_once(f"trade_date 格式錯({_tdraw}) → 跳過")
+            self._alert_once(sess, "badtd",
+                             f"🔴 [chips_exec] {sess} next_signal.json 的 trade_date 格式錯"
+                             f"({_tdraw!r}) → 今天不會進場。")
             return None
         if sess < td:
             _log_once(f"trade_date={td} side={_sd} combo={_cb} → 未到交易日、跳過")
@@ -123,6 +171,7 @@ class ChipsExecStrategy(BaseStrategy):
             sl = price * (1 + self.stop_pct)
         else:                                    # flat:今天不交易,標記避免整段重讀
             _log_once(f"trade_date={td} side=flat combo={_cb} → 空手不進場")
+            self._notify_flat_once(sess, sig)
             self._traded = True
             return None
 
@@ -175,3 +224,4 @@ class ChipsExecStrategy(BaseStrategy):
         self._sig_cache = None
         self._sig_cache_at = 0.0
         self._logged_sess = None
+        self._alerted = set()

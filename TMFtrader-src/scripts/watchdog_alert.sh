@@ -31,6 +31,15 @@ if grep -qx "$(date +%F)" "$PROJ/scripts/market_holidays.txt" 2>/dev/null; then
   wlog "市場休市 → 跳過看門狗檢查"; exit 0
 fi
 
+# 週末靜默(2026-08-08):六 05:45(週五夜盤收完+緩衝)起到一 05:45 前,沒有任何
+# 時段該有引擎在跑 → 全跳過。六 00:00–05:45 = 週五夜盤,照常檢查。
+# 動機:requote_orphan 這類「持續告警到人工清除」的鍵,週末也每 4h 推一次 TG。
+DOW=$(date +%u)   # 1=一 .. 6=六 7=日
+if { [ "$DOW" = 6 ] && [ $HHMM -ge 545 ]; } || [ "$DOW" = 7 ] || \
+   { [ "$DOW" = 1 ] && [ $HHMM -lt 545 ]; }; then
+  wlog "週末 → 跳過看門狗檢查"; exit 0
+fi
+
 TG_TOKEN=$(grep '^TG_BOT_TOKEN=' "$PROJ/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
 TG_CHAT=$(grep '^TG_CHAT_ID='  "$PROJ/.env" 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
 send_tg(){
