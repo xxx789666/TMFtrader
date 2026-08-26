@@ -13,6 +13,7 @@ data/wave_fade/next_signal.json);這支只負責「執行」:讀當天該不該�
 - TF 須 ≥30:讓 −2% 停損(≈880 點)≈3.5-5×ATR、能過 risk_manager 的 8×ATR gate。
 """
 import json
+import os
 from datetime import date as _date, time
 from pathlib import Path
 from typing import Optional
@@ -23,9 +24,13 @@ from core.market_data import KBar, MarketSnapshot
 from core.position import Position, Side
 
 ROOT = Path(__file__).resolve().parent.parent
-SIGNAL_FILE = ROOT / "data" / "wave_fade" / "next_signal.json"
+# C 變體(wave_exec_c,2026-08-26)共用本類:launcher 用 WAVE_SIGNAL_DIR 指到 data/wave_fade_c
+# (訊號由同一支 producer wave_fade_daily.py 寫兩份);env 在 import 時讀定,兩引擎各自行程互不影響。
+_SIG_DIR = ROOT / os.getenv("WAVE_SIGNAL_DIR", "data/wave_fade")
+SIGNAL_FILE = _SIG_DIR / "next_signal.json"
 # 今天已推播過的告警 token(每行一個 "<日期>|<種類>";盤中重啟不重推)
-ALERT_MARK = ROOT / "data" / "wave_fade" / "alerts_sent.txt"
+ALERT_MARK = _SIG_DIR / "alerts_sent.txt"
+OWNER = os.getenv("STRATEGY_OWNER", "wave_exec")   # 告警訊息署名(wave_exec / wave_exec_c)
 
 
 class WaveExecStrategy(BaseStrategy):
@@ -96,7 +101,7 @@ class WaveExecStrategy(BaseStrategy):
         """訊號 trade_date ≠ 今天 → 推 TG(可能是假日位移,也可能是 producer 沒跑/資料源慢)。"""
         act = "已跳過不交易" if skipped else "仍照常執行(≤2天容忍),請人工確認是否為資料源未更新"
         self._alert_once(sess, "stale",
-                         f"⚠️ [wave_exec] 訊號疑似過期:trade_date={td} ≠ 今天 {sess}"
+                         f"⚠️ [{OWNER}] 訊號疑似過期:trade_date={td} ≠ 今天 {sess}"
                          f"(side={side})→ {act}。檢查 08:05 的 wave_fade_daily.py"
                          f"(data/logs/wave_fade_daily.log)。")
 
@@ -120,7 +125,7 @@ class WaveExecStrategy(BaseStrategy):
         # 不標 [PAPER]/[LIVE]:引擎的進出場標籤是在 core/engine.py 兩條分支各自寫死的,
         # 不看 TRADING_MODE;而 core.notify 的 load_dotenv() 會把 .env 的 TRADING_MODE
         # 灌進 os.environ(2026-08-24 演練就因此印成 [LIVE])。寧可不標也不要標錯。
-        self._alert_once(sess, "flat", f"⚪ wave_exec {sess} 空手({why})")
+        self._alert_once(sess, "flat", f"⚪ {OWNER} {sess} 空手({why})")
 
     def _entry_decision(self, sess, bt, price) -> Optional[Signal]:
         """進場判斷(on_kbar 與 check_entry_tick 共用;_traded 防重複進場)。"""
@@ -133,7 +138,7 @@ class WaveExecStrategy(BaseStrategy):
             # 每 session 只印一次(此函式每 tick 被呼叫,避免洗版);只在進場窗內印
             if getattr(self, "_logged_sess", None) != sess and self.session_start <= bt < self.entry_window_end:
                 self._logged_sess = sess
-                logger.info(f"[wave_exec] {sess} 訊號讀取 → {msg}")
+                logger.info(f"[{OWNER}] {sess} 訊號讀取 → {msg}")
 
         if self._traded or bt < self.session_start or bt >= self.entry_window_end:
             return None
@@ -142,7 +147,7 @@ class WaveExecStrategy(BaseStrategy):
         if not sig:
             _log_once("無 next_signal.json → 跳過")
             self._alert_once(sess, "nosig",
-                             f"🔴 [wave_exec] {sess} 讀不到 next_signal.json → 今天不會進場。"
+                             f"🔴 [{OWNER}] {sess} 讀不到 next_signal.json → 今天不會進場。"
                              f"檢查 08:05 的 wave_fade_daily.py 有沒有跑成功"
                              f"(data/logs/wave_fade_daily.log)。")
             return None
@@ -154,7 +159,7 @@ class WaveExecStrategy(BaseStrategy):
         except ValueError:
             _log_once(f"trade_date 格式錯({_tdraw}) → 跳過")
             self._alert_once(sess, "badtd",
-                             f"🔴 [wave_exec] {sess} next_signal.json 的 trade_date 格式錯"
+                             f"🔴 [{OWNER}] {sess} next_signal.json 的 trade_date 格式錯"
                              f"({_tdraw!r}) → 今天不會進場。")
             return None
         if sess < td:

@@ -167,16 +167,63 @@ def _night_block(tape_a):
     return "\n".join(L)
 
 
+def _tick_tape_stats(owner):
+    """真 tick paper 成交帶統計(data/paper/<owner>/performance/daily/*.json 的 trades[])。
+    同日若 finalized(X.json)與 _live(X_live.json)並存 → 只算 finalized(避免重複計)。"""
+    base = ROOT / "data" / "paper" / owner / "performance" / "daily"
+    trades = []
+    try:
+        files = sorted(base.glob("*.json"))
+        finals = {p.name[:10] for p in files if not p.name.endswith("_live.json")}
+        for p in files:
+            if p.name.endswith("_live.json") and p.name[:10] in finals:
+                continue
+            d = _json(p) or {}
+            trades += d.get("trades", []) or []
+    except Exception:
+        pass
+    if not trades:
+        return "0 筆(累積中)"
+    pn = [(_fnum(t.get("net_pnl", t.get("pnl"))) or 0) for t in trades]
+    wins = [x for x in pn if x > 0]
+    gp = sum(wins); gl = -sum(x for x in pn if x < 0)
+    pf = (gp / gl) if gl > 0 else float("inf")
+    return f"{len(pn)} 筆 淨 {sum(pn):+,.0f} 元 勝 {len(wins)}/{len(pn)} PF {pf:.2f}"
+
+
+def _policy_block():
+    """三政策真 tick 戰況表(2026-08-26 user 拍板:紙上 OHLC 帳停更、全真 tick 重新累積)。"""
+    return "\n".join([
+        "## 🎯 三政策真 tick 戰況(同一 chips 訊號、三種濾法;真實成交含滑價/手續費)",
+        "| 政策 | 引擎(起算) | 真 tick 累積 | 目前 |",
+        "|---|---|---|---|",
+        f"| A 全做(基準) | chips_exec(06-09~07-16、08-26 復跑) | {_tick_tape_stats('chips_exec')} | {_exec_pos('chips_exec')} |",
+        f"| B 同向跳 | wave_exec(06-18 起) | {_tick_tape_stats('wave_exec')} | {_exec_pos('wave_exec')} |",
+        f"| C 只逆向 | wave_exec_c(08-27 起) | {_tick_tape_stats('wave_exec_c')} | {_exec_pos('wave_exec_c')} |",
+        "",
+        "> 舊 OHLC 紙上對照(A22/B13/C7 筆,至 2026-08-26)已封存:本機 wave_fade_log.csv、",
+        "> chips decisions.csv 累積段。判準:真 tick ~60 筆再比,中途不改門檻。",
+    ])
+
+
+def _night_tick_block():
+    """夜盤變體 B 真 tick 段(2026-08-26 由紙上 tape 升級;night_b_exec 引擎)。"""
+    return "\n".join([
+        "## 🌙 夜盤變體 B(真 tick,2026-08-26 起;夜 18:36 進、隔日 13:30 平、−2% 硬停全程有效)",
+        f"- night_b_exec 累積:{_tick_tape_stats('night_b_exec')}",
+        f"- 目前:{_exec_pos('night_b_exec')}",
+        "- 紙上 tape(19 筆 PF 1.14,至 2026-08-25)封存於 night_tape.csv;真 tick 重新累積,判準照 ~60 筆。",
+    ])
+
+
 def write_chips():
     sig = _json(CHIPS / "next_signal.json") or {}
     hist = _rows(CHIPS / "history.csv")
-    tape = _rows(CHIPS / "decisions.csv")
     cur = hist[-1] if hist else {}
     prev = hist[-2] if len(hist) >= 2 else {}
     d_cur, d_prev = cur.get("date", "最新"), prev.get("date", "前一日")
     zf, zf_txt = _zread(sig.get("z_flow"))
     zl, zl_txt = _zread(sig.get("z_lt"))
-    today_trade = [r for r in tape if str(r.get("trade_date", ""))[:10] == TODAY]
 
     L = [
         "---",
@@ -207,24 +254,11 @@ def write_chips():
         f"| z_lt(大戶) | {zl} | {zl_txt} |",
         f"| **combo(合成)** | **{sig.get('combo','?')}** | (z_flow+z_lt)/2;>+0.5做多 / <−0.5做空 / 中間空手 |",
         "",
-        "## 今日成交",
-    ]
-    if today_trade:
-        for r in today_trade:
-            L.append(f"- {r.get('side','')} 進 {r.get('entry','')} → 出 {r.get('exit','')} "
-                     f"**{_fnum(r.get('pnl')) or 0:+,.0f} 元** {r.get('exit_reason','')}")
-    else:
-        L.append("- 無（空手或非交易日）")
-    L += [
+        _policy_block(),
         "",
-        f"## 累積 tape（小台 pv50、固定 1 口、期間 {_tape_period(tape, 'trade_date')}）\n- {_tape_stats(tape)}",
+        _night_tick_block(),
     ]
-    _nb = _night_block(tape)
-    if _nb:
-        L += ["", _nb]
     L += [
-        "",
-        f"## 真 tick 執行（chips_exec）\n- {_exec_pos('chips_exec')}",
         "",
         "## 📖 名詞解釋",
         "- **外資淨OI**:外資台指期 多單−空單。負=整體偏空。這是「水位」。",

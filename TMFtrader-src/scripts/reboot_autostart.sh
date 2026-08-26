@@ -14,8 +14,12 @@ LOGDIR=/home/xx/TMFtrader-src/data/logs
 mkdir -p "$LOGDIR"
 sleep 120                                   # 等網路/系統就緒(永豐 login 需穩定網路 + 時鐘同步)
 cd /home/xx/TMFtrader-src || exit 1
+# 2026-08-26 加:wave_exec_c(政策C真tick)、night_b(夜盤變體B真tick;開機重啟時若有過夜倉,
+#   引擎持倉恢復 + entered marker 防重進,任何時間跑都安全)。
 for s in start_chips_exec_paper \
-         start_wave_exec_paper; do
+         start_wave_exec_paper \
+         start_wave_exec_c_paper \
+         start_night_b_paper; do
   echo "[$(date '+%F %T')] @reboot autostart -> $s"
   bash "scripts/$s.sh"
   sleep 20                                  # 錯開連線登入尖峰

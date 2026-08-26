@@ -237,6 +237,17 @@ def main():
         decA=decA, decB=decB, decC=decC, asof=str(asof)),
         ensure_ascii=False, indent=2), encoding="utf-8")
 
+    # 政策 C 變體訊號(2026-08-26 三政策全真 tick):同一份決策、side 取 decC,
+    # 給 wave_exec_c 引擎(launcher WAVE_SIGNAL_DIR=data/wave_fade_c)讀。
+    c_side = "long" if decC == 1 else ("short" if decC == -1 else "flat")
+    c_dir = ROOT / "data" / "wave_fade_c"
+    c_dir.mkdir(parents=True, exist_ok=True)
+    (c_dir / "next_signal.json").write_text(json.dumps(dict(
+        trade_date=entry, side=c_side, policy="C", combo=round(combo, 3),
+        combo_dir=side, wave_dir=(wd if wd is not None else None), c1_dir=c1,
+        decA=decA, decB=decB, decC=decC, asof=str(asof)),
+        ensure_ascii=False, indent=2), encoding="utf-8")
+
     row = dict(signal_date=sig or "", entry_date=entry, combo=round(combo, 3), combo_dir=side,
                wave_dir=("" if wd is None else wd), c1_dir=c1, decA=decA, decB=decB, decC=decC,
                policy=POLICY, asof=str(asof), status="pending")

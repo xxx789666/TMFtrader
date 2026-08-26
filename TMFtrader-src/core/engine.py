@@ -71,6 +71,7 @@ from strategy.night_orb import NightORBStrategy
 from strategy.chips_exec import ChipsExecStrategy
 from strategy.maxpain_exec import MaxPainExecStrategy
 from strategy.wave_exec import WaveExecStrategy
+from strategy.night_b_exec import NightBExecStrategy
 from strategy.astruct import AStructStrategy
 from strategy.astruct_nightgate import AStructNightgateStrategy
 from strategy.filters import MarketRegime, SessionManager, SessionPhase
@@ -297,6 +298,28 @@ def _create_strategy(strategy_type: str) -> BaseStrategy:
             session_start=(8, 45),   # 08:45=日盤真開盤;08:30-08:45 是試撮(不可成交,2026-06-12 漏單教訓)
             entry_window_end=(9, 30),
             force_close=(13, 30),
+        )
+    if strategy_type == "wave_exec_c":
+        # 政策 C(只逆向)變體(2026-08-26 user 拍板三政策全真 tick):同 WaveExecStrategy,
+        # 訊號檔由 launcher 以 WAVE_SIGNAL_DIR=data/wave_fade_c 切換(producer 寫兩份)。
+        # 參數與 wave_exec 完全一致;差異只在訊號內容(decC)。
+        return WaveExecStrategy(
+            stop_pct=0.02,
+            point_value=10.0,
+            session_start=(8, 45),
+            entry_window_end=(9, 30),
+            force_close=(13, 30),
+        )
+    if strategy_type == "night_b_exec":
+        # chips 夜盤變體 B 真 tick 執行載具(2026-08-26 user 拍板由紙上 tape 升級):
+        # 訊號夜 18:36-19:30 進 1 口、過夜、trade_date 當日 13:30 強平、−2% 引擎硬停全程有效
+        # (紙上版「夜盤停損未模擬」的洞自此補上)。TF=30、fixed1_paper、MXF。
+        return NightBExecStrategy(
+            stop_pct=0.02,
+            point_value=10.0,
+            entry_start=(18, 36),
+            entry_end=(19, 30),
+            settle_close=(13, 30),
         )
     if strategy_type == "astruct":
         # A_struct 日內早盤波浪 0-1-2 做多 + 日線 EMA250 牛熊濾網(lab 交接 2026-06-22)。
