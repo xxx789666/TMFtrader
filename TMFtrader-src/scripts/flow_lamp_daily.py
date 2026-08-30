@@ -194,7 +194,10 @@ def main():
                     z1 = (v1 - mus.iloc[0]) / sds.iloc[0]
                     z2 = (v2 - mus.iloc[1]) / sds.iloc[1]
                     z3 = (v3 - mus.iloc[2]) / sds.iloc[2]
-                    f.write(f"{d},{v1!r},{v2!r},{v3!r},{z1!r},{z2!r},{z3!r}\n")
+                    # float() 拆 numpy 標量:z 是 pandas 算的 np.float64,直接 !r 會把
+                    # "np.float64(...)" 字串寫進 CSV(2026-08-26~28 三列踩過,已修)
+                    f.write(f"{d},{v1!r},{v2!r},{v3!r},"
+                            f"{float(z1)!r},{float(z2)!r},{float(z3)!r}\n")
                     appended.append(d)
                     print(f"  {d}: append f1={v1:+.6f} f2={v2:+.6f} f3={v3:+.6f}")
     if not appended:
