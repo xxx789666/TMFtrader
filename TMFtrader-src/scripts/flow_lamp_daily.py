@@ -253,6 +253,14 @@ def main():
     else:
         print(f"[warn] 今日報告不存在({md})→ 燈訊只留 forward log")
 
+    # forward 自我說明報告(2026-08-30 user 指示:來源/新鮮度/×chips事件帶/×paper 對照)
+    try:
+        r2 = subprocess.run([sys.executable, str(ROOT / "scripts" / "flow_lamp_forward_report.py")],
+                            cwd=str(ROOT), capture_output=True, text=True, timeout=120)
+        print((r2.stdout or "").strip() or f"[warn] forward_report rc={r2.returncode}")
+    except Exception as e:
+        print(f"[warn] forward_report 失敗(不影響燈本體): {e}")
+
 
 if __name__ == "__main__":
     main()
