@@ -5,6 +5,13 @@
 (decisions.csv,|z_lt|>0.5;主判準素材) ④燈 × chips_exec 真tick paper 分組對照。
 由 flow_lamp_daily.py 於每日 22:00 燈跑完後呼叫;本機 pull 腳本 18:50 隔日拉走。
 純讀取+寫一個 MD;不下單、不改任何判準。
+
+2026-08-30 盲化改造(lab 交接單 vps_handoff_lamp_blinding_2026_08_30,使用者已簽):
+門檻達成前 ③④ 只印計數與 K1/K2 機械否證旗標(布林,禁金額);每筆隔日報酬、亮/暗均
+報酬、paper 損益、PF 一律不印。①② 照舊。另落地事件 tape csv(開獎腳本輸入):
+ret=隔日 open→close 原始報酬(帶號未調整,取自 history.csv;decisions.csv 的 ret_pct
+是含 −2% 停損的方向調整交易報酬,口徑不同,不得混用)。內部仍計算亮/暗累積和以判
+旗標,但**不得寫進報告、stdout 或 TG**。
 """
 import json
 import re
@@ -16,10 +23,20 @@ ROOT = Path(__file__).resolve().parent.parent
 FWD = ROOT / "data" / "flow" / "tailwind_lamp_forward_log.txt"
 FEAT = ROOT / "data" / "flow" / "flow_hmm_feature_table.csv"
 DEC = ROOT / "data" / "chips_combo" / "decisions.csv"
+HIST = ROOT / "data" / "chips_combo" / "history.csv"
 PAPER = ROOT / "data" / "paper" / "chips_exec" / "performance" / "daily"
 OUT = ROOT / "data" / "flow" / "tailwind_forward_report.md"
+TAPE_OUT = ROOT / "data" / "flow" / "tailwind_lamp_event_tape.csv"
 START = "2026-08-26"          # forward 起算日(凍結)
 EVENT_THR = 0.5               # 事件定義 |z_lt|>0.5(驗收判準原文)
+FLAG_MIN_N = 10               # K1/K2 旗標最小樣本(交接單 §二)
+
+
+def flag_text(vals):
+    """K1/K2 機械否證旗標:只回布林三值,金額不外流。"""
+    if len(vals) < FLAG_MIN_N:
+        return f"樣本未足(n<{FLAG_MIN_N})"
+    return "命中" if sum(vals) < 0 else "未命中"
 
 sys.stdout.reconfigure(encoding="utf-8")
 
@@ -60,12 +77,6 @@ def paper_trades_since(start):
     return rows
 
 
-def pf(vals):
-    w = sum(v for v in vals if v > 0)
-    l = -sum(v for v in vals if v <= 0)
-    return (w / l) if l > 0 else float("inf")
-
-
 def main():
     import csv
     states = lamp_states()
@@ -98,8 +109,18 @@ def main():
           "  近三日 max|diff|=7.18e-13(逐位一致=零漂移)。",
           ""]
 
-    # ── ③ 燈 × chips_combo 事件帶(主判準素材)──
-    ev_lit, ev_dark, ev_rows = [], [], []
+    # ── ③ 燈 × chips_combo 事件帶(主判準素材;盲化=只印計數+旗標)──
+    # 隔日 open→close 原始報酬(開獎口徑);key=交易日
+    raw_ret = {}
+    if HIST.exists():
+        with open(HIST, encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                try:
+                    o, c = float(r["open"]), float(r["close"])
+                    raw_ret[r["date"]] = (c - o) / o
+                except (TypeError, ValueError, KeyError):
+                    continue
+    ev_lit, ev_dark, ev_rows, tape_rows = [], [], [], []
     if DEC.exists():
         with open(DEC, encoding="utf-8") as f:
             for r in csv.DictReader(f):
@@ -108,52 +129,62 @@ def main():
                     continue
                 try:
                     zlt = float(r.get("z_lt", ""))
-                    ret = float(r.get("ret_pct", ""))
+                    ret_adj = float(r.get("ret_pct", ""))
                 except (TypeError, ValueError):
                     continue
                 if abs(zlt) <= EVENT_THR:
                     continue
                 st = states.get(sd)
                 lamp = ("🟢亮" if st[1] else "⚪暗") if st else "無燈值"
-                ev_rows.append(f"| {td} | {sd} | {r.get('side','?')} | z_lt {zlt:+.2f} | {lamp} | {ret:+.2f}% |")
+                # 盲化:結果欄不進報告,只留訊號側
+                ev_rows.append(f"| {td} | {sd} | {r.get('side','?')} | z_lt {zlt:+.2f} | {lamp} |")
                 if st:
-                    (ev_lit if st[1] else ev_dark).append(ret)
+                    (ev_lit if st[1] else ev_dark).append(ret_adj)  # K1 內部用,不印
+                rr = raw_ret.get(td)
+                tape_rows.append([sd, td, f"{zlt:.3f}",
+                                  f"{rr:.6f}" if rr is not None else "",
+                                  f"{float(st[0])/100:.4f}" if st else ""])
     n_ev = len(ev_lit) + len(ev_dark)
-    L += ["## ③ 燈 × chips_combo 事件帶(驗收主判準素材;OHLC 口徑=事件方向對錯,非損益宣稱)", "",
+    L += ["## ③ 燈 × chips_combo 事件帶(驗收素材;門檻達成前只印計數)", "",
           "事件=chips 長期大戶 z(|z_lt|>0.5)的訊號日;燈取**訊號日晚上 22:00** 的讀值(隔日開盤前可得=因果)。", "",
-          "| 交易日 | 訊號日 | 方向 | 事件強度 | 前夜燈 | 隔日報酬 |",
-          "|---|---|---|---|---|---|"] + (ev_rows or ["| (尚無事件) | | | | | |"])
+          "| 交易日 | 訊號日 | 方向 | 事件強度 | 前夜燈 |",
+          "|---|---|---|---|---|"] + (ev_rows or ["| (尚無事件) | | | | |"])
     L += ["",
-          f"- 累積事件 **{n_ev}/60** 筆(驗收門檻)。亮燈日 n={len(ev_lit)} 均報酬 "
-          f"{(sum(ev_lit)/len(ev_lit)) if ev_lit else 0:+.2f}%;暗燈日 n={len(ev_dark)} 均報酬 "
-          f"{(sum(ev_dark)/len(ev_dark)) if ev_dark else 0:+.2f}%。",
-          "- **驗收命題:亮燈日的事件報酬應優於暗燈日**(60 筆前任何數字都只是進度,不構成判定;"
-          "已知反例:6/24-8/24 回測段放行單淨虧,延續即否證)。",
+          f"- 累積事件 **{n_ev}/60** 筆(驗收門檻;另需 ≥6 個月,最早 2027-02-26 之後)。",
+          f"- 亮燈日事件 {len(ev_lit)} 筆、暗燈日事件 {len(ev_dark)} 筆(計數,無金額)。",
+          f"- 已知反例追蹤 K1:{flag_text(ev_lit)}。",
+          "- 主判=P̄ 加權 IC(permutation,門檻無關);亮/暗拆分僅輔助描述,不構成判定。",
           ""]
 
-    # ── ④ 燈 × chips_exec 真tick paper 對照 ──
+    # 事件 tape(機器檔,開獎腳本輸入;不印進報告)
+    TAPE_OUT.parent.mkdir(parents=True, exist_ok=True)
+    with open(TAPE_OUT, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["date", "trade_date", "sig", "ret", "lamp_p"])
+        w.writerows(tape_rows)
+
+    # ── ④ 燈 × chips_exec 真tick paper 對照(盲化=只印筆數+旗標)──
     tr = paper_trades_since(START)
     tr_lit, tr_dark, tr_rows = [], [], []
     for d, side, pnl in tr:
         prevs = [k for k in states if k < d]
         st = states.get(max(prevs)) if prevs else None
         lamp = ("🟢亮" if st[1] else "⚪暗") if st else "無燈值"
-        tr_rows.append(f"| {d} | {side} | {pnl:+,.0f} | {lamp} |")
+        tr_rows.append(f"| {d} | {side} | {lamp} |")
         if st:
-            (tr_lit if st[1] else tr_dark).append(pnl)
-    L += ["## ④ 燈 × chips_exec 真 tick paper(PAPER 實測紀錄;含手續費)", "",
-          "| 交易日 | 方向 | 淨損益(元) | 進場前夜燈 |",
-          "|---|---|---|---|"] + (tr_rows or ["| (尚無成交) | | | |"])
-    if tr_lit or tr_dark:
-        L += ["",
-              f"- 亮燈日:n={len(tr_lit)} 淨 {sum(tr_lit):+,.0f} PF={pf(tr_lit):.2f};"
-              f"暗燈日:n={len(tr_dark)} 淨 {sum(tr_dark):+,.0f} PF={pf(tr_dark):.2f}。"]
+            (tr_lit if st[1] else tr_dark).append(pnl)  # K2 內部用,不印
+    L += ["## ④ 燈 × chips_exec 真 tick paper(PAPER 實測紀錄;門檻達成前只印筆數)", "",
+          "| 交易日 | 方向 | 進場前夜燈 |",
+          "|---|---|---|"] + (tr_rows or ["| (尚無成交) | | |"])
+    L += ["",
+          f"- 亮燈日成交 {len(tr_lit)} 筆、暗燈日成交 {len(tr_dark)} 筆(計數,無金額)。",
+          f"- 已知反例追蹤 K2:{flag_text(tr_lit)}。"]
     L += ["", "---",
-          "說明:③=驗收正式判準的事件帶(量「燈能不能分開好壞訊號日」);④=同一策略真 tick paper 的",
-          "實測對照(量到真滑價/手續費,但 n 累積較慢)。兩帶都以 ~60 事件為判定線,中途不改門檻。"]
+          "說明:③=驗收素材的事件帶;④=同一策略真 tick paper 的對照。門檻達成前兩帶只印計數與",
+          "K1/K2 旗標(盲化,lab 交接單 2026-08-30,使用者已簽);開獎由 lab 腳本一生一次執行。"]
 
     OUT.write_text("\n".join(L) + "\n", encoding="utf-8")
-    print(f"[forward_report] 寫 {OUT}(事件 {n_ev} 筆、paper 成交 {len(tr)} 筆)")
+    print(f"[forward_report] 寫 {OUT}(事件 {n_ev} 筆、paper 成交 {len(tr)} 筆、tape {len(tape_rows)} 列)")
 
 
 if __name__ == "__main__":
