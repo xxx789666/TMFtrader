@@ -754,8 +754,12 @@ class TradingEngine:
                                 f" 但無本策略持倉鎖(holder={_holder}) → 判定 user 手動倉,不領養不掛 SL/TP;"
                                 f" halt 新進場,歸位後自動恢復")
                             try:
-                                tg(f"🖐️ [{self._position_owner(inst)}] 開機偵測無主部位({inst} x{rp['quantity']})"
-                                   f" → 判定手動倉:不領養、暫停自動進場;你平倉歸位後自動恢復,無需動作")
+                                # 2026-08-30 交接單v2乙-B:措辭要說出真正代價(07-29 訊號窗即因 halt 全錯過)
+                                tg(f"🖐️ [{self._position_owner(inst)}] 開機偵測無主部位"
+                                   f"({inst} x{rp['quantity']} @ {rp['price']}) → 判定你的手動倉:"
+                                   f"不領養、不掛 SL/TP。\n"
+                                   f"⚠️ 本策略自動進場已暫停,直到這口平倉歸位為止 — 期間的進場訊號"
+                                   f"會全部錯過。平倉後自動恢復,不用改設定")
                             except Exception:
                                 pass
                             continue
@@ -1614,7 +1618,8 @@ class TradingEngine:
             if _t.time() - self._reconcile_last_alert.get(instrument, 0.0) > 900:
                 self._reconcile_last_alert[instrument] = _t.time()
                 tg(f"🖐️ [{instrument}] 偵測外部手動部位(券商 {_net:+d} 口 vs 引擎 {_own:+d})\n"
-                   f"已暫停自動進場;等你交易結束(帳戶歸位)後自動恢復,無需任何動作")
+                   f"⚠️ 本策略自動進場已暫停,直到帳戶歸位為止 — 期間的進場訊號會全部錯過;"
+                   f"歸位後自動恢復(本次訊號若仍成立會補進)")
             _strat = self.pipelines[instrument].strategy
             if getattr(_strat, "_traded", False):
                 _strat._traded = False       # 同 lock 擋下的處理:歸位後訊號仍成立可進
@@ -2176,8 +2181,8 @@ class TradingEngine:
                         tg(
                             f"🖐️ [RECONCILE] {inst} 偵測外部部位\n"
                             f"引擎={engine_side}×{engine_qty} 券商={real_side}×{real_qty}\n"
-                            f"已暫停自動進場。若是你手動交易 → 無需動作,交易結束(歸位)後自動恢復;"
-                            f"若非你所為 → 查 rogue script/其他引擎"
+                            f"⚠️ 本策略自動進場已暫停,直到帳戶歸位為止 — 期間的進場訊號會全部錯過。\n"
+                            f"若是你手動交易 → 平倉歸位後自動恢復;若非你所為 → 查 rogue script/其他引擎"
                         )
                 else:
                     # ── 一致（含預期的跨策略持倉）→ 解除 halt（人工歸位後自動恢復進場）

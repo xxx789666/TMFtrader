@@ -82,15 +82,48 @@ def _maxpain_lots(rows):
     return f"1-2 口含加碼（{two}/{len(rows)} 筆有加碼到 2 口）" if rows else "1-2 口含加碼"
 
 
-def _exec_pos(owner):
-    """引擎真 tick 持倉:有倉時給精確進場時間(到秒)/價/口數(取自引擎持倉鎖)。"""
-    p = ROOT / "data" / "paper" / owner / "active_position.json"
-    d = _json(p)
-    if not d or d.get("owner") != owner:
-        return "無倉"
+def _lock_desc(path, owner):
+    """單一鎖檔 → 描述。鐵律(交接單v2乙-C):「沒讀到」與「確定空手」不准共用同一字串——
+    檔不存在=「無鎖檔」(未讀取到的路徑,不是部位狀態);讀到才描述內容。"""
+    if not path.exists():
+        return "無鎖檔"
+    d = _json(path)
+    if not d:
+        return "鎖檔存在但讀取失敗"
+    if d.get("owner") != owner:
+        return f"鎖屬他策略({d.get('owner', '?')})"
     side = d.get("side", "?"); qty = d.get("quantity", "?"); px = d.get("entry_price", 0)
     et = str(d.get("entry_time", ""))[:19].replace("T", " ")
     return f"持倉 {side} x{qty} @ {px:.0f}(進場 {et}、{d.get('instrument','MXF')})"
+
+
+def _exec_pos(owner):
+    """引擎真 tick 持倉(paper 鎖):有倉時給精確進場時間/價/口數。"""
+    return _lock_desc(ROOT / "data" / "paper" / owner / "active_position.json", owner)
+
+
+def _engine_mode(owner):
+    """依 crontab 判定引擎模式;讀不到 → 「不明」(不得猜,2026-07-03~08-28 教訓)。"""
+    try:
+        import subprocess
+        txt = subprocess.run(["crontab", "-l"], capture_output=True, text=True,
+                             timeout=10).stdout
+    except Exception:
+        return "不明"
+    live = paper = None
+    for ln in txt.splitlines():
+        s = ln.strip()
+        if f"start_{owner}_live" in s:
+            live = (live is True) or not s.startswith("#")
+        if f"start_{owner}_paper" in s:
+            paper = (paper is True) or not s.startswith("#")
+    if live:
+        return "live"
+    if paper:
+        return "paper"
+    if live is False or paper is False:
+        return "已暫停"
+    return "不明"
 
 
 def _verdict(combo):
@@ -396,24 +429,54 @@ def write_maxpain():
                      f"**{_fnum(r.get('pnl')) or 0:+,.0f} 元** {r.get('exit_reason','')}（{r.get('lots','')}口）")
     else:
         L.append("- 無（未到結算日或空手）")
-    # 引擎無倉時再看手動重進場管理器(mxf_manual_reentry, owner=maxpain_manual)——
-    # 2026-07-06 盲點:事故後真倉在 manual_reentry_state.json、日報只讀 paper 路徑誤報 divergence
-    _mx_exec = _exec_pos('maxpain_exec')
-    if _mx_exec == "無倉":
-        _mr = _json(ROOT / "data" / "manual_reentry_state.json")
-        if _mr and _mr.get("phase") == "holding":
-            _mx_exec = (f"持倉 long x{_mr.get('filled_qty','?')} @ {_fnum(_mr.get('avg_px')) or 0:,.0f}"
-                        f"（手動重進場 maxpain_manual、停損 {_fnum(_mr.get('stop_px')) or 0:,.0f}）")
-        elif _mr and _mr.get("phase") == "seeking":
-            _mx_exec = "手動重進場求成交中（maxpain_manual）"
+    # ── 真 tick 執行段(2026-08-30 交接單v2乙-C 改版)──────────────────────────
+    # 舊版寫死讀 paper 鎖且「檔不存在→無倉」→ 07-03 轉 live 後 41 個日報日結構上
+    # 不可能顯示 live 持倉,「沒讀到」被渲染成「無倉」。改:兩鎖都讀、分開印、模式不猜。
+    _mx_mode = _engine_mode("maxpain_exec")
+    _mx_live = _lock_desc(ROOT / "data" / "active_position.json", "maxpain_exec")
+    _mx_paper = _lock_desc(ROOT / "data" / "paper" / "maxpain_exec" / "active_position.json",
+                           "maxpain_exec")
+    _mode_disp = {
+        "live": "live（依 crontab live 行啟用）",
+        "paper": "paper（依 crontab paper 行啟用）",
+        "已暫停": "已暫停（crontab live/paper 行均註解,引擎不會啟動）",
+        "不明": "模式不明,兩鎖並列（讀不到 crontab,不得猜）",
+    }[_mx_mode]
+    # 第三來源:手動重進場管理器(mxf_manual_reentry, owner=maxpain_manual)。
+    # 2026-07-06 盲點:事故後真倉在 manual_reentry_state.json。它不是 live 鎖,只是後備。
+    _mr = _json(ROOT / "data" / "manual_reentry_state.json")
+    _mr_line = ""
+    if _mr and _mr.get("phase") == "holding":
+        _mr_line = (f"\n- 第三來源（manual_reentry,非 live 鎖）:持倉 long"
+                    f" x{_mr.get('filled_qty','?')} @ {_fnum(_mr.get('avg_px')) or 0:,.0f}"
+                    f"（停損 {_fnum(_mr.get('stop_px')) or 0:,.0f}）")
+    elif _mr and _mr.get("phase") == "seeking":
+        _mr_line = "\n- 第三來源（manual_reentry,非 live 鎖）:求成交中"
+    # divergence:只有「模式對應那把鎖」確定為空(讀到鎖、內容非本策略持倉)才准掛;
+    # 無鎖檔 / 模式不明或已暫停 / 讀取失敗 → 掛「不可測」,不掛 divergence。
+    _flag = ""
+    if state == "open":
+        _mode_lock = {"live": _mx_live, "paper": _mx_paper}.get(_mx_mode)
+        if _mode_lock is None:
+            _flag = ("\n- ⚠️ 紙上帳持倉中、引擎狀態**不可測**"
+                     f"（模式={_mx_mode},無可對應的鎖）→ 不掛 divergence")
+        elif _mode_lock == "無鎖檔" or _mode_lock == "鎖檔存在但讀取失敗":
+            _flag = ("\n- ⚠️ 紙上帳持倉中、模式鎖**不可測**"
+                     f"（{_mode_lock};「沒讀到」≠「空手」）→ 不掛 divergence")
+        elif _mode_lock.startswith("持倉"):
+            _flag = ""
+        else:
+            _flag = ("\n- ⚠️ 紙上帳持倉中、模式鎖確定無本策略持倉"
+                     f"（{_mode_lock}）→ divergence（對帳時標註）")
     L += [
         "",
         f"## 累積 tape（小台 pv50、{_maxpain_lots(tape)}、期間 {_tape_period(tape, 'signal_t')}）\n- {_tape_stats(tape)}"
         + _crash_dualcol(tape),
         "",
-        f"## 真 tick 執行（maxpain_exec）\n- {_mx_exec}"
-        + ("\n- ⚠️ 紙上帳持倉中、但引擎無倉 → divergence(對帳時標註;如基礎設施事故/漏單)"
-           if state == "open" and _mx_exec == "無倉" else ""),
+        f"## 真 tick 執行（maxpain_exec）\n- 模式:{_mode_disp}"
+        f"\n- live 鎖:{_mx_live}"
+        f"\n- paper 鎖:{_mx_paper}"
+        + _mr_line + _flag,
         "",
         "## 📖 名詞解釋",
         "- **Max Pain(最大痛點)**:由選擇權各履約價的買權/賣權未平倉量(OI)算出——指數若結算在這個價,"
