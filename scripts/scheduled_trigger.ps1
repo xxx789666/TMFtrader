@@ -15,7 +15,20 @@ $LogDir      = Join-Path $PSScriptRoot "logs"
 $null        = New-Item -ItemType Directory -Force -Path $LogDir
 $Stamp       = Get-Date -Format "yyyyMMdd_HHmmss"
 $LogFile     = Join-Path $LogDir ("scheduled_" + $Stamp + ".log")
-$EnvFile     = Join-Path $ProjectRoot (Join-Path "TMFtrader-src" ".env")
+
+# Telegram credential lookup chain (fixed 2026-09-12).
+# BUG HISTORY: this used to be a single hardcoded path,
+#   $ProjectRoot\TMFtrader-src\.env
+# which does NOT exist on this machine. Send-TG bailed out on its very first
+# line, so three consecutive weekly-review failures (2026-08-29 / 09-05 / 09-12,
+# all "NIM 410 model end of life") produced zero alerts. It was only found when
+# the task_result_sentinel scheduled task flagged LastTaskResult=1.
+# Order matters: first file that yields BOTH token and chat id wins.
+$EnvCandidates = @(
+  (Join-Path $PSScriptRoot ".env.sync"),
+  (Join-Path $ProjectRoot (Join-Path "TMFtrader-src" ".env")),
+  "C:\Users\xx\Desktop\tmf-strategy-lab-main\tmf-strategy-lab-main\.env"
+)
 
 function Write-Log($msg) {
   $line = "{0} {1}" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $msg
@@ -23,14 +36,32 @@ function Write-Log($msg) {
   Write-Output $line
 }
 
+function Get-TGCreds {
+  foreach ($f in $EnvCandidates) {
+    if (-not (Test-Path -LiteralPath $f)) { continue }
+    $lines = Get-Content -LiteralPath $f -Encoding utf8
+    $token = ($lines | Where-Object { $_ -match "^(TG_BOT_TOKEN|TELEGRAM_BOT_TOKEN)=" } | Select-Object -First 1) -replace "^[^=]+=", ""
+    $chat  = ($lines | Where-Object { $_ -match "^(TG_CHAT_ID|TELEGRAM_CHAT_ID)=" }     | Select-Object -First 1) -replace "^[^=]+=", ""
+    $token = $token.Trim().Trim('"').Trim("'")
+    $chat  = $chat.Trim().Trim('"').Trim("'")
+    if ($token -and $chat) { return @{ token = $token; chat = $chat; src = $f } }
+  }
+  return $null
+}
+
 function Send-TG($text) {
-  if (-not (Test-Path -LiteralPath $EnvFile)) { return }
-  $token = (Get-Content -LiteralPath $EnvFile -Encoding utf8 | Where-Object { $_ -match "^(TG_BOT_TOKEN|TELEGRAM_BOT_TOKEN)=" } | Select-Object -First 1) -replace "^[^=]+=", ""
-  $chat  = (Get-Content -LiteralPath $EnvFile -Encoding utf8 | Where-Object { $_ -match "^(TG_CHAT_ID|TELEGRAM_CHAT_ID)=" }   | Select-Object -First 1) -replace "^[^=]+=", ""
-  if (-not ($token -and $chat)) { return }
+  $c = Get-TGCreds
+  if (-not $c) {
+    # Fail loud in the log. The task still exits non-zero, so task_result_sentinel
+    # will surface it even though this alert path is dead.
+    Write-Log "TG ALERT NOT SENT: no TG_BOT_TOKEN/TG_CHAT_ID found in any of:"
+    foreach ($f in $EnvCandidates) { Write-Log ("  - " + $f) }
+    return
+  }
   try {
-    $body = @{ chat_id = $chat; text = $text }
-    Invoke-RestMethod -Uri ("https://api.telegram.org/bot" + $token + "/sendMessage") -Method Post -Body $body -TimeoutSec 10 | Out-Null
+    $body = @{ chat_id = $c.chat; text = $text }
+    Invoke-RestMethod -Uri ("https://api.telegram.org/bot" + $c.token + "/sendMessage") -Method Post -Body $body -TimeoutSec 10 | Out-Null
+    Write-Log ("TG alert sent (creds from " + $c.src + ")")
   } catch {
     Write-Log ("TG send failed: " + $_)
   }

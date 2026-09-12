@@ -194,9 +194,17 @@ $FACTS
 數字一律以事實為準、禁止自行計算或更改。只輸出 JSON。
 EOF
 
-REVIEW_MODEL="${REVIEW_MODEL:-nvidia/llama-3.3-nemotron-super-49b-v1}"
+# 模型清單(2026-09-12 重選)。舊的 nvidia/llama-3.3-nemotron-super-49b-v1 已被
+# NVIDIA 下架(410 Gone, end of life 2026-08-26),害週度覆盤靜默失敗三週
+# (8/29、9/5、9/12,最後一次成功 8/22)。當時沒有 fallback,一次非 200 就整個 exit 1。
+#
+# 這批是 2026-09-12 對本帳號實測「打得通 + 真的吐得出正確繁中 JSON」的結果。
+# NIM 目錄列 82 支,但這個免費帳號多數回 404 no-access,能打通的只有 8 支,
+# 其中 nemotron-3.5-lightning / muse-glimmer 會把 token 全燒在 thinking 上吐不完 JSON,
+# nano-omni 會幻覺(事實是 BUY 它寫成空單),所以都排除。
+# 依序 fallback,前一支失敗(非 200 / 空回應 / JSON 解不出來)就換下一支。
+REVIEW_MODELS="${REVIEW_MODELS:-${REVIEW_MODEL:-nvidia/nemotron-3-super-120b-a12b nvidia/nemotron-3-ultra-550b-a55b openai/gpt-oss-20b}}"
 REVIEW_PROVIDER="${REVIEW_PROVIDER:-nvidia}"
-log "  Model: $REVIEW_MODEL via direct NIM API（不繞 Hermes）"
 
 # 直接打 NIM（避免 Hermes 對純文字摘要任務常 empty response 的問題）
 # 之後若要 agent 自主流程（跨 session 記憶、skill evolution）再走 hermes chat
@@ -210,27 +218,63 @@ fi
 
 REPORT_FILE=$(mktemp)
 REQ_FILE=$(mktemp)
-python3 -c "
-import json, sys
+REVIEW_MODEL_USED=""
+
+for _m in $REVIEW_MODELS; do
+  log "  嘗試 model: $_m (direct NIM API,不繞 Hermes)"
+  # 關掉 reasoning:這幾支預設會思考,500~1500 token 全燒在 thinking 上、JSON 吐不完。
+  # nemotron-3 系列吃 chat_template_kwargs.thinking=false;gpt-oss 吃 reasoning_effort。
+  MODEL="$_m" python3 -c "
+import json, os
+model = os.environ['MODEL']
 prompt = '''$PROMPT'''
-print(json.dumps({
-  'model': '$REVIEW_MODEL',
+body = {
+  'model': model,
   'messages': [{'role':'user', 'content': prompt}],
   'temperature': 0.3,
-  'max_tokens': 500,
-}))
+  'max_tokens': 900,
+}
+if model.startswith('nvidia/nemotron-3'):
+    body['chat_template_kwargs'] = {'thinking': False}
+elif model.startswith('openai/gpt-oss'):
+    body['reasoning_effort'] = 'low'
+print(json.dumps(body))
 " > "$REQ_FILE"
 
-HTTP_CODE=$(curl -sS -o "$REPORT_FILE" -w '%{http_code}' \
-  https://integrate.api.nvidia.com/v1/chat/completions \
-  -H "Authorization: Bearer $NVIDIA_API_KEY" \
-  -H "Content-Type: application/json" \
-  --data-binary @"$REQ_FILE")
+  HTTP_CODE=$(curl -sS --max-time 180 -o "$REPORT_FILE" -w '%{http_code}' \
+    https://integrate.api.nvidia.com/v1/chat/completions \
+    -H "Authorization: Bearer $NVIDIA_API_KEY" \
+    -H "Content-Type: application/json" \
+    --data-binary @"$REQ_FILE") || HTTP_CODE="000"
 
-if [[ "$HTTP_CODE" != "200" ]]; then
-  log "  ❌ NIM 回應 $HTTP_CODE: $(cat $REPORT_FILE | head -c 300)"
+  if [[ "$HTTP_CODE" != "200" ]]; then
+    log "  ⚠️  $_m 回 $HTTP_CODE: $(head -c 200 "$REPORT_FILE")"
+    continue
+  fi
+  # 200 還不夠:reasoning 模型會回 200 但 content 是空的/沒有完整 JSON
+  if ! python3 -c "
+import json, re, sys
+r = json.load(open('$REPORT_FILE'))
+c = (r['choices'][0]['message'].get('content') or '').strip()
+m = re.search(r'\{.*\}', c, re.S)
+if not m: sys.exit(1)
+j = json.loads(m.group(0))
+sys.exit(0 if j.get('story') else 1)
+" 2>/dev/null; then
+    log "  ⚠️  $_m 回 200 但拿不到可解析的 JSON(多半是 thinking 吃光 token),換下一支"
+    continue
+  fi
+  REVIEW_MODEL_USED="$_m"
+  log "  ✅ 採用 $_m"
+  break
+done
+
+if [[ -z "$REVIEW_MODEL_USED" ]]; then
+  log "  ❌ 所有候選模型都失敗($REVIEW_MODELS)——多半是又被下架或帳號沒權限。"
+  log "     查目錄:curl -H 'Authorization: Bearer <key>' https://integrate.api.nvidia.com/v1/models"
   exit 1
 fi
+REVIEW_MODEL="$REVIEW_MODEL_USED"
 
 # 版面由 Python 固定組裝(數字優先用帳戶級 session_edge),LLM 只供 story/diagnosis/suggestions/confidence
 python3 <<PY >/tmp/_report.txt
