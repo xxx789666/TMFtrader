@@ -1287,7 +1287,7 @@ class TradingEngine:
             # 後 snapshot 已就緒、TF 照舊);走既有 _execute_entry(風控/鎖/冷卻全套用)。
             # 預設策略無 check_entry_tick → 跳過、零影響(同 check_scale/wf_record_tick 模式)。
             _ce = getattr(pipeline.strategy, "check_entry_tick", None)
-            if _ce:
+            if _ce and not self._non_trading_day_skip(instrument, "check_entry_tick"):
                 pipeline.snapshot.price = tick.price
                 pipeline.snapshot.timestamp = tick.datetime
                 try:
@@ -1412,7 +1412,7 @@ class TradingEngine:
                     })
 
         # 再檢查進場
-        if pos and pos.is_flat:
+        if pos and pos.is_flat and not self._non_trading_day_skip(instrument, "on_kbar"):
             entry_signal = pipeline.strategy.on_kbar(
                 kbar, pipeline.snapshot,
                 snapshot_5m=pipeline.snapshot_5m,
@@ -1454,6 +1454,31 @@ class TradingEngine:
         if holder is not None and holder != self._position_owner(instrument):
             return holder
         return None
+
+    def _non_trading_day_skip(self, instrument: str, hook: str) -> bool:
+        """非交易日 → True(呼叫端跳過策略進場 hook),每日每 hook 只記一行 log。
+
+        Why(2026-09-27 週日事故):常駐 exec 引擎(wave_exec / wave_exec_c / chips_exec)週五收盤後
+        不會被停掉,週末 WallClock 仍照時分推進,策略的 _entry_decision 在 08:45-09:30 照常跑 →
+        對著週五(還是休市日 09-25)的 next_signal.json 推「訊號疑似過期」+「空手」六則 TG。
+        既有的 _is_trading_day 守門只放在 _execute_entry(擋下單),擋不到策略層在下單之前
+        就發出的告警;launcher 的 market_holidays 守門也只在啟動當下看一次。
+        這裡把守門前移到 check_entry_tick / on_kbar 兩個進場 hook 之前:非交易日策略根本不被
+        呼叫,沒有訊號判讀、沒有告警、也沒有 decision 錄製;_execute_entry 的那道保留當第二層。
+        持倉管理(出場/停損/強平)不在這裡、不受影響。"""
+        if self._is_trading_day():
+            return False
+        from datetime import datetime, timedelta, timezone
+        today = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        tok = f"{today}|{instrument}|{hook}"
+        seen = getattr(self, "_ntd_logged", None)
+        if seen is None:
+            seen = self._ntd_logged = set()
+        if tok not in seen:
+            seen.add(tok)
+            self._ntd_logged = {t for t in seen if t.startswith(today)}   # 只留今天的,不無限長大
+            logger.info(f"[NonTradingDay] {instrument} 非交易日(週末/假日)→ 跳過 {hook},策略不判讀訊號、不推告警")
+        return True
 
     def _is_trading_day(self, now=None) -> bool:
         """當下是否屬於有效交易日(擋常駐引擎在週末/假日用陳舊/synth tick 誤進場)。
