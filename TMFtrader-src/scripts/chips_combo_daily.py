@@ -46,6 +46,47 @@ POINT_VALUE = 50.0   # 小台 MXF(2026-06-09 由微台 pv10 改小台;價格仍�
 LOTS = 1
 STOP_PCT = 0.02
 
+HOLIDAYS_FILE = Path(__file__).resolve().parent / "market_holidays.txt"
+MARKET_CLOSE = (13, 45)   # 日盤收盤;收盤後跑的話「今天」已經交易過,訊號要給下一個交易日
+
+
+def _holidays() -> set:
+    try:
+        return set(HOLIDAYS_FILE.read_text(encoding="utf-8", errors="ignore").split()) if HOLIDAYS_FILE.exists() else set()
+    except Exception:
+        return set()
+
+
+def next_trading_day(d: date, holidays: set | None = None) -> date:
+    """d 之後的第一個交易日(跳週末 + market_holidays.txt)。"""
+    hol = _holidays() if holidays is None else holidays
+    n = d + timedelta(days=1)
+    while n.weekday() >= 5 or n.isoformat() in hol:
+        n += timedelta(days=1)
+    return n
+
+
+def pick_trade_date(last_d: date, now: datetime, holidays: set | None = None) -> date:
+    """訊號的 trade_date(使用者 2026-09-29 裁定:沒新資料時 trade_date 一樣推到下一個交易日)。
+
+    舊規則 = 最後一筆資料日 + 1、只跳週末:連假後 FinMind/TAIFEX 沒新資料 → trade_date 停在假日
+    (09-24 資料 → 09-25 休市),09-29 開盤時 chips_exec 算出過期 4 天 → 三支執行載具全部跳單+告警。
+    新規則:
+      1. 從最後資料日往後找第一個交易日(跳週末 + 休市清單)。
+      2. 若那天已經過去(< 今天)→ 繼續往後推到 ≥ 今天。
+      3. 若推到的正好是今天、而現在已過收盤(13:45)→ 今天交易過了,再推一天。
+    早上開盤前補跑仍會給「今天」(不會吃掉當天的單);傍晚正常跑給明天;連假後給連假後第一個交易日。
+    資料本身是不是舊的,由 main() 的 stale 告警另外講,這裡只負責日期。"""
+    hol = _holidays() if holidays is None else holidays
+    today = now.date()
+    nxt = next_trading_day(last_d, hol)
+    while nxt < today:
+        nxt = next_trading_day(nxt, hol)
+    if nxt == today and (now.hour, now.minute) >= MARKET_CLOSE:
+        nxt = next_trading_day(nxt, hol)
+    return nxt
+
+
 FINMIND = "https://api.finmindtrade.com/api/v4/data"
 TAIFEX_LT = "https://www.taifex.com.tw/cht/3/largeTraderFutDown"
 TAIFEX_FUT = "https://www.taifex.com.tw/cht/3/futContractsDateDown"   # 三大法人-區分各期貨契約
@@ -392,12 +433,9 @@ def main():
     if cb:
         combo, zf, zl = cb
         side = side_of(combo)
-        # 下一「交易日」:跳週末(否則週五會寫週六、chips_exec 週一對不上日期跳單)。
-        # 國定假日無法預知 → chips_exec 端另有 ≤2 天容忍。
-        nxt_d = date.fromisoformat(rows[-1]["date"]) + timedelta(days=1)
-        while nxt_d.weekday() >= 5:
-            nxt_d += timedelta(days=1)
-        nxt = nxt_d.isoformat()
+        # 下一「交易日」:跳週末 + 休市清單;沒新資料(連假、資料源慢)時一樣推到下一個交易日,
+        # 不再停在最後資料日+1(2026-09-29 使用者裁定;見 pick_trade_date)。資料舊不舊由下面 stale 告警講。
+        nxt = pick_trade_date(date.fromisoformat(rows[-1]["date"]), datetime.now()).isoformat()
         SIGNAL.write_text(json.dumps(dict(trade_date=nxt, side=side, combo=round(combo, 3),
                                           z_flow=round(zf, 3), z_lt=round(zl, 3)), ensure_ascii=False, indent=2),
                           encoding="utf-8")
