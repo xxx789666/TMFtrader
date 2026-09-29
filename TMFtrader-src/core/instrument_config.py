@@ -31,12 +31,26 @@ INSTRUMENT_SPECS = {
         code="TMF",
         name="微型台指期貨",
         point_value=10.0,      # 1 點 = 10 元
-        margin=20600,          # 2026/02/26 期交所
-        maintenance_margin=15800,
+        margin=31800,          # 期交所現行（2026-06-18 查證、國票+統一期貨保證金表一致、標「近期調高」；前值 28900）
+        maintenance_margin=24400,
         commission=18.0,
         tax=7.0,
         strategy_type="breakout",
         default_initial_price=22000.0,
+    ),
+    # 小型台指（MXF/MTX、50 元/點 = TMF×5）。2026-06-08 起 4 支策略由 TMF 轉此標的（real live、非代理）。
+    # point_value=50 會在 engine 建策略後自動對齊 strategy.point_value 並把 max_loss_twd ×5（→20000）。
+    "MXF": InstrumentSpec(
+        code="MXF",
+        name="小型台指期貨",
+        point_value=50.0,      # 1 點 = 50 元
+        margin=159000,         # 期交所現行（2026-06-18 查證、國票+統一一致、標「近期調高」；= TMF×5；前值 144500；以永豐帳戶為準）
+        maintenance_margin=122000,
+        commission=18.0,
+        tax=7.0,
+        strategy_type="breakout",   # 實際由各 launcher 的 STRATEGY_TYPE env 覆寫
+        default_initial_price=22000.0,
+        shioaji_code="MXF",
     ),
     # (2026-05-29 lock-tmf-only) 移除舊 TMFN spec（shioaji_code=MXF）。
     # 夜盤 ORB 自 2026-05-20 起已直接用 TMF/TMFR1（見 night_orb.py），TMFN→MXF 映射不再使用。

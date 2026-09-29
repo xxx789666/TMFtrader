@@ -3,6 +3,7 @@ TMFtrader 日誌系統
 使用 loguru 提供彩色終端輸出 + 檔案日誌
 """
 
+import os
 import sys
 from pathlib import Path
 from loguru import logger
@@ -32,9 +33,15 @@ def setup_logger(console_level: str = "INFO", file_level: str = "DEBUG"):
         colorize=True,
     )
 
+    # 多策略多進程(STRATEGY_OWNER)時 owner-scope 檔名,避免多個 headless 進程共用同一個檔案 sink、
+    # 在 00:00 換日壓縮時搶檔(loguru _terminate_file → compress 撞 FileNotFoundError race)。
+    # 無 owner(舊單策略 live)→ 維持 TMFtrader_<date>.log / trades_<date>.log,行為不變。
+    _owner = os.getenv("STRATEGY_OWNER", "").strip()
+    _tag = ("_" + _owner) if _owner else ""
+
     # 主日誌檔案（每日輪替）
     logger.add(
-        str(LOG_DIR / "TMFtrader_{time:YYYYMMDD}.log"),
+        str(LOG_DIR / ("TMFtrader" + _tag + "_{time:YYYYMMDD}.log")),
         level=file_level,
         format="{time:YYYY-MM-DD HH:mm:ss} | {level: <7} | {module}:{function}:{line} | {message}",
         rotation="00:00",
@@ -45,7 +52,7 @@ def setup_logger(console_level: str = "INFO", file_level: str = "DEBUG"):
 
     # 交易專用日誌
     logger.add(
-        str(LOG_DIR / "trades_{time:YYYYMMDD}.log"),
+        str(LOG_DIR / ("trades" + _tag + "_{time:YYYYMMDD}.log")),
         level="INFO",
         format="{time:YYYY-MM-DD HH:mm:ss} | {message}",
         rotation="00:00",

@@ -261,7 +261,7 @@ def create_app(engine=None) -> FastAPI:
             info = await asyncio.to_thread(_engine.broker.get_account_info)
             positions = []
             if hasattr(_engine.broker, 'get_real_positions'):
-                positions = await asyncio.to_thread(_engine.broker.get_real_positions)
+                positions = await asyncio.to_thread(_engine.broker.get_real_positions) or []  # None=查詢失敗(2026-07-16 語義)
 
             # Shioaji 期貨帳戶無法 API 查餘額，fallback 到 PositionManager
             if info.equity <= 0 and info.balance <= 0 and _engine.position_manager:

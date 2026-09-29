@@ -20,6 +20,7 @@ class RiskPreset:
     max_consecutive_loss: int   # 連續虧損暫停門檻
     cooldown_minutes: int       # 暫停冷卻時間（分鐘）
     max_drawdown_pct: float     # 最大回撤比例（佔帳戶）
+    max_sl_mult: float = 8.0    # 停損距離上限 = max_sl_mult × ATR(預設8;固定%停損策略需放寬)
 
 
 # 三種風格預設
@@ -81,6 +82,41 @@ RISK_PRESETS = {
         max_consecutive_loss=4,
         cooldown_minutes=15,
         max_drawdown_pct=0.10,      # 10%
+    ),
+    # CSV 型固定口策略(chips_exec/maxpain_exec)專用:這些策略「設計上固定 1 口」,
+    # 不走 ATR 動態 sizing。max_contracts=1 才是真正控管(永遠 1 口);risk_per_trade 設高
+    # 只是讓 floor(equity×rpt/(stop×pv×1.1)) ≥ 1 不被當「風險過大」拒單(chips −2% 停損
+    # ≈880 點 × pv10 × 1.1 ≈ 9,680 元/口,需 equity×rpt ≥ 此值)。寬鬆 loss/dd 讓 paper
+    # 前推不被熔斷打斷。⚠️ 僅供 paper 固定口策略、勿用於 ATR 動態策略。
+    "fixed1_paper": RiskPreset(
+        name="fixed1_paper",
+        label="固定1口(paper)",
+        risk_per_trade=0.40,        # 僅為過 floor≥1;max_contracts=1 鎖死實際曝險=1 口
+        max_contracts=1,
+        max_daily_trades=5,
+        max_daily_loss=50000,       # paper、寬鬆不熔斷
+        max_consecutive_loss=20,
+        cooldown_minutes=0,
+        max_drawdown_pct=0.90,
+        # chips/maxpain 是固定 −2% 停損(≈880點@44k),低 ATR 日會 >8×ATR 被「停損距離過大」拒單。
+        # −2% 是設計停損(固定%、非ATR),放寬到 30×ATR 讓它一律過,同時仍擋真正異常(>30×ATR)的停損。
+        max_sl_mult=30.0,
+    ),
+    # maxpain_exec LIVE(2026-07-02 轉真錢)專用:同 fixed1_paper 的固定 1 口+寬鬆 gate 邏輯
+    # (凍結 v2 的風險控制=策略自身 −2% 停損,引擎熔斷只當「災難級」保險,不得干擾設計內損失)。
+    # 設計內最壞單役(2 口 MXF 46,600 水位):第1口 −2%≈−46.6k+加碼口 −3%≈−69.9k ≈ −117k
+    # → max_daily_loss=150k 高於它(不會盤中熔斷打斷凍結策略),但擋同日重複災難。
+    "fixed1_live": RiskPreset(
+        name="fixed1_live",
+        label="固定1口(live)",
+        risk_per_trade=0.40,        # 僅為過 floor≥1;max_contracts=1 鎖死第1口(加碼走 scale-in 不過 sizer)
+        max_contracts=1,
+        max_daily_trades=5,
+        max_daily_loss=150000,
+        max_consecutive_loss=20,
+        cooldown_minutes=0,
+        max_drawdown_pct=0.90,
+        max_sl_mult=30.0,
     ),
 }
 

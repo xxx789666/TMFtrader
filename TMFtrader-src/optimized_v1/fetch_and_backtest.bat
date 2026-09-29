@@ -1,22 +1,22 @@
 @echo off
 chcp 65001 > nul
 echo.
-echo  TMF 優化策略 v1 — 一鍵抓資料 + 回測
+echo  TMF optimized strategy v1 - one-shot fetch data + backtest
 echo  ======================================
 echo.
 
 cd /d "%~dp0.."
 
-echo  [1/2] 抓取最新 60 天歷史 K 棒...
+echo  [1/2] Fetching latest 60 days of history kbars...
 python scripts/fetch_historical.py --days 60 --instrument TMF
 if errorlevel 1 (
-    echo  [錯誤] 資料抓取失敗，請確認 .env 中的 API 金鑰設定
+    echo  [ERROR] fetch failed - check API keys in .env
     pause
     exit /b 1
 )
 
 echo.
-echo  [2/2] 執行回測...
+echo  [2/2] Running backtest...
 python optimized_v1/run_backtest.py
 
 echo.

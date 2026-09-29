@@ -1,0 +1,463 @@
+"""chips_combo_v1 — 每日盤後 PAPER runner(自包含、HTTP 資料、不吃 shioaji)。
+
+規格:deployed_strategies/chips_combo/HANDOFF_chips_combo_v1.md(2026-06-08)。
+籌碼日訊號:外資 flow(FinMind)+ 大戶 all_ratio(TAIFEX)→ 各取 60 日因果 z → 等權 combo。
+combo>+0.5 LONG / <−0.5 SHORT / else FLAT;**T 日盤後算、T+1 交易**(絕不偷看)。
+T+1 開盤進、收盤出、−2% 盤中停損、不過夜、固定 1 口微台、無止盈。
+
+⚠️ 時序鐵律:用 date<=T 的資料算 combo[T] → 決定 T+1 的 side。結算 paper 單時,
+   「今天」的 side 來自「昨天收盤後算的 combo」,用「今天」的 OHLC 結算(完全不偷看)。
+
+用法:
+  python scripts/chips_combo_daily.py                 # 每日模式(cron ~15:40):抓近期→算→結算今天→寫明天 signal
+  python scripts/chips_combo_daily.py --backfill 2024-01-01 2026-06-06   # 種子+回放整段(建歷史+補記 paper 單)
+
+口徑(對照 HANDOFF §5):PF~1.2 / RR1.17 / WR53.6% / ~10.7筆月。固定 1 口、point_value 10、−2% 停損。
+"""
+# VPS 系統時鐘 UTC → date.today()/datetime.now() 一律 TST(2026-07-03 稽核:別依賴 crontab TZ 前綴)
+import os as _os, time as _time_tz
+_os.environ.setdefault('TZ', 'Asia/Taipei')
+try:
+    _time_tz.tzset()
+except AttributeError:
+    pass
+
+import argparse
+import csv
+import io
+import json
+import os
+import sys
+import time
+import urllib.parse
+import urllib.request
+from datetime import date, datetime, timedelta
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+DDIR = ROOT / "data" / "chips_combo"
+HIST = DDIR / "history.csv"          # date,net_OI,flow,all_ratio,open,high,low,close
+SIGNAL = DDIR / "next_signal.json"   # {"trade_date","side","combo","z_flow","z_lt"}
+TAPE = DDIR / "decisions.csv"        # 決策帶 + paper 單(HANDOFF §6)
+
+Z_WIN = 60
+THR = 0.5
+POINT_VALUE = 50.0   # 小台 MXF(2026-06-09 由微台 pv10 改小台;價格仍用大台 TX 軌跡、口徑×5)
+LOTS = 1
+STOP_PCT = 0.02
+
+HOLIDAYS_FILE = Path(__file__).resolve().parent / "market_holidays.txt"
+MARKET_CLOSE = (13, 45)   # 日盤收盤;收盤後跑的話「今天」已經交易過,訊號要給下一個交易日
+
+
+def _holidays() -> set:
+    try:
+        return set(HOLIDAYS_FILE.read_text(encoding="utf-8", errors="ignore").split()) if HOLIDAYS_FILE.exists() else set()
+    except Exception:
+        return set()
+
+
+def next_trading_day(d: date, holidays: set | None = None) -> date:
+    """d 之後的第一個交易日(跳週末 + market_holidays.txt)。"""
+    hol = _holidays() if holidays is None else holidays
+    n = d + timedelta(days=1)
+    while n.weekday() >= 5 or n.isoformat() in hol:
+        n += timedelta(days=1)
+    return n
+
+
+def pick_trade_date(last_d: date, now: datetime, holidays: set | None = None) -> date:
+    """訊號的 trade_date(使用者 2026-09-29 裁定:沒新資料時 trade_date 一樣推到下一個交易日)。
+
+    舊規則 = 最後一筆資料日 + 1、只跳週末:連假後 FinMind/TAIFEX 沒新資料 → trade_date 停在假日
+    (09-24 資料 → 09-25 休市),09-29 開盤時 chips_exec 算出過期 4 天 → 三支執行載具全部跳單+告警。
+    新規則:
+      1. 從最後資料日往後找第一個交易日(跳週末 + 休市清單)。
+      2. 若那天已經過去(< 今天)→ 繼續往後推到 ≥ 今天。
+      3. 若推到的正好是今天、而現在已過收盤(13:45)→ 今天交易過了,再推一天。
+    早上開盤前補跑仍會給「今天」(不會吃掉當天的單);傍晚正常跑給明天;連假後給連假後第一個交易日。
+    資料本身是不是舊的,由 main() 的 stale 告警另外講,這裡只負責日期。"""
+    hol = _holidays() if holidays is None else holidays
+    today = now.date()
+    nxt = next_trading_day(last_d, hol)
+    while nxt < today:
+        nxt = next_trading_day(nxt, hol)
+    if nxt == today and (now.hour, now.minute) >= MARKET_CLOSE:
+        nxt = next_trading_day(nxt, hol)
+    return nxt
+
+
+FINMIND = "https://api.finmindtrade.com/api/v4/data"
+TAIFEX_LT = "https://www.taifex.com.tw/cht/3/largeTraderFutDown"
+TAIFEX_FUT = "https://www.taifex.com.tw/cht/3/futContractsDateDown"   # 三大法人-區分各期貨契約
+FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "").strip()
+
+
+def _get(url):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return r.read()
+
+
+def fetch_finmind(dataset, data_id, start, end):
+    q = {"dataset": dataset, "data_id": data_id, "start_date": start, "end_date": end}
+    if FINMIND_TOKEN:
+        q["token"] = FINMIND_TOKEN
+    raw = _get(f"{FINMIND}?{urllib.parse.urlencode(q)}")
+    j = json.loads(raw.decode("utf-8"))
+    if j.get("status") != 200 and "data" not in j:
+        raise RuntimeError(f"FinMind {dataset}: {j.get('msg', j)}")
+    return j.get("data", [])
+
+
+def _foreign_netoi_finmind(start, end):
+    """外資 net_OI 走 FinMind TaiwanFuturesInstitutionalInvestors(全史 2020+)。
+    歷史回測用(TAIFEX 官網 CSV 端點只 serve 近期、老資料回 HTML 錯誤頁)。與官網同一個數。"""
+    rows = fetch_finmind("TaiwanFuturesInstitutionalInvestors", "TX", start, end)
+    out = {}
+    for r in rows:
+        if str(r.get("institutional_investors", "")).strip() != "外資":
+            continue
+        out[r["date"]] = float(r.get("long_open_interest_balance_volume", 0)) - \
+            float(r.get("short_open_interest_balance_volume", 0))
+    return out
+
+
+def fetch_foreign_netoi(start, end):
+    """三大法人期貨「外資及陸資」TX net_OI[date] = 多方未平倉 − 空方未平倉。
+    forward 預設:TAIFEX 官網 futContractsDateDown(一手、BIG5 CSV)。start/end 'YYYY-MM-DD'。
+    欄位(表頭):0日期 2身份別 9多方未平倉口數 11空方未平倉口數 13多空未平倉淨額。
+    ⚠️ 歷史回測設 CHIPS_FOREIGN_SRC=finmind → 改走 FinMind(官網 CSV 端點不 serve 老資料)。"""
+    if os.getenv("CHIPS_FOREIGN_SRC", "").lower() == "finmind":
+        return _foreign_netoi_finmind(start, end)
+    body = urllib.parse.urlencode({"queryStartDate": start.replace("-", "/"),
+                                   "queryEndDate": end.replace("-", "/"),
+                                   "commodityId": "TXF"}).encode()
+    req = urllib.request.Request(TAIFEX_FUT, data=body, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        raw = r.read()
+    out = {}
+    for row in csv.reader(io.StringIO(raw.decode("big5", "replace"))):
+        if len(row) < 14 or "外資" not in row[2]:        # 「外資及陸資」
+            continue
+        d = row[0].strip().replace("/", "-")
+        try:
+            out[d] = float(row[9].replace(",", "")) - float(row[11].replace(",", ""))
+        except ValueError:
+            continue
+    return out
+
+
+def fetch_tx_ohlc(start, end):
+    """TX 期貨日 OHLC(近月日盤,FinMind TaiwanFuturesDaily)。回 {date:{open,high,low,close}}。
+    ⚠️ 必須只取 trading_session=='position' 日盤:chips 是日盤策略(開盤進、收盤出),
+    after_market(夜盤 15:00→05:00)與日盤背離大時會記錯 session(06-08 空單 −736 被夜盤誤記成
+    +2881)。另排除價差合約(contract_date 含 '/')、同日取最大量近月。"""
+    rows = fetch_finmind("TaiwanFuturesDaily", "TX", start, end)
+    out = {}
+    for r in rows:
+        if r.get("trading_session") != "position":        # 只取日盤
+            continue
+        if "/" in str(r.get("contract_date", "")):         # 排除價差(calendar spread)合約
+            continue
+        d = r["date"]
+        try:
+            o, h, l, c = float(r["open"]), float(r["max"]), float(r["min"]), float(r["close"])
+            vol = float(r.get("volume", 0))
+        except (KeyError, ValueError, TypeError):
+            continue
+        if o <= 0 or h <= 0:
+            continue
+        prev = out.get(d)
+        if prev is None or vol > prev["vol"]:              # 同日取最大量(近月)
+            out[d] = {"open": o, "high": h, "low": l, "close": c, "vol": vol}
+    res = {d: {k: v[k] for k in ("open", "high", "low", "close")} for d, v in out.items()}
+    # T+0(2026-07-07):FinMind 期貨日線傍晚才更新;下午 15:0x 跑時當日缺列 → 補官網行情頁,
+    # 讓 chips 三源(外資/大戶 CSV 本來就是 TAIFEX T+0)當天下午就湊齊、訊號不必等晚場。
+    today_iso = date.today().isoformat()
+    if start <= today_iso <= end and today_iso not in res:
+        bar = _fetch_tx_ohlc_web(today_iso)
+        if bar:
+            res[today_iso] = bar
+    return res
+
+
+def _fetch_tx_ohlc_web(date_iso):
+    """官網 futDailyMarketReport 當日 TX 日盤 OHLC(T+0)。近月=一般時段量最大的純月份契約。
+    具名表頭定位 + re.I(防大寫 <TD>,同選擇權頁 2026-05 改版模式);任何不符回 None(fail-closed)。"""
+    import re
+    body = urllib.parse.urlencode({"queryType": "2", "marketCode": "0", "commodity_id": "TX",
+                                   "queryDate": date_iso.replace("-", "/"),
+                                   "MarketCode": "0", "commodity_idt": "TX"}).encode()
+    try:
+        req = urllib.request.Request("https://www.taifex.com.tw/cht/3/futDailyMarketReport",
+                                     data=body, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            t = r.read().decode("utf-8", "replace")
+        if date_iso.replace("-", "/") not in t:
+            return None
+        hdr, idx, best = None, {}, None
+        for m in re.finditer(r"<tr[^>]*>(.*?)</tr>", t, re.S | re.I):
+            c = [re.sub(r"<[^>]+>", "", x).strip().replace(",", "")
+                 for x in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", m.group(1), re.S | re.I)]
+            if not c:
+                continue
+            if hdr is None and any("開盤" in x for x in c):
+                hdr = [re.sub(r"[\s*]", "", x) for x in c]
+                for name, key in (("開盤價", "o"), ("最高價", "h"), ("最低價", "l"),
+                                  ("最後成交價", "c"), ("一般交易時段成交量", "v")):
+                    for i, x in enumerate(hdr):
+                        if name in x:
+                            idx[key] = i
+                            break
+                if len(idx) < 5:
+                    return None                       # 表頭再改版 → fail-closed
+                continue
+            if hdr is None or c[0] != "TX" or len(c) != len(hdr):
+                continue
+            if not re.fullmatch(r"\d{6}", c[1].strip()):   # 排除價差/週契約,只留純月份
+                continue
+            try:
+                o, h, l, cl = (float(c[idx["o"]]), float(c[idx["h"]]),
+                               float(c[idx["l"]]), float(c[idx["c"]]))
+                v = float(c[idx["v"]] or 0)
+            except (ValueError, TypeError):
+                continue
+            if o <= 0 or h <= 0:
+                continue
+            if best is None or v > best[0]:
+                best = (v, {"open": o, "high": h, "low": l, "close": cl})
+        if best:
+            print(f"  [tx_ohlc] {date_iso} 用官網T+0頁 close={best[1]['close']:.0f}")
+            return best[1]
+    except Exception as e:
+        print(f"  [tx_ohlc] 官網T+0失敗: {e}")
+    return None
+
+
+def fetch_taifex_largetrader(start, end):
+    """TAIFEX 大戶 all_ratio[date]=(t10b−t10s)/oi(TX/999999/flag0)。start/end 'YYYY/MM/DD'。"""
+    body = urllib.parse.urlencode({"queryStartDate": start, "queryEndDate": end}).encode()
+    req = urllib.request.Request(TAIFEX_LT, data=body, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        raw = r.read()
+    out = {}
+    for row in csv.reader(io.StringIO(raw.decode("big5", "replace"))):
+        if len(row) < 10 or row[1].strip() != "TX" or row[3].strip() != "999999" or row[4].strip() != "0":
+            continue
+        d = row[0].strip().replace("/", "-")
+        try:
+            t10b, t10s, oi = int(row[7]), int(row[8]), int(row[9])
+        except ValueError:
+            continue
+        if oi > 0:
+            out[d] = (t10b - t10s) / oi
+    return out
+
+
+def _mean_std(xs):
+    n = len(xs)
+    m = sum(xs) / n
+    var = sum((x - m) ** 2 for x in xs) / (n - 1) if n > 1 else 0.0
+    return m, var ** 0.5
+
+
+def load_history():
+    rows = []
+    if HIST.exists():
+        with open(HIST, encoding="utf-8") as f:
+            for r in csv.DictReader(f):
+                rows.append(r)
+    return rows
+
+
+def build_history(start, end):
+    """抓 [start,end] 的三源,合併出每交易日一列,寫 history.csv(date,net_OI,flow,all_ratio,OHLC)。"""
+    s_iso, e_iso = start.isoformat(), end.isoformat()
+    print(f"抓資料 {s_iso} ~ {e_iso} ...")
+    foreign = fetch_foreign_netoi(s_iso, e_iso); time.sleep(0.3)
+    ohlc = fetch_tx_ohlc(s_iso, e_iso); time.sleep(0.3)
+    lt = {}
+    cur = start.replace(day=1)
+    while cur <= end:
+        nxt = (cur.replace(day=28) + timedelta(days=4)).replace(day=1)
+        last = nxt - timedelta(days=1)
+        lt.update(fetch_taifex_largetrader(cur.strftime("%Y/%m/%d"),
+                                           min(last, end).strftime("%Y/%m/%d")))
+        time.sleep(0.3)
+        cur = nxt
+    # 合併:date 同時有 外資 + 大戶 + OHLC 才算完整交易日
+    dates = sorted(set(foreign) & set(lt) & set(ohlc))
+    rows, prev_netoi = [], None
+    for d in dates:
+        net = foreign[d]
+        flow = (net - prev_netoi) if prev_netoi is not None else 0.0
+        prev_netoi = net
+        o = ohlc[d]
+        rows.append(dict(date=d, net_OI=net, flow=flow, all_ratio=lt[d],
+                         open=o["open"], high=o["high"], low=o["low"], close=o["close"]))
+    DDIR.mkdir(parents=True, exist_ok=True)
+    with open(HIST, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["date", "net_OI", "flow", "all_ratio", "open", "high", "low", "close"])
+        w.writeheader(); w.writerows(rows)
+    print(f"history: {len(rows)} 交易日 | {rows[0]['date'] if rows else '-'} ~ {rows[-1]['date'] if rows else '-'}")
+    return rows
+
+
+def combo_at(rows, i):
+    """用 rows[i−59..i] 算 combo[i](因果、不含未來)。回 (combo,z_flow,z_lt) 或 None(暖身不足)。"""
+    if i < Z_WIN - 1:
+        return None
+    win = rows[i - Z_WIN + 1: i + 1]
+    flows = [float(r["flow"]) for r in win]
+    ratios = [float(r["all_ratio"]) for r in win]
+    mf, sf = _mean_std(flows)
+    mr, sr = _mean_std(ratios)
+    if sf == 0 or sr == 0:
+        return None
+    zf = (float(rows[i]["flow"]) - mf) / sf
+    zl = (float(rows[i]["all_ratio"]) - mr) / sr
+    return (zf + zl) / 2, zf, zl
+
+
+def side_of(combo):
+    return "long" if combo > THR else ("short" if combo < -THR else "flat")
+
+
+def settle_trade(side, bar):
+    """T+1 日:side(來自前一日 combo)+ 當日 OHLC → entry開/exit收或−2%停損。回 dict 或 None(flat)。"""
+    if side == "flat":
+        return None
+    o, h, l, c = float(bar["open"]), float(bar["high"]), float(bar["low"]), float(bar["close"])
+    entry = o
+    if side == "long":
+        stop = entry * (1 - STOP_PCT)
+        if l <= stop:
+            exit_px, reason = stop, "−2%停損"
+        else:
+            exit_px, reason = c, "收盤平倉"
+        pnl_pts = exit_px - entry
+    else:
+        stop = entry * (1 + STOP_PCT)
+        if h >= stop:
+            exit_px, reason = stop, "−2%停損"
+        else:
+            exit_px, reason = c, "收盤平倉"
+        pnl_pts = entry - exit_px
+    pnl = pnl_pts * POINT_VALUE * LOTS
+    return dict(side=side, entry=entry, exit=exit_px, reason=reason,
+                pnl_pts=round(pnl_pts, 1), pnl=round(pnl, 0), ret_pct=round(pnl_pts / entry * 100, 3))
+
+
+def append_tape(rec):
+    DDIR.mkdir(parents=True, exist_ok=True)
+    new = not TAPE.exists()
+    with open(TAPE, "a", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        if new:
+            w.writerow(["trade_date", "signal_date", "combo", "z_flow", "z_lt", "side",
+                        "entry", "exit", "exit_reason", "pnl_pts", "pnl", "ret_pct",
+                        "slippage_note"])
+        w.writerow(rec)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--backfill", nargs=2, metavar=("START", "END"),
+                    help="種子+回放:抓整段、建歷史、逐日補記 paper 單")
+    args = ap.parse_args()
+
+    if args.backfill:
+        s, e = (date.fromisoformat(x) for x in args.backfill)
+        rows = build_history(s, e)
+        # 逐日回放:combo[i] 決定 i+1 的 side,用 rows[i+1] 結算
+        n = 0
+        if TAPE.exists():
+            TAPE.unlink()
+        for i in range(len(rows) - 1):
+            cb = combo_at(rows, i)
+            if cb is None:
+                continue
+            combo, zf, zl = cb
+            side = side_of(combo)
+            tr = settle_trade(side, rows[i + 1])
+            if tr is None:
+                continue
+            append_tape([rows[i + 1]["date"], rows[i]["date"], round(combo, 3), round(zf, 3), round(zl, 3),
+                         tr["side"], tr["entry"], tr["exit"], tr["reason"], tr["pnl_pts"], tr["pnl"],
+                         tr["ret_pct"], "backfill(OHLC、無實滑價)"])
+            n += 1
+        # 摘要
+        import statistics
+        pnls = []
+        if TAPE.exists():
+            with open(TAPE, encoding="utf-8") as f:
+                pnls = [float(r["pnl"]) for r in csv.DictReader(f)]
+        if pnls:
+            wins = [p for p in pnls if p > 0]
+            pf = sum(wins) / (abs(sum(p for p in pnls if p <= 0)) or 1e-9)
+            print(f"\n回放 {len(pnls)} 筆 | 勝率 {len(wins)/len(pnls)*100:.1f}% | PF {pf:.2f} | 淨 {sum(pnls):+,.0f} | ~{len(pnls)/(len(rows)/21):.1f} 筆/月")
+        return
+
+    # ── 每日模式(cron):抓近 ~130 日 → 補結算「所有未記錄的交易日」(漏跑也能補)→ 寫最新 signal ──
+    # 只用三源都完整的交易日(build_history 已過濾)→ 即使當日大戶報表還沒出,也只會處理到前一完整日、
+    # 隔天自動補上,絕不用半套資料。rows[i] 的交易 side 來自 combo[i-1](因果、不偷看)。
+    today = date.today()
+    rows = build_history(today - timedelta(days=130), today)
+    if len(rows) < Z_WIN + 1:
+        print(f"暖身不足({len(rows)}<{Z_WIN+1}),先 --backfill 種子歷史"); return
+    recorded = set()
+    if TAPE.exists():
+        with open(TAPE, encoding="utf-8") as f:
+            recorded = {r["trade_date"] for r in csv.DictReader(f)}
+    new_n = 0
+    for i in range(Z_WIN, len(rows)):
+        d = rows[i]["date"]
+        if d in recorded:
+            continue
+        cb = combo_at(rows, i - 1)
+        if cb is None:
+            continue
+        combo, zf, zl = cb
+        side = side_of(combo)
+        tr = settle_trade(side, rows[i])
+        if tr is None:
+            continue   # FLAT 日不記(避免 tape 灌水;下次仍會略過、無害)
+        append_tape([d, rows[i - 1]["date"], round(combo, 3), round(zf, 3), round(zl, 3),
+                     tr["side"], tr["entry"], tr["exit"], tr["reason"], tr["pnl_pts"], tr["pnl"],
+                     tr["ret_pct"], "OHLC、無實滑價(paper)"])
+        new_n += 1
+        print(f"  記錄 {d}: {tr['side']} {tr['pnl']:+.0f}元 ({tr['reason']})")
+    # 最新 signal(最新完整日的 combo → 下一交易日 side)
+    cb = combo_at(rows, len(rows) - 1)
+    if cb:
+        combo, zf, zl = cb
+        side = side_of(combo)
+        # 下一「交易日」:跳週末 + 休市清單;沒新資料(連假、資料源慢)時一樣推到下一個交易日,
+        # 不再停在最後資料日+1(2026-09-29 使用者裁定;見 pick_trade_date)。資料舊不舊由下面 stale 告警講。
+        nxt = pick_trade_date(date.fromisoformat(rows[-1]["date"]), datetime.now()).isoformat()
+        SIGNAL.write_text(json.dumps(dict(trade_date=nxt, side=side, combo=round(combo, 3),
+                                          z_flow=round(zf, 3), z_lt=round(zl, 3)), ensure_ascii=False, indent=2),
+                          encoding="utf-8")
+        print(f"本次新記錄 {new_n} 筆 | 下一訊號({nxt}):{side} (combo {combo:+.2f})")
+        # ── stale 告警(2026-07-02):資料源(FinMind/TAIFEX)沒出「今天」的籌碼 → 寫出的訊號其實是舊的。
+        # 06-30 傍晚 FinMind 慢半拍 → 訊號檔停在前一日 → 07-01 引擎讀到過期訊號靜默空手、錯過 short。
+        # 條件:今天是平日、非休市日、且 history 最後一列 < 今天 → 推 TG 告警(不再靜默)。
+        last_d = rows[-1]["date"]
+        holi = Path(__file__).resolve().parent / "market_holidays.txt"
+        is_holiday = holi.exists() and today.isoformat() in holi.read_text(encoding="utf-8", errors="ignore").split()
+        if last_d < today.isoformat() and today.weekday() < 5 and not is_holiday:
+            try:
+                import sys as _sys
+                _sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+                from core.notify import tg
+                tg(f"⚠️ [chips_combo] 籌碼資料未更新到今天({today.isoformat()}),最後完整日={last_d}。"
+                   f"剛寫出的訊號 trade_date={nxt} 是用舊資料算的 → 明早 chips_exec 可能讀到過期訊號而空手。"
+                   f"可稍晚(20-21點)手動重跑 chips_combo_daily.py 補新資料。")
+            except Exception as e:
+                print(f"(stale 告警推送失敗: {e})")
+            print(f"⚠️ stale: 資料只到 {last_d} < 今天 {today.isoformat()},已推 TG 告警")
+
+
+if __name__ == "__main__":
+    main()

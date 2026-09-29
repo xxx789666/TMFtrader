@@ -1,23 +1,23 @@
 @echo off
 echo.
-echo  ⚡ TMFtrader — 全自動實戰啟動
+echo  TMFtrader - full auto live start
 echo  ==================================
 echo.
-echo  [Step 1] 啟動系統（paper 模式先驗證連線）...
+echo  [Step 1] Start system (paper mode first, verify connection)...
 echo.
 cd /d C:\Users\User\TMFtrader
 
-REM 先啟動 paper 模式（背景執行）
+REM Start paper mode first (background)
 start /B python scripts/start.py --mode paper --risk crisis --no-browser > data\logs\engine.log 2>&1
 
-echo  等待系統初始化（15 秒）...
+echo  Waiting for init (15s)...
 timeout /t 15 /nobreak > nul
 
 echo.
-echo  [Step 2] 自動驗證 + 切換 LIVE...
+echo  [Step 2] Auto verify + switch to LIVE...
 echo.
 
-REM 驗證通過就自動切 live
+REM Auto switch to live once verification passes
 python scripts/go_live.py
 
 echo.

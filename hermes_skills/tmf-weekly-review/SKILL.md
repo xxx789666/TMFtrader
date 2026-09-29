@@ -1,7 +1,7 @@
 ---
 name: tmf-weekly-review
 description: 永豐微台指 TMF 每週盤後覆盤 — 聚合 Mon-Fri 的日盤+夜盤、找出跨日模式、提出參數建議。當被請求做本週 / 上週 / 指定週覆盤、或由內建 cron 觸發週度盤後分析時啟用。
-version: 0.2.0
+version: 0.3.0
 platforms: [linux, macos, windows]
 metadata:
   hermes:
@@ -44,11 +44,11 @@ test -f ~/.hermes/kill_switch && cat ~/.hermes/kill_switch || echo "OK"
 ### 0.5 預算宣告（寫進你的工作記憶）
 
 本次任務的硬性預算：
-- **tool calls 上限 = 9**（含 step 0 預檢的 1 次 + step 2.5 帳戶級 edge 的 1 次）
+- **tool calls 上限 = 12**（含 step 0 預檢 1 次、step 2.5 帳戶級 edge 1 次、step 2.7 digest 1 次、step 4.5 對答案最多 2 次）
 - **wall clock = 10 分鐘**
 - **單次 LLM 輸出 max_tokens = 2048**
 
-每次呼叫 `execute_code` / `load_*` / 記憶查詢前，先在心中算「目前已用 N 次、剩 9-N 次」。**用滿 9 次就強制進入步驟 5**（即便資料還沒查完，也要用手上有的東西出報告，confidence 改 `low`、在 risk_flags 加 `budget_exceeded`）。
+每次呼叫 `execute_code` / `load_*` / 記憶查詢前，先在心中算「目前已用 N 次、剩 9-N 次」。**用滿 12 次就強制進入步驟 5**（即便資料還沒查完，也要用手上有的東西出報告，confidence 改 `low`、在 risk_flags 加 `budget_exceeded`）。
 
 ### 1. 確定週次
 - 預設：`week_ending=today`（工具會自動對齊到該週的 Mon-Fri）
@@ -219,3 +219,37 @@ if result.returncode != 0:
 ---
 
 *v0.2.0 — 加帳戶級日/夜 edge(load_session_edge)。v0.1.0 初版週度覆盤。參數實際修改 / 套用走另一個 skill（待寫：tmf-strategy-tune），需人工 TG 核准。*
+
+### 2.7 讀取週度稽核 digest（1 call；2026-07-28 新增）
+
+執行 `execute_code`：
+```bash
+cat ~/vps_trader/TMFtrader-src/data/hermes_digest/digest_latest.md
+```
+- 這是 Task Scheduler 在你之前跑好的**確定性稽核材料**（報告新鮮度／判活尺／一致性素材）。
+- 若檔不存在、或首行日期距今 > 8 天 → 報告註明「digest 缺席」並**跳過**步驟 4.5 與報告的三個稽核節。**禁止自己去掃 vault 補算**（預算不夠、也不準）。
+
+### 4.5 對答案（最多 2 calls；2026-07-28 新增）
+
+```bash
+tail -n 40 ~/vps_trader/TMFtrader-src/data/hermes_digest/review_log.md 2>/dev/null || echo "FIRST_RUN"
+```
+- `FIRST_RUN` → 本週報告的【對答案】節寫「首次建檔」。
+- 否則把上週條目裡的每一條「警報/預測」逐條標記：✅命中 / ❌未發生 / ⏳還不能判。
+- 報告完成後 **append** 本週條目（格式見下）到同一檔案。
+
+## 報告新增三節（材料全部來自 digest，禁止重算數字）
+
+- **【巡檢】**：digest ① 的警報行原樣列出＋每條加一句「最可能原因」推測（必須引用 digest 裡的數字，不虛構檔名或日期）。無警報就一行「全數新鮮」。
+- **【判活尺】**：digest ② 表格原樣附上；「進度 ≥ 80%」的 tape 加一句「接近判決門檻，準備驗證」。
+- **【對答案】**：步驟 4.5 的逐條標記結果；然後寫本週 **1–3 條可驗證的預測**（下週六能明確判對錯的具體陳述，例：「Astruct 線若未修，下週落後將 ≥ 7 交易日」）。
+
+### append 到 review_log.md 的條目格式
+
+```markdown
+## <YYYY-MM-DD>
+- 巡檢警報: <逐條 或 無>
+- 判活尺最接近判決: <tape 名 n/門檻>
+- 本週預測: 1) ... 2) ...
+- 上週對答案: ✅... / ❌... / ⏳...
+```

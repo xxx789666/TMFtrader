@@ -35,9 +35,9 @@ class TestMarketRegimeClassifier(unittest.TestCase):
         self.assertEqual(regime, MarketRegime.STRONG_TREND_UP)
 
     def test_strong_trend_down(self):
-        """ADX 高 + 空頭排列 → 強勢下跌"""
+        """ADX 高 + 空頭排列 → 強勢下跌（強趨勢門檻 = ADX > 38）"""
         snap = MarketSnapshot(
-            adx=38, plus_di=12, minus_di=28,
+            adx=40, plus_di=12, minus_di=28,
             ema5=21800, ema10=21850, ema20=21900, ema60=22000,
             atr_ratio=1.0,
         )
@@ -96,15 +96,21 @@ class TestMultiFactorSignalGenerator(unittest.TestCase):
         self.generator = MultiFactorSignalGenerator()
 
     def test_strong_buy_signal(self):
-        """所有因子利多 → 產生強買入訊號"""
+        """左側做多情境（RSI 超賣 + 長下影紅K + 多頭吞噬 + 放量）→ 產生強買入訊號
+
+        v2 調權後做多偏好超賣抄底而非追突破（rsi 權重 0.44、candle 0.16），
+        RSI > 65 追多會被刻意壓到 0 分。
+        """
         snap = MarketSnapshot(
             price=22100,
             ema5=22080, ema10=22060, ema20=22000, ema60=21900,
-            rsi=62, rsi_ma5=60, rsi_ma10=55,
+            rsi=30, rsi_ma5=38, rsi_ma10=35,
             adx=35, plus_di=28, minus_di=15,
             atr=50, atr_ratio=1.0, atr_ma20=50,
             volume=100, volume_ma20=60, volume_ratio=1.67,
             recent_high=22090, recent_low=21950,
+            candle_is_bullish=True, candle_long_lower=True,
+            candle_engulfing=1, volume_spike=True,
         )
         signal = self.generator.generate(snap, MarketRegime.STRONG_TREND_UP)
         self.assertIsNotNone(signal)

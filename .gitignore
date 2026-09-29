@@ -57,3 +57,15 @@ kronos_experiment/
 optimizer/results*/*.csv
 deployed_strategies/
 SECURITY_SCAN_*.md
+
+# [2026-06-18] settlement_v2 veto / forward 產物 + 大盤行情 seed(VPS + 冷備份,不入 git;API 同意書條9 行情禁傳)
+TMFtrader-src/data/forward/
+TMFtrader-src/data/taiex_daily.csv
+TMFtrader-src/data/backtest_history/
+
+# [2026-08-01] 運行期資料全域忽略:paper帳/tape/快取/決策檔=每日髒工作區來源
+# (已追蹤的歷史回測結果不受影響 — ignore 只作用於未追蹤檔;新增資料檔一律不入git,
+#  比照 lab repo「data 全 gitignore」慣例;要保存的 tape 走 handoff 資料夾另議)
+TMFtrader-src/data/
+*.log
+*.bak_*

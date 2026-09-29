@@ -125,8 +125,23 @@ rsync -avz --timeout=30 \
   "$LOCAL_PROJECT_DIR/data/" \
   2>&1 | tee -a "$LOG_FILE" || log "(session_edge 缺檔可接受)"
 
+# ---- 4. 同步引擎 live log（交接單 v2 乙-A 2026-08-30）----
+# 背景：主機 data/logs/ 的 maxpain_exec_live_*.log 齊全，鏡像 0 檔 → lab 把「鏡像沒有」
+# 誤讀成「不存在」。live launcher stdout 一律納入同步（含 .gz）。
+# --max-size 防呆：主機曾出現 5.78GB 的失控 log，不讓它吃爆本機。
+log "[4/4] engine live logs"
+rsync -avz --timeout=120 --max-size=200m \
+  -e "ssh -i $SSH_KEY -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15" \
+  --include='*_live_*.log' \
+  --include='*_live_*.log.gz' \
+  --exclude='*' \
+  "$VPS_HOST:$VPS_PROJECT_DIR/data/logs/" \
+  "$LOCAL_PROJECT_DIR/data/logs/" \
+  2>&1 | tee -a "$LOG_FILE" || log "(live log 缺檔可接受)"
+
 # ---- 摘要 ----
 n_daily=$(find "$LOCAL_PROJECT_DIR/data/performance/daily/" -name '*_live*.json' -mtime -"$SYNC_DAYS" 2>/dev/null | wc -l)
-log "✅ sync 完成。本機近 $SYNC_DAYS 天 daily JSON 計 $n_daily 個檔"
+n_livelog=$(find "$LOCAL_PROJECT_DIR/data/logs/" -name '*_live_*.log*' 2>/dev/null | wc -l)
+log "✅ sync 完成。本機近 $SYNC_DAYS 天 daily JSON 計 $n_daily 個檔；live log 計 $n_livelog 個檔"
 
 exit 0

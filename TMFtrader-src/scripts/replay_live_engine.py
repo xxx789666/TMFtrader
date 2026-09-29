@@ -81,6 +81,9 @@ def main():
     ap.add_argument("--end", required=True)
     ap.add_argument("--session", default="24h", choices=["day", "24h"])
     ap.add_argument("--balance", type=float, default=222890.0)
+    ap.add_argument("--strategy", default="", help="STRATEGY_TYPE 覆寫(如 night_v7);空=用 spec 預設")
+    ap.add_argument("--tf", default="5", help="TIMEFRAME(night_v7=30)")
+    ap.add_argument("--ticks-glob", default="", help="history 之後接真 tick CSV(如 data/ticks/TMF_2026060*.csv)")
     args = ap.parse_args()
 
     # 必須在 import engine 前設好環境
@@ -88,9 +91,11 @@ def main():
     os.environ["INSTRUMENTS"] = "TMF"
     os.environ["CONTRACT_CODE"] = "TMF"
     os.environ["RISK_PROFILE"] = "tmf_3x"
-    os.environ["TIMEFRAME"] = "5"
+    os.environ["TIMEFRAME"] = str(args.tf)
     os.environ["INITIAL_BALANCE"] = str(int(args.balance))
     os.environ["RECORD_TICKS"] = "0"
+    if args.strategy:
+        os.environ["STRATEGY_TYPE"] = args.strategy
 
     from core.logger import setup_logger; setup_logger(console_level="CRITICAL")
     import core.engine as engmod
@@ -152,6 +157,24 @@ def main():
         for price, ts, vol in synth_ticks(bar):
             _CLOCK.now_dt = ts
             # tick 層硬停損(複製 _on_tick is_urgent:觸價立即平倉)
+            pos = pm.positions.get(inst)
+            if pos and not pos.is_flat and pos.stop_loss > 0:
+                if (pos.side == Side.LONG and price <= pos.stop_loss) or \
+                   (pos.side == Side.SHORT and price >= pos.stop_loss):
+                    eng._execute_exit(inst, _mk_hardstop_signal(pos), pos.stop_loss)
+                    continue
+            eng.pipelines[inst].aggregator.on_tick(Tick(datetime=ts, price=price, volume=vol, instrument=inst))
+
+    # ── 接真 tick(06-01+,比 synth-from-1min 更貼近 live)──────────
+    if args.ticks_glob:
+        from glob import glob as _glob
+        tfiles = sorted(_glob(str(ROOT / args.ticks_glob)))
+        tk = pd.concat([pd.read_csv(f) for f in tfiles], ignore_index=True)
+        tk["ts"] = pd.to_datetime(tk["ts"]); tk = tk.sort_values("ts")
+        print(f"真 tick: {len(tk)} 筆 | {tk['ts'].min()} ~ {tk['ts'].max()}")
+        for row in tk.itertuples(index=False):
+            ts = row.ts.to_pydatetime(); price = float(row.price); vol = max(int(row.volume), 1)
+            _CLOCK.now_dt = ts
             pos = pm.positions.get(inst)
             if pos and not pos.is_flat and pos.stop_loss > 0:
                 if (pos.side == Side.LONG and price <= pos.stop_loss) or \

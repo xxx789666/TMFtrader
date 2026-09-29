@@ -5,7 +5,7 @@ TMFtrader 熔斷機制
 
 import os
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dtime
 from enum import Enum
 from typing import Optional
 
@@ -183,8 +183,30 @@ class CircuitBreaker:
                 logger.error(f"🚨 緊急停機: {self._halt_reason}")
                 return
 
+    def _in_trading_session(self, now=None) -> bool:
+        """現在是否為交易 session(日盤 08:45-13:45 或夜盤 15:00-次日05:00)且為交易日。
+        非交易 session(休市/盤間空檔)的閒置斷線是預期(券商斷開閒置連線),不該觸發緊急停機/告警。
+        2026-07-10 颱風假事故:live 引擎 24h 常駐、休市無 session,券商每~2分斷閒置連線→多引擎各自
+        on_connection_lost 緊急停機+推 TG 洗版。跨午夜 00:00-05:00 屬前一交易日夜盤,以前一日判休市。"""
+        now = now or datetime.now()
+        t = now.time()
+        trade_date = now.date() - timedelta(days=1) if t <= dtime(5, 0) else now.date()
+        if trade_date.weekday() >= 5:                          # 週末非交易日
+            return False
+        try:
+            from pathlib import Path
+            hol = Path(__file__).resolve().parent.parent / "scripts" / "market_holidays.txt"
+            if hol.exists() and trade_date.isoformat() in hol.read_text(encoding="utf-8").split():
+                return False                                    # 休市(含颱風臨時休市)
+        except Exception:
+            pass
+        return (dtime(8, 45) <= t <= dtime(13, 45)) or (t >= dtime(15, 0) or t <= dtime(5, 0))
+
     def on_connection_lost(self):
         """連線中斷"""
+        if not self._in_trading_session():   # 非交易 session 的閒置斷線=預期,不緊急停機、不推 TG(2026-07-10 颱風假事故)
+            logger.debug("[CircuitBreaker] 非交易時段連線中斷(閒置),忽略")
+            return
         with self._lock:
             was_active = self._state == CircuitState.ACTIVE
             self._state = CircuitState.EMERGENCY_STOP
@@ -215,11 +237,11 @@ class CircuitBreaker:
                 self._state == CircuitState.EMERGENCY_STOP
                 and "連線" in self._halt_reason
             )
-            if was_stopped:
+            if was_stopped:                       # 一律解除(即使斷線跨到非交易時段才恢復,也要把 halt 清掉,不留卡死)
                 self._state = CircuitState.ACTIVE
                 logger.info("✅ 連線恢復，解除緊急停機")
             now = datetime.now()
-            should_push = was_stopped and (
+            should_push = was_stopped and self._in_trading_session(now) and (   # 但 TG 只在交易時段推(非交易時段的閒置恢復不推)
                 self._last_tg_restored_time is None
                 or (now - self._last_tg_restored_time).total_seconds() > self._tg_cooldown_sec
             )

@@ -1,0 +1,8 @@
+{
+  "trail_trigger_atr": [0.8, 2.0],
+  "trail_dist_atr": [0.3, 2.0],
+  "min_adx": [18.0, 30.0],
+  "afternoon_min_adx": [25.0, 40.0],
+  "expand_ratio": [1.05, 1.30],
+  "early_cut_bars": [20, 60]
+}

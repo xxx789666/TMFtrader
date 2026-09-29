@@ -473,13 +473,30 @@ class ShioajiBroker(BaseBroker):
                     _os.environ.get("DISABLE_RECONNECT_FETCH_COOLDOWN", "").strip().lower()
                     in ("1", "true", "yes")
                 )
-                _should_fetch = _disable_cooldown or (_now_mono - _last_fetch) > _cooldown_sec
+                # 2026-07-15：結算日(每月第三週三=期貨換月日)夜盤強制全抓一次。
+                #   結算後 R1 滾到次月,若 reconnect 落在 cooldown 內會沿用舊(已結算)合約→dead feed
+                #   (record_all_depth 踩過同款)。只在「第三週三 且 >=15:00(R1 已滾) 且 今天還沒抓過換月後合約」
+                #   時強制 1 次;抓完 _last_contracts_fetch_wall 更新到 15:00 後→當天不再重複強制→
+                #   不增加 reconnect 風暴流量。最保險做法:只『加』強制條件、完全不動既有 cooldown 邏輯。
+                _force_settle_fetch = False
+                try:
+                    _wall = datetime.now()
+                    if _wall.weekday() == 2 and 15 <= _wall.day <= 21 and _wall.hour >= 15:  # 第三週三夜盤
+                        _last_wall = getattr(self, '_last_contracts_fetch_wall', None)
+                        _roll_boundary = _wall.replace(hour=15, minute=0, second=0, microsecond=0)
+                        if _last_wall is None or _last_wall < _roll_boundary:
+                            _force_settle_fetch = True
+                            logger.info("[Reconnect] 結算日(第三週三)夜盤首次重連 → 強制全抓合約(換月)")
+                except Exception:
+                    pass
+                _should_fetch = _disable_cooldown or _force_settle_fetch or (_now_mono - _last_fetch) > _cooldown_sec
 
                 if _should_fetch:
                     # 修法 F：reconnect 時同樣拿掉 contract_download=True（避免 race）
                     try:
                         self._api.fetch_contracts(contracts_timeout=30000)
                         self._last_contracts_fetch_mono = _now_mono
+                        self._last_contracts_fetch_wall = datetime.now()   # 結算日強制判定用(wall-clock)
                     except Exception as fc_err:
                         logger.warning(f"[Shioaji] fetch_contracts partial: {fc_err}")
                 else:
@@ -585,6 +602,11 @@ class ShioajiBroker(BaseBroker):
                 self._last_tick_time = _now
                 self._last_real_tick_time = _now   # 真實 Solace tick
                 self._fallback_since = None        # Solace 正常，清除 fallback 計時
+                # 試撮假tick(開盤前 08:30-08:45/收盤集合競價 13:40-13:45 揭示)不入行情鏈:
+                # 假價會污染 K 棒聚合/OR 錨點/tick 級進出場判斷(2026-07-03 全線稽核補;
+                # 試撮 tick 陷阱 2026-06-12 事故同族)。心跳照更新(feed 活著,只是資料不可用)。
+                if getattr(tick, "simtrade", 0):
+                    return
                 close_price = float(tick.close)
                 self._last_real_tick_price = close_price  # 供 KbarPoller fallback 使用
 
@@ -725,8 +747,15 @@ class ShioajiBroker(BaseBroker):
         logger.info(f"[KbarPoller] REST fallback 啟動（{interval}s 輪詢）")
 
     def place_order(self, action: str, quantity: int, price: float = 0,
-                    price_type: str = "MKT", instrument: str = "") -> OrderResult:
-        """下單（指定商品），等待成交回報確認"""
+                    price_type: str = "MKT", instrument: str = "",
+                    octype: str = "Auto") -> OrderResult:
+        """下單（指定商品），等待成交回報確認。
+
+        octype(2026-08-02 A案補):"New"=新倉/"Cover"=平倉/"Auto"=自動(預設,向後相容)。
+        背景:魅影 requote 的 MXF 對沖腿與 chips/maxpain 反向共存於同帳戶,Auto 會
+        「先平反向」→ chips 進場單把魅影對沖腿沖掉(魅影變裸選擇權)。改:引擎進場一律
+        New(雙向鎖倉共存,保證金收大邊)、出場一律 Cover(只平自己方向;帳上已平時
+        Cover 被拒=擋 6/12 型「出場單反向開裸倉」舊事故,fail-loud 優於錯方向)。"""
         contract = self._contracts.get(instrument, self._contract)
         if not self._api or not contract:
             return OrderResult(success=False, message=f"找不到合約: {instrument}")
@@ -749,7 +778,9 @@ class ShioajiBroker(BaseBroker):
                     quantity=quantity,
                     price_type=sj.constant.FuturesPriceType.MKT if price_type == "MKT" else sj.constant.FuturesPriceType.LMT,
                     order_type=sj.constant.OrderType.IOC,
-                    octype=sj.constant.FuturesOCType.Auto,
+                    octype={"New": sj.constant.FuturesOCType.New,
+                            "Cover": sj.constant.FuturesOCType.Cover}.get(
+                                octype, sj.constant.FuturesOCType.Auto),
                     account=self._api.futopt_account,
                 )
 
@@ -865,14 +896,16 @@ class ShioajiBroker(BaseBroker):
                     threading.Thread(target=self._attempt_reconnect, daemon=True).start()
         return AccountInfo()
 
-    def get_real_positions(self) -> list[dict]:
-        """查詢真實持倉"""
+    def get_real_positions(self) -> list[dict] | None:
+        """查詢真實持倉。回 list=查詢成功([]=確認空手);None=無法確認(未連線/無帳戶/查詢失敗)。
+        2026-07-16 語義修正:錯誤不再回 [] — 出場對帳 fail-safe 必須區分「確認空手」vs「查不到」,
+        混用會讓查詢失敗被當成外部平倉、保命出場單被錯誤攔下。"""
         if not self._api:
-            return []
+            return None
         try:
             account = self._api.futopt_account or self._api.stock_account
             if not account:
-                return []
+                return None
             positions = self._api.list_positions(account)
             result = []
             for p in (positions or []):
@@ -893,7 +926,7 @@ class ShioajiBroker(BaseBroker):
                     self._last_reconnect_time = _t.monotonic()
                     logger.warning("[Token] list_positions 偵測到 token 過期，觸發重連")
                     threading.Thread(target=self._attempt_reconnect, daemon=True).start()
-            return []
+            return None
 
     def get_historical_kbars(self, instrument: str = "", count: int = 60) -> list:
         """用 Shioaji API 取得歷史 K 棒（暖機用）"""
@@ -1070,7 +1103,8 @@ class MockBroker(BaseBroker):
         logger.info(f"[MockBroker] tick generation started for {list(self._instruments.keys())}")
 
     def place_order(self, action: str, quantity: int, price: float = 0,
-                    price_type: str = "MKT", instrument: str = "") -> OrderResult:
+                    price_type: str = "MKT", instrument: str = "",
+                    octype: str = "Auto") -> OrderResult:
         with self._lock:
             self._order_counter += 1
             current_price = self._prices.get(instrument, self._price)

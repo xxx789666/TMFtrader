@@ -61,7 +61,7 @@ class DailyPerformance:
     paper_signals: list = field(default_factory=list)
 
     # meta
-    contract: str = "MXF"
+    contract: str = "TMF"
     created_at: str = ""
 
 
@@ -106,9 +106,10 @@ class PerformanceTracker:
     """
 
     def __init__(self, data_dir: str = "data/performance",
-                 trading_mode: str = "simulation"):
+                 trading_mode: str = "simulation", instrument: str = "TMF"):
         self.data_dir = Path(data_dir)
         self.trading_mode = trading_mode
+        self.instrument = instrument  # 實際交易商品（如 "TMF"）；寫進 daily 績效 contract 欄位
         self.today_trades: list[dict] = []
         self.paper_signals: list[dict] = []  # Paper 模式的訊號記錄
         self.starting_balance: float = 0.0
@@ -440,7 +441,7 @@ class PerformanceTracker:
             trading_mode=self.trading_mode,
             starting_balance=self.starting_balance,
             ending_balance=ending_balance,
-            contract="MXF",
+            contract=self.instrument,
             created_at=datetime.now().isoformat(),
             trades=trades,
             paper_signals=self.paper_signals,
